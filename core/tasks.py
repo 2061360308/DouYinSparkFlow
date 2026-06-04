@@ -168,12 +168,12 @@ async def do_user_task(browser, username, cookies, targets, semaphore):
         # 滚动并选择用户
         async for username in scroll_and_select_user(page, username, targets):
             logger.info(f"账号 {username} 已选中好友 {username} 发送消息")
-            # 等待 chat-input-dccKiL 元素加载完成
-            chat_input_selector = "xpath=//div[contains(@class, 'chat-input-dccKiL')]"
+            # 等待 chat-input-nSWBco 元素加载完成
+            chat_input_selector = "xpath=//div[contains(@class, 'chat-input-nSWBco')]"
             await page.wait_for_selector(chat_input_selector)
             chat_input = page.locator(chat_input_selector)
 
-            # 在 chat-input-dccKiL 中输入内容
+            # 在 chat-input-nSWBco 中输入内容
             message = build_message()
             for line in message.split("\n"):
                 await chat_input.type(line)  # 输入每一行
@@ -193,7 +193,7 @@ async def do_user_task(browser, username, cookies, targets, semaphore):
 
 
 async def runTasks():
-    playwright, browser = await get_browser()
+    playwright, browser = await get_browser(GUI=True)  # 强制使用非无头模式，方便调试
     try:
         # 检查是否启用多任务和任务数量
         # 创建信号量以限制并发任务数量

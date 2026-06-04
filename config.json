@@ -2,12 +2,9 @@
   "multiTask": true,
   "taskCount": 5,
   "proxyAddress": "",
-  "messageTemplate": "[盖瑞]今日火花[加一]\n我的朋友，新年新气象！\n—— [右边] 每日一言 [左边] ——\n[API]",
+  "messageTemplate": "[API]",
   "hitokotoTypes": [
-    "文学",
-    "影视",
-    "诗词",
-    "哲学"
+  "动画","漫画","游戏","文学","原创","来自网络","影视","诗词","哲学","抖机灵","其他"
   ],
   "happyNewYear": {
       "enabled": true,

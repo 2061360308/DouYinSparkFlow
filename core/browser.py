@@ -21,7 +21,7 @@ async def install_browser():
         console.print(f"[bold red]发生未知错误：{e}[/bold red]")
 
 
-async def get_browser(GUI=False):
+async def get_browser():
     """
     启动浏览器实例
     :param headless: 是否以无头模式运行
