@@ -1,6 +1,11 @@
 import unittest
 
-from core.tasks import click_first_match, page_has_login_prompt, wait_for_first_visible
+from core.tasks import (
+    click_first_match,
+    confirm_message_sent,
+    page_has_login_prompt,
+    wait_for_first_visible,
+)
 
 
 class FakePage:
@@ -49,6 +54,34 @@ class FakeClickablePage:
         return self.result
 
 
+class FakeMessageLocator:
+    def __init__(self):
+        self.last = self
+        self.wait_calls = []
+
+    async def wait_for(self, *, state, timeout):
+        self.wait_calls.append((state, timeout))
+
+
+class FakeChatInput:
+    async def element_handle(self):
+        return "chat-input-handle"
+
+
+class FakeDeliveryPage:
+    def __init__(self):
+        self.wait_function_calls = []
+        self.message_locator = FakeMessageLocator()
+        self.requested_text = None
+
+    async def wait_for_function(self, expression, element, *, timeout):
+        self.wait_function_calls.append((expression, element, timeout))
+
+    def get_by_text(self, text, *, exact):
+        self.requested_text = (text, exact)
+        return self.message_locator
+
+
 class WaitForFirstVisibleTests(unittest.IsolatedAsyncioTestCase):
     async def test_falls_back_to_the_first_visible_selector(self):
         page = FakePage("new-selector")
@@ -88,6 +121,26 @@ class ClickFirstMatchTests(unittest.IsolatedAsyncioTestCase):
         page = FakeLoginPage(None, url="https://creator.douyin.com/")
 
         self.assertTrue(await page_has_login_prompt(page))
+
+
+class ConfirmMessageSentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_waits_for_input_clear_and_last_message_line_to_appear(self):
+        page = FakeDeliveryPage()
+        chat_input = FakeChatInput()
+
+        await confirm_message_sent(
+            page,
+            chat_input,
+            "first line\nunique verification line",
+            timeout=1200,
+        )
+
+        self.assertEqual(
+            [("(element) => !element.innerText.trim()", "chat-input-handle", 1200)],
+            page.wait_function_calls,
+        )
+        self.assertEqual(("unique verification line", False), page.requested_text)
+        self.assertEqual([("visible", 1200)], page.message_locator.wait_calls)
 
 
 if __name__ == "__main__":
