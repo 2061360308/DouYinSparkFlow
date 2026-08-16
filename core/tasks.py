@@ -16,6 +16,10 @@ userData = get_userData()
 logger = setup_logger(level=logging.DEBUG)
 
 
+class LoginRequiredError(RuntimeError):
+    """Raised when Douyin redirects an account back to the login page."""
+
+
 async def wait_for_first_visible(page, selectors, timeout=15000):
     """Return the first selector that becomes visible."""
     last_error = None
@@ -38,6 +42,39 @@ async def page_has_login_prompt(page):
         if await page.locator(selector).count() > 0:
             return True
     return False
+
+
+async def wait_for_authenticated_selector(
+    page, selectors, timeout=15000, poll_timeout=1000
+):
+    """Wait for a page control while continuously checking for a late login redirect."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout / 1000
+    last_error = None
+
+    while loop.time() < deadline:
+        if await page_has_login_prompt(page):
+            raise LoginRequiredError("Douyin login is required")
+
+        for selector in selectors:
+            remaining_ms = max(1, int((deadline - loop.time()) * 1000))
+            if remaining_ms <= 1:
+                break
+            try:
+                await page.wait_for_selector(
+                    selector,
+                    state="visible",
+                    timeout=min(poll_timeout, remaining_ms),
+                )
+                return selector
+            except Exception as error:
+                last_error = error
+                if await page_has_login_prompt(page):
+                    raise LoginRequiredError("Douyin login is required") from error
+
+    if last_error is not None:
+        raise last_error
+    raise TimeoutError("timed out waiting for an authenticated page control")
 
 
 async def click_first_match(page, selector):
@@ -117,7 +154,19 @@ async def scroll_and_select_user(page, username, targets):
     if await page_has_login_prompt(page):
         raise RuntimeError(f"账号 {username} 登录已失效，需要重新扫码登录")
     try:
-        friends_tab_selector = await wait_for_first_visible(page, friends_tab_selectors)
+        friends_tab_selector = await wait_for_authenticated_selector(
+            page, friends_tab_selectors
+        )
+    except LoginRequiredError as error:
+        os.makedirs(os.path.join("logs", "diagnostics"), exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        await page.screenshot(
+            path=os.path.join("logs", "diagnostics", f"login_expired_{timestamp}.png"),
+            full_page=True,
+        )
+        raise RuntimeError(
+            f"账号 {username} 登录已失效，需要重新扫码登录"
+        ) from error
     except Exception as error:
         os.makedirs(os.path.join("logs", "diagnostics"), exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -134,7 +183,13 @@ async def scroll_and_select_user(page, username, targets):
 
     # 确保第一个好友元素加载完成
     try:
-        first_friend_selector = await wait_for_first_visible(page, first_friend_selectors)
+        first_friend_selector = await wait_for_authenticated_selector(
+            page, first_friend_selectors
+        )
+    except LoginRequiredError as error:
+        raise RuntimeError(
+            f"账号 {username} 登录已失效，需要重新扫码登录"
+        ) from error
     except Exception as error:
         os.makedirs(os.path.join("logs", "diagnostics"), exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
