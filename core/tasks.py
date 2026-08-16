@@ -94,7 +94,7 @@ async def confirm_message_sent(page, chat_input, message, timeout=15000):
 
     await page.wait_for_function(
         "(element) => !element.innerText.trim()",
-        input_handle,
+        arg=input_handle,
         timeout=timeout,
     )
     await page.get_by_text(verification_lines[-1], exact=False).last.wait_for(
