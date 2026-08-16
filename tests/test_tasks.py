@@ -85,8 +85,8 @@ class FakeDeliveryPage:
         self.message_locator = FakeMessageLocator()
         self.requested_text = None
 
-    async def wait_for_function(self, expression, element, *, timeout):
-        self.wait_function_calls.append((expression, element, timeout))
+    async def wait_for_function(self, expression, *, arg, timeout):
+        self.wait_function_calls.append((expression, arg, timeout))
 
     def get_by_text(self, text, *, exact):
         self.requested_text = (text, exact)
