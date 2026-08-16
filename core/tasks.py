@@ -45,6 +45,27 @@ async def click_first_match(page, selector):
     await page.locator(selector).first.click()
 
 
+async def confirm_message_sent(page, chat_input, message, timeout=15000):
+    """Wait until the editor clears and the sent message appears in the chat."""
+    verification_lines = [line.strip() for line in message.splitlines() if line.strip()]
+    if not verification_lines:
+        raise ValueError("message must contain visible text")
+
+    input_handle = await chat_input.element_handle()
+    if input_handle is None:
+        raise RuntimeError("chat input is no longer attached")
+
+    await page.wait_for_function(
+        "(element) => !element.innerText.trim()",
+        input_handle,
+        timeout=timeout,
+    )
+    await page.get_by_text(verification_lines[-1], exact=False).last.wait_for(
+        state="visible",
+        timeout=timeout,
+    )
+
+
 async def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
     """
     通用的重试逻辑
@@ -248,9 +269,21 @@ async def do_user_task(browser, username, cookies, targets, semaphore):
             logger.debug(
                 f"账号 {username} 准备发送消息给好友 {username}：\n\t{message}"
             )
-            logger.info(f"账号 {username} 给好友 {username} 发送消息完成")
             # 模拟按下回车键发送消息
             await chat_input.press("Enter")
+            try:
+                await confirm_message_sent(page, chat_input, message)
+            except Exception as error:
+                os.makedirs(os.path.join("logs", "diagnostics"), exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                await page.screenshot(
+                    path=os.path.join(
+                        "logs", "diagnostics", f"message_unconfirmed_{timestamp}.png"
+                    ),
+                    full_page=True,
+                )
+                raise RuntimeError("消息已提交，但未能确认出现在聊天记录中") from error
+            logger.info(f"账号 {username} 给好友 {username} 发送消息完成")
             await asyncio.sleep(2)  # 发送完等待一会儿
 
         await context.close()  # 任务完成后关闭上下文
