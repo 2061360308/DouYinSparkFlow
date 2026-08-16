@@ -1,6 +1,8 @@
 import asyncio
 import traceback
 import logging
+import os
+from datetime import datetime
 from utils.logger import setup_logger
 from utils.config import get_config, get_userData
 from core.msg_builder import build_message, build_message_with_openai
@@ -12,6 +14,35 @@ complates = {}
 config = get_config()
 userData = get_userData()
 logger = setup_logger(level=logging.DEBUG)
+
+
+async def wait_for_first_visible(page, selectors, timeout=15000):
+    """Return the first selector that becomes visible."""
+    last_error = None
+    for selector in selectors:
+        try:
+            await page.wait_for_selector(selector, state="visible", timeout=timeout)
+            return selector
+        except Exception as error:
+            last_error = error
+    if last_error is not None:
+        raise last_error
+    raise ValueError("selectors must not be empty")
+
+
+async def page_has_login_prompt(page):
+    """Return whether the current page is asking the user to log in again."""
+    if "/creator-micro/data/following/chat" not in page.url:
+        return True
+    for selector in ("text=扫码登录", "text=手机号登录", "text=验证码登录"):
+        if await page.locator(selector).count() > 0:
+            return True
+    return False
+
+
+async def click_first_match(page, selector):
+    """Click the first element when a selector intentionally matches many."""
+    await page.locator(selector).first.click()
 
 
 async def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
@@ -39,9 +70,19 @@ async def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
 async def scroll_and_select_user(page, username, targets):
     """尝试滚动并查找用户名"""
     # 定义目标元素和滚动容器的选择器
-    friends_tab_selector = 'xpath=//*[@id="sub-app"]/div/div/div[1]/div[2]'
-    target_selector = 'xpath=//*[@id="sub-app"]/div/div[1]/div[2]/div[2]//div[contains(@class, "semi-list-item-body semi-list-item-body-flex-start")]'
-    scrollable_friends_selector = 'xpath=//*[@id="sub-app"]/div/div[1]/div[2]/div[2]/div/div/div[3]/div/div/div/ul/div'
+    friends_tab_selectors = [
+        'xpath=//*[@id="sub-app"]/div/div/div[1]/div[2]',
+        'xpath=//*[@id="sub-app"]//*[contains(@class, "tab") and contains(normalize-space(.), "好友")]',
+        'xpath=//*[@id="sub-app"]//*[self::div or self::span][normalize-space()="好友"]',
+    ]
+    target_selector = 'xpath=//*[@id="sub-app"]//div[contains(@class, "semi-list-item-body") and contains(@class, "semi-list-item-body-flex-start")]'
+    scrollable_friends_selector = 'xpath=//*[@id="sub-app"]//ul/ancestor::div[contains(@class, "semi-scrolllist") or contains(@style, "overflow")][1]'
+    first_friend_selectors = [
+        'xpath=//*[@id="sub-app"]/div/div/div[2]/div[2]/div/div/div[1]/div/div/div/ul/div/div/div[1]/li/div',
+        'xpath=//*[@id="sub-app"]//span[contains(@class, "item-header-name-")]/ancestor::li[1]//div[1]',
+        'xpath=//*[@id="sub-app"]//ul//li[1]//div',
+        'css=#sub-app ul li:first-child div',
+    ]
     
     # [修改] 更加精确的状态选择器
     no_more_selector = 'xpath=//div[contains(@class, "no-more-tip-ftdJnu")]'
@@ -52,15 +93,38 @@ async def scroll_and_select_user(page, username, targets):
 
     logger.debug(f"账号 {username} 点击进入好友标签页")
     # 点击好友标签页
-    await page.wait_for_selector(friends_tab_selector)
+    if await page_has_login_prompt(page):
+        raise RuntimeError(f"账号 {username} 登录已失效，需要重新扫码登录")
+    try:
+        friends_tab_selector = await wait_for_first_visible(page, friends_tab_selectors)
+    except Exception as error:
+        os.makedirs(os.path.join("logs", "diagnostics"), exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        await page.screenshot(
+            path=os.path.join("logs", "diagnostics", f"friends_tab_{timestamp}.png"),
+            full_page=True,
+        )
+        raise RuntimeError(
+            f"账号 {username} 未找到好友标签，页面结构可能已变化"
+        ) from error
     await page.locator(friends_tab_selector).click()
 
     logger.debug(f"账号 {username} 进入好友列表页面")
 
     # 确保第一个好友元素加载完成
-    first_friend_selector = 'xpath=//*[@id="sub-app"]/div/div/div[2]/div[2]/div/div/div[1]/div/div/div/ul/div/div/div[1]/li/div'
-    await page.wait_for_selector(first_friend_selector)
-    await page.locator(first_friend_selector).click()  # 点击第一个好友，确保列表激活
+    try:
+        first_friend_selector = await wait_for_first_visible(page, first_friend_selectors)
+    except Exception as error:
+        os.makedirs(os.path.join("logs", "diagnostics"), exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        await page.screenshot(
+            path=os.path.join("logs", "diagnostics", f"friend_list_{timestamp}.png"),
+            full_page=True,
+        )
+        raise RuntimeError(
+            f"账号 {username} 未找到好友列表，页面结构可能已变化"
+        ) from error
+    await click_first_match(page, first_friend_selector)
 
     logger.debug(f"账号 {username} 已激活好友列表，开始滚动查找目标好友")
 
