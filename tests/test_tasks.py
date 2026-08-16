@@ -1,9 +1,11 @@
 import unittest
 
 from core.tasks import (
+    LoginRequiredError,
     click_first_match,
     confirm_message_sent,
     page_has_login_prompt,
+    wait_for_authenticated_selector,
     wait_for_first_visible,
 )
 
@@ -35,6 +37,15 @@ class FakeLoginPage:
 
     def locator(self, selector):
         return FakeLocator(1 if selector == f"text={self.visible_text}" else 0)
+
+
+class FakeDelayedLoginPage(FakeLoginPage):
+    def __init__(self):
+        super().__init__(None)
+
+    async def wait_for_selector(self, selector, *, state, timeout):
+        self.visible_text = "扫码登录"
+        raise TimeoutError(selector)
 
 
 class FakeClickableLocator:
@@ -107,6 +118,17 @@ class LoginPromptTests(unittest.IsolatedAsyncioTestCase):
         page = FakeLoginPage("扫码登录")
 
         self.assertTrue(await page_has_login_prompt(page))
+
+    async def test_stops_waiting_when_login_prompt_appears_late(self):
+        page = FakeDelayedLoginPage()
+
+        with self.assertRaises(LoginRequiredError):
+            await wait_for_authenticated_selector(
+                page,
+                ["friends-tab"],
+                timeout=1000,
+                poll_timeout=25,
+            )
 
 
 class ClickFirstMatchTests(unittest.IsolatedAsyncioTestCase):
