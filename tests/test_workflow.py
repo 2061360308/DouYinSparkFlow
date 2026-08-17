@@ -19,6 +19,7 @@ class ScheduleWorkflowTests(unittest.TestCase):
 
         self.assertIn("workflow_dispatch:", workflow)
         self.assertNotIn("schedule:", workflow)
+        self.assertIn("runs-on: ubuntu-22.04", workflow)
         self.assertIn("environment: user-data", workflow)
         self.assertIn("WZ_DATA: ${{ secrets.WZ_DATA }}", workflow)
         self.assertNotIn("GSY_DATA", workflow)
