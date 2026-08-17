@@ -1,0 +1,33 @@
+name: DouYin Web Chat WZ Manual Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-main:
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    environment: user-data
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+      - name: Test Douyin web chat accessibility
+        run: curl -I https://www.douyin.com/chat
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Ensure browsers are installed
+        run: playwright install chromium --with-deps --only-shell
+      - name: Run WZ web chat probe
+        env:
+          WZ_DATA: ${{ secrets.WZ_DATA }}
+        run: python web_chat_probe.py
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: wz-web-chat-probe-logs
+          path: logs/
