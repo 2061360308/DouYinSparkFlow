@@ -6,6 +6,7 @@ from core.browser import get_browser
 from playwright.sync_api import Response
 import time
 import json
+import os
 
 
 complates = {}
@@ -70,9 +71,6 @@ def scroll_and_select_user(page, username, targets):
     friends_tab_selector = 'xpath=//*[@id="sub-app"]/div/div/div[1]/div[2]'
     target_selector = 'xpath=//*[@id="sub-app"]/div/div[1]/div[2]/div[2]//div[contains(@class, "semi-list-item-body semi-list-item-body-flex-start")]'
     scrollable_friends_selector = 'xpath=//*[@id="sub-app"]/div/div[1]/div[2]/div[2]/div/div/div[3]/div/div/div/ul/div'
-    
-    # [修复] 使用模糊匹配 no-more-tip- 前缀，不再依赖精确哈希后缀
-    # 同时增加文本匹配作为兜底
     no_more_selector = 'xpath=//div[contains(@class, "no-more-tip-")]'
     loading_selector = 'xpath=//div[contains(@class, "semi-spin")]'
 
@@ -80,8 +78,38 @@ def scroll_and_select_user(page, username, targets):
     logger.debug(f"账号 {username} 目标好友列表: {targets}")
 
     logger.debug(f"账号 {username} 点击进入好友标签页")
-    # 点击好友标签页
-    page.wait_for_selector(friends_tab_selector)
+
+    # -------------------- 新增调试代码 --------------------
+    # 创建 logs 目录（如果不存在）
+    os.makedirs("logs", exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    safe_username = username.replace(" ", "_")
+
+    # 1. 在等待前保存快照（可以看到进入好友标签页前的状态）
+    before_screenshot = f"logs/before_{safe_username}_{timestamp}.png"
+    before_html = f"logs/before_{safe_username}_{timestamp}.html"
+    page.screenshot(path=before_screenshot, full_page=True)
+    with open(before_html, "w", encoding="utf-8") as f:
+        f.write(page.content())
+    logger.info(f"已保存等待前快照：{before_screenshot}, {before_html}")
+    # ----------------------------------------------------
+
+    try:
+        # 使用配置中的超时时间（如果配置没有则默认 120 秒）
+        timeout = config.get("browserTimeout", 120000)
+        page.wait_for_selector(friends_tab_selector, timeout=timeout)
+    except Exception as e:
+        # 2. 超时后保存错误快照（可以看到超时时页面实际是什么）
+        error_screenshot = f"logs/error_{safe_username}_{timestamp}.png"
+        error_html = f"logs/error_{safe_username}_{timestamp}.html"
+        page.screenshot(path=error_screenshot, full_page=True)
+        with open(error_html, "w", encoding="utf-8") as f:
+            f.write(page.content())
+        logger.error(f"等待好友标签页失败，已保存错误快照：{error_screenshot}, {error_html}")
+        logger.error(f"当前页面 URL: {page.url}")
+        raise  # 重新抛出异常，让任务失败
+
+    # 继续执行后面的代码...
     page.locator(friends_tab_selector).click()
 
     logger.debug(f"账号 {username} 进入好友列表页面")
