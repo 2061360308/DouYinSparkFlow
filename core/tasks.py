@@ -81,18 +81,37 @@ def scroll_and_select_user(page, username, targets):
 
     logger.debug(f"账号 {username} 点击进入好友标签页")
     # 点击好友标签页
-    page.wait_for_selector(friends_tab_selector)
-    page.locator(friends_tab_selector).click()
+    try:
+        page.wait_for_selector(friends_tab_selector, timeout=30000)
+        page.locator(friends_tab_selector).click()
+    except Exception as e:
+        logger.error(f"账号 {username} 找不到好友标签页元素，页面可能结构已改变: {e}")
+        page.screenshot(path=f"logs/debug_friends_tab_{username}.png")
+        raise
 
     logger.debug(f"账号 {username} 进入好友列表页面")
 
     # 确保第一个好友元素加载完成
     first_friend_selector = 'xpath=//*[@id="sub-app"]/div/div/div[2]/div[2]/div/div/div[1]/div/div/div/ul/div/div/div[1]/li/div'
-    page.wait_for_selector(first_friend_selector)
-    page.locator(first_friend_selector).click()  # 点击第一个好友，确保列表激活
+    try:
+        page.wait_for_selector(first_friend_selector, timeout=30000)
+        page.locator(first_friend_selector).click()  # 点击第一个好友，确保列表激活
+    except Exception as e:
+        logger.error(f"账号 {username} 找不到好友列表元素，XPath 选择器可能已失效: {e}")
+        page.screenshot(path=f"logs/debug_first_friend_{username}.png")
+        raise
 
     logger.debug(f"账号 {username} 已激活好友列表，开始滚动查找目标好友")
 
+    time.sleep(config["friendListTimeout"] / 1000)  # 等待好友列表加载
+
+    found_targets = set()
+    # [修改] 复制一份目标列表用于追踪进度
+    remaining_targets = set(targets)
+
+    # [修复] 新增：连续空滚动计数器（滚动后没有发现新好友的次数）
+    empty_scroll_count = 0
+    MAX_EMPTY_SCROLLS = 10  # 连续10次滚动没有新好友，认为到底了
     time.sleep(config["friendListTimeout"] / 1000)  # 等待好友列表加载
 
     found_targets = set()
