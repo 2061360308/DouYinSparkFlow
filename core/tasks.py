@@ -271,10 +271,14 @@ def do_user_task(browser, username, cookies, targets):
         page.screenshot(path=f"logs/08_message_typed_{username}_{safe_targetName}.png")
 
         chat_input.press("Enter")
-        time.sleep(2)  
+        time.sleep(10)  
         
         # 【截图09】发送完毕后的状态
         page.screenshot(path=f"logs/09_message_sent_{username}_{safe_targetName}.png")
+
+        # 👇【新增这里】：在循环结束后，关闭上下文之前，再死等 5 秒，保护最后一个好友的网络请求不断开
+    logger.debug(f"账号 {username} 所有消息已发送，等待 5 秒后关闭环境...")
+    time.sleep(6)
 
     context.close()  # 任务完成后关闭上下文
 
