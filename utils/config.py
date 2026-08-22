@@ -58,33 +58,104 @@ def get_config():
 
     return config
 
+# Playwright add_cookies 只接受这些字段。Cookie-Editor 还会带上
+# hostOnly / session / storeId / expirationDate / partitionKey 等，必须丢掉。
+_PLAYWRIGHT_COOKIE_KEYS = (
+    "name",
+    "value",
+    "url",
+    "domain",
+    "path",
+    "expires",
+    "httpOnly",
+    "secure",
+    "sameSite",
+)
+
+
+def _normalize_cookie_list(cookies):
+    """把 Cookie-Editor / Secret 里各种包装格式摊平成 cookie 字典列表。"""
+    for _ in range(3):
+        if isinstance(cookies, str):
+            try:
+                cookies = json.loads(cookies)
+            except json.JSONDecodeError:
+                return []
+        else:
+            break
+
+    if isinstance(cookies, dict):
+        inner = cookies.get("cookies")
+        if isinstance(inner, list):
+            cookies = inner
+        elif "name" in cookies and "value" in cookies:
+            cookies = [cookies]
+        else:
+            values = list(cookies.values())
+            if values and all(isinstance(item, dict) and "name" in item for item in values):
+                cookies = values
+            else:
+                return []
+
+    if isinstance(cookies, list) and len(cookies) == 1 and isinstance(cookies[0], list):
+        cookies = cookies[0]
+
+    if not isinstance(cookies, list):
+        return []
+    return cookies
+
+
+def _sanitize_one_cookie(cookie):
+    if isinstance(cookie, str):
+        try:
+            cookie = json.loads(cookie)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(cookie, dict):
+        return None
+
+    name = cookie.get("name")
+    value = cookie.get("value")
+    if not name or value is None:
+        return None
+
+    item = {"name": name, "value": value}
+
+    url = cookie.get("url")
+    domain = cookie.get("domain")
+    path = cookie.get("path")
+    if url:
+        item["url"] = url
+    if domain:
+        item["domain"] = domain
+    item["path"] = path or "/"
+
+    expires = cookie.get("expires")
+    if expires is None:
+        expires = cookie.get("expirationDate")
+    if expires is not None:
+        try:
+            item["expires"] = float(expires)
+        except (TypeError, ValueError):
+            pass
+
+    for flag in ("httpOnly", "secure"):
+        if flag in cookie:
+            item[flag] = bool(cookie[flag])
+
+    # Cookie-Editor 的 sameSite（no_restriction / unspecified）Playwright 不认，直接丢弃。
+    # partitionKey 必须整段丢弃：Chrome 导出的是对象，转成字符串后
+    # Playwright 1.58 协议层仍会报 expected string, got object。
+    return {key: item[key] for key in _PLAYWRIGHT_COOKIE_KEYS if key in item}
+
+
 def sanitize_cookies(cookies):
     """清洗 Cookie-Editor / Chrome 导出的 cookies，使其符合 Playwright add_cookies 约束。"""
-    if not cookies:
-        return cookies
-
-    for cookie in cookies:
-        if not isinstance(cookie, dict):
-            continue
-
-        # Cookie-Editor 常导出 no_restriction / unspecified，Playwright 只接受 Strict / Lax / None
-        if "sameSite" in cookie:
-            cookie.pop("sameSite")
-
-        # Chrome CHIPS：partitionKey 现为 {topLevelSite, hasCrossSiteAncestor} 对象，
-        # Playwright add_cookies 要求 partitionKey 为字符串，否则会报
-        # "cookies[0].partitionKey: expected string, got object"
-        partition_key = cookie.get("partitionKey")
-        if isinstance(partition_key, dict):
-            site = partition_key.get("topLevelSite") or partition_key.get("sourceOrigin")
-            if isinstance(site, str) and site:
-                cookie["partitionKey"] = site
-            else:
-                cookie.pop("partitionKey", None)
-        elif partition_key is not None and not isinstance(partition_key, str):
-            cookie.pop("partitionKey", None)
-
-    return cookies
+    return [
+        sanitized
+        for sanitized in (_sanitize_one_cookie(cookie) for cookie in _normalize_cookie_list(cookies))
+        if sanitized
+    ]
 
 
 def get_userData():
@@ -122,11 +193,16 @@ def get_userData():
             logger.warning(f"{username} 的任务 {cookies_key} 格式不正确，已跳过")
             continue
 
+        cookies = sanitize_cookies(cookies)
+        if not cookies:
+            logger.warning(f"{username} 的任务 {cookies_key} 清洗后没有可用 cookie，已跳过")
+            continue
+
         userData.append(
             {
                 "unique_id": unique_id,
                 "username": username,
-                "cookies": sanitize_cookies(cookies),
+                "cookies": cookies,
                 "targets": task.get("targets", []),
             }
         )

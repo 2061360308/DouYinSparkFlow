@@ -1,6 +1,6 @@
 import traceback
 from utils.logger import setup_logger
-from utils.config import get_config, get_userData
+from utils.config import get_config, get_userData, sanitize_cookies
 from core.msg_builder import build_message, build_message_with_openai
 from core.browser import get_browser
 from playwright.sync_api import Response
@@ -232,7 +232,10 @@ def do_user_task(browser, username, cookies, targets):
             delay=5,
             url="https://creator.douyin.com/",
         )
-        # 注入 Cookie
+        # 注入 Cookie。必须在 add_cookies 前再洗一次，避免 Secret 里的
+        # Chrome/Cookie-Editor partitionKey 对象被 Playwright 拒绝。
+        cookies = sanitize_cookies(cookies)
+        logger.debug(f"账号 {username} 准备注入 {len(cookies)} 条 cookie")
         context.add_cookies(cookies)
 
         # 导航到消息页面
