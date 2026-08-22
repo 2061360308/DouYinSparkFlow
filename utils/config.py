@@ -3,6 +3,7 @@ from enum import Enum
 import json
 import logging
 from utils.logger import setup_logger
+from . import norm
 
 logger = setup_logger(level=logging.DEBUG)
 
@@ -215,7 +216,7 @@ def get_userData():
                 "unique_id": unique_id,
                 "username": username,
                 "cookies": cookies,
-                "targets": task.get("targets", []),
+                "targets": [norm(t) for t in task.get("targets", [])],
             }
         )
 
