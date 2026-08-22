@@ -14,13 +14,11 @@ config = get_config()
 userData = get_userData()
 logger = setup_logger(level=config.get("logLevel", "Info"))
 matchMode = config.get("matchMode", "nickname")
-userIDDict = {}
 
-def handle_response(response: Response):
+def handle_response(response: Response, userIDDict: dict):
     """
     只监听你要的那个接口响应
     """
-    global userIDDict
     # 精准匹配目标接口 URL
     if "aweme/v1/creator/im/user_detail/" in response.url:
         # print(f"URL: {response.url}")
@@ -64,7 +62,7 @@ def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
                 raise
 
 
-def scroll_and_select_user(page, username, targets):
+def scroll_and_select_user(page, username, targets, userIDDict):
     """尝试滚动并查找用户名"""
     # 定义目标元素和滚动容器的选择器
     friends_tab_selector = 'xpath=//*[@id="sub-app"]/div/div/div[1]/div[2]'
@@ -220,10 +218,13 @@ def do_user_task(browser, username, cookies, targets):
         context.set_default_timeout(config["browserTimeout"])  # 设置所有操作的默认超时时间为 120 秒
 
         page = context.new_page()
-        
+
+        # [修复] userIDDict 作为局部变量，避免多账号串行运行时数据污染
+        userIDDict = {}
+
         if matchMode == "short_id":  # 使用抖音号进行匹配
-            page.on("response", handle_response)
-        
+            page.on("response", lambda response: handle_response(response, userIDDict))
+
         # 打开抖音创作者中心
         retry_operation(
             "打开抖音创作者中心",
@@ -246,7 +247,7 @@ def do_user_task(browser, username, cookies, targets):
 
         logger.debug(f"账号 {username} 开始发送消息")
         # 滚动并选择用户
-        for username in scroll_and_select_user(page, username, targets):
+        for username in scroll_and_select_user(page, username, targets, userIDDict):
             logger.debug(f"账号 {username} 已选中好友 {username} 发送消息")
             # 等待聊天输入框元素加载完成，使用更稳定的属性选择器
             chat_input_selector = "xpath=//div[contains(@class, 'chat-input-')]"
