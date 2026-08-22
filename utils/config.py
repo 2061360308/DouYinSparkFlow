@@ -59,9 +59,31 @@ def get_config():
     return config
 
 def sanitize_cookies(cookies):
+    """清洗 Cookie-Editor / Chrome 导出的 cookies，使其符合 Playwright add_cookies 约束。"""
+    if not cookies:
+        return cookies
+
     for cookie in cookies:
+        if not isinstance(cookie, dict):
+            continue
+
+        # Cookie-Editor 常导出 no_restriction / unspecified，Playwright 只接受 Strict / Lax / None
         if "sameSite" in cookie:
-            cookie.pop("sameSite")  # 移除 sameSite 字段，Playwright 可能不支持该字段
+            cookie.pop("sameSite")
+
+        # Chrome CHIPS：partitionKey 现为 {topLevelSite, hasCrossSiteAncestor} 对象，
+        # Playwright add_cookies 要求 partitionKey 为字符串，否则会报
+        # "cookies[0].partitionKey: expected string, got object"
+        partition_key = cookie.get("partitionKey")
+        if isinstance(partition_key, dict):
+            site = partition_key.get("topLevelSite") or partition_key.get("sourceOrigin")
+            if isinstance(site, str) and site:
+                cookie["partitionKey"] = site
+            else:
+                cookie.pop("partitionKey", None)
+        elif partition_key is not None and not isinstance(partition_key, str):
+            cookie.pop("partitionKey", None)
+
     return cookies
 
 
