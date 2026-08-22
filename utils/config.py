@@ -143,9 +143,21 @@ def _sanitize_one_cookie(cookie):
         if flag in cookie:
             item[flag] = bool(cookie[flag])
 
-    # Cookie-Editor 的 sameSite（no_restriction / unspecified）Playwright 不认，直接丢弃。
-    # partitionKey 必须整段丢弃：Chrome 导出的是对象，转成字符串后
-    # Playwright 1.58 协议层仍会报 expected string, got object。
+    # Cookie-Editor: no_restriction / unspecified；Playwright 只接受 Strict / Lax / None
+    same_site = cookie.get("sameSite")
+    if isinstance(same_site, str):
+        mapped = {
+            "no_restriction": "None",
+            "none": "None",
+            "lax": "Lax",
+            "strict": "Strict",
+        }.get(same_site.lower())
+        if mapped:
+            item["sameSite"] = mapped
+            if mapped == "None":
+                item["secure"] = True
+
+    # partitionKey 必须整段丢弃：Chrome 导出的是对象，Playwright 1.58 协议层不接受。
     return {key: item[key] for key in _PLAYWRIGHT_COOKIE_KEYS if key in item}
 
 

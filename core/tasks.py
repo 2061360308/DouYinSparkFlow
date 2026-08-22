@@ -1,3 +1,4 @@
+import os
 import traceback
 from utils.logger import setup_logger
 from utils.config import get_config, get_userData, sanitize_cookies
@@ -6,6 +7,15 @@ from core.browser import get_browser
 from playwright.sync_api import Response
 import time
 import json
+
+CHAT_URL = "https://creator.douyin.com/creator-micro/data/following/chat"
+LOGIN_URL_HINTS = ("login", "passport", "scan", "sso")
+LOGIN_TEXT_HINTS = ("扫码登录", "手机号登录", "验证码登录", "登录后即可")
+FRIENDS_TAB_SELECTORS = (
+    'xpath=//*[@id="sub-app"]/div/div/div[1]/div[2]',
+    'xpath=//*[@id="sub-app"]//*[contains(normalize-space(.), "朋友私信")]',
+    'xpath=//*[@id="sub-app"]//*[contains(normalize-space(.), "朋友") and not(contains(., "陌生人"))]',
+)
 
 
 complates = {}
@@ -64,10 +74,58 @@ def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
                 raise
 
 
+def dump_page_debug(page, username, tag):
+    """把当前页面状态落到 logs/，方便 Action artifact 排查未登录 / 验证码 / 选择器失效。"""
+    os.makedirs("logs", exist_ok=True)
+    safe_name = "".join(ch if ch.isalnum() else "_" for ch in str(username))[:40] or "user"
+    prefix = os.path.join("logs", f"{safe_name}_{tag}")
+    try:
+        page.screenshot(path=f"{prefix}.png", full_page=True)
+    except Exception as e:
+        logger.warning(f"账号 {username} 截图失败: {e}")
+    try:
+        with open(f"{prefix}.html", "w", encoding="utf-8") as handle:
+            handle.write(page.content())
+    except Exception as e:
+        logger.warning(f"账号 {username} 保存 HTML 失败: {e}")
+    logger.error(f"账号 {username} 页面调试信息 url={page.url} title={page.title()} 文件前缀={prefix}")
+
+
+def page_looks_logged_out(page):
+    url = (page.url or "").lower()
+    if any(hint in url for hint in LOGIN_URL_HINTS):
+        return True
+    try:
+        body = page.locator("body").inner_text(timeout=5000)
+    except Exception:
+        return False
+    return any(hint in body for hint in LOGIN_TEXT_HINTS) and page.locator("#sub-app").count() == 0
+
+
+def click_friends_tab(page, username):
+    last_error = None
+    for selector in FRIENDS_TAB_SELECTORS:
+        try:
+            locator = page.locator(selector).first
+            locator.wait_for(state="visible", timeout=15000)
+            locator.click()
+            logger.debug(f"账号 {username} 已点击好友标签页: {selector}")
+            return
+        except Exception as e:
+            last_error = e
+            logger.debug(f"账号 {username} 好友标签选择器未命中 {selector}: {e}")
+    dump_page_debug(page, username, "friends_tab_timeout")
+    if page_looks_logged_out(page):
+        raise RuntimeError(
+            f"账号 {username} 未登录创作者中心（当前 {page.url}）。"
+            "请重新从 creator.douyin.com 导出 Cookie 到 Secrets。"
+        )
+    raise last_error or RuntimeError(f"账号 {username} 找不到好友标签页")
+
+
 def scroll_and_select_user(page, username, targets):
     """尝试滚动并查找用户名"""
     # 定义目标元素和滚动容器的选择器
-    friends_tab_selector = 'xpath=//*[@id="sub-app"]/div/div/div[1]/div[2]'
     target_selector = 'xpath=//*[@id="sub-app"]/div/div[1]/div[2]/div[2]//div[contains(@class, "semi-list-item-body semi-list-item-body-flex-start")]'
     scrollable_friends_selector = 'xpath=//*[@id="sub-app"]/div/div[1]/div[2]/div[2]/div/div/div[3]/div/div/div/ul/div'
     
@@ -79,17 +137,30 @@ def scroll_and_select_user(page, username, targets):
     logger.debug(f"账号 {username} 开始查找目标好友列表")
     logger.debug(f"账号 {username} 目标好友列表: {targets}")
 
+    try:
+        page.locator("#sub-app").first.wait_for(state="visible")
+    except Exception:
+        dump_page_debug(page, username, "sub_app_timeout")
+        if page_looks_logged_out(page):
+            raise RuntimeError(
+                f"账号 {username} 未登录创作者中心（当前 {page.url}）。"
+                "请重新从已登录的 creator.douyin.com 导出 Cookie。"
+            )
+        raise
+
     logger.debug(f"账号 {username} 点击进入好友标签页")
-    # 点击好友标签页
-    page.wait_for_selector(friends_tab_selector)
-    page.locator(friends_tab_selector).click()
+    click_friends_tab(page, username)
 
     logger.debug(f"账号 {username} 进入好友列表页面")
 
     # 确保第一个好友元素加载完成
     first_friend_selector = 'xpath=//*[@id="sub-app"]/div/div/div[2]/div[2]/div/div/div[1]/div/div/div/ul/div/div/div[1]/li/div'
-    page.wait_for_selector(first_friend_selector)
-    page.locator(first_friend_selector).click()  # 点击第一个好友，确保列表激活
+    try:
+        page.wait_for_selector(first_friend_selector)
+        page.locator(first_friend_selector).click()  # 点击第一个好友，确保列表激活
+    except Exception:
+        dump_page_debug(page, username, "first_friend_timeout")
+        raise
 
     logger.debug(f"账号 {username} 已激活好友列表，开始滚动查找目标好友")
 
@@ -215,7 +286,11 @@ def scroll_and_select_user(page, username, targets):
 
 
 def do_user_task(browser, username, cookies, targets):
-        context = browser.new_context()  # 每个任务使用独立的上下文
+        context = browser.new_context(
+            locale="zh-CN",
+            timezone_id="Asia/Shanghai",
+            viewport={"width": 1440, "height": 900},
+        )
         context.set_default_navigation_timeout(config["browserTimeout"])  # 设置导航超时时间为 120 秒
         context.set_default_timeout(config["browserTimeout"])  # 设置所有操作的默认超时时间为 120 秒
 
@@ -223,8 +298,12 @@ def do_user_task(browser, username, cookies, targets):
         
         if matchMode == "short_id":  # 使用抖音号进行匹配
             page.on("response", handle_response)
-        
-        # 打开抖音创作者中心
+
+        # 先注入 Cookie 再打开页面，避免未登录态先被风控/写成游客会话。
+        cookies = sanitize_cookies(cookies)
+        logger.info(f"账号 {username} 注入 {len(cookies)} 条 cookie")
+        context.add_cookies(cookies)
+
         retry_operation(
             "打开抖音创作者中心",
             page.goto,
@@ -232,19 +311,19 @@ def do_user_task(browser, username, cookies, targets):
             delay=5,
             url="https://creator.douyin.com/",
         )
-        # 注入 Cookie。必须在 add_cookies 前再洗一次，避免 Secret 里的
-        # Chrome/Cookie-Editor partitionKey 对象被 Playwright 拒绝。
-        cookies = sanitize_cookies(cookies)
-        logger.debug(f"账号 {username} 准备注入 {len(cookies)} 条 cookie")
-        context.add_cookies(cookies)
+        if page_looks_logged_out(page):
+            dump_page_debug(page, username, "homepage_logged_out")
+            raise RuntimeError(
+                f"账号 {username} Cookie 未生效，仍停留在登录页 {page.url}。"
+                "请重新从已登录的 creator.douyin.com 导出 Cookie。"
+            )
 
-        # 导航到消息页面
         retry_operation(
             "导航到消息页面",
             page.goto,
             retries=config["taskRetryTimes"],
             delay=5,
-            url="https://creator.douyin.com/creator-micro/data/following/chat",
+            url=CHAT_URL,
         )
 
         logger.debug(f"账号 {username} 开始发送消息")
