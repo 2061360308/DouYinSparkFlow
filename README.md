@@ -6,7 +6,9 @@
 ![Playwright](https://img.shields.io/badge/Playwright-%E2%9C%94-green?logo=playwright)
 ![chrome-headless-shell](https://img.shields.io/badge/chrome--headless--shell-%E2%9C%94-brightgreen?logo=googlechrome)
 
-> `dev`分支迁移到`https://www.douyin.com/chat` 加载更稳定，支持通过备注/昵称/抖音号等多种方式智能匹配。由于`https://www.douyin.com/chat`没经过长期测试，该分支目前暂不合并。有能力的可以研究一下
+> 犹豫`抖音创作者更新后不能发送私信`项目已迁移到`https://www.douyin.com/chat` 加载更稳定，支持通过备注/昵称/抖音号等多种方式智能匹配。目前`https://www.douyin.com/chat`没经过长期测试
+>
+> 反馈Github Action部署会被抖音检测到踢下线，暂时不确定消息可靠性。但已增加Docker部署方式，有条件的可以使用自己服务器部署。
 
 ## 贡献者
 
@@ -31,7 +33,7 @@
 - [x] 支持按照昵称和抖音号两种方式查找好友目标
 - [x] 一言支持,更丰富的消息文本
 
-使用`PlayWright`以及`chrome-headless-shell`自动化操作[抖音创作者中心](https://creator.douyin.com/)，进行定时发送抖音消息来续火花
+使用`PlayWright`以及`chrome-headless-shell`自动化操作[抖音创作者中心](https://www.douyin.com/chat)，进行定时发送抖音消息来续火花
 
 ## 🚀 使用方法
 
@@ -41,9 +43,11 @@
 
 **部署方法：**
 
-1. Github Action 部署（推荐👍），操作说明见 [Action部署说明](docs/Action部署说明.md)
+1. 服务器Docker部署（推荐👍），操作说明见 [Docker部署说明](docs/Docker部署说明.md)
 
-2. 源码部署 （更适合高级用户），操作说明见[源代码部署说明](docs/源代码部署说明.md)
+2. Github Action 部署，操作说明见 [Action部署说明](docs/Action部署说明.md)
+
+3. 源码部署 （更适合高级用户），操作说明见[源代码部署说明](docs/源代码部署说明.md)
 
 ## 📢交流讨论
 
