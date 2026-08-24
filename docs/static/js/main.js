@@ -3,19 +3,6 @@ const app = createApp({
   setup() {
     const message = ref("Hello vue!");
 
-    const match_mode_options = [
-      {
-        id: "nickname",
-        label: "昵称",
-        value: "nickname",
-      },
-      {
-        id: "short_id",
-        label: "抖音号",
-        value: "short_id",
-      },
-    ];
-
     const log_level_options = [
       {
         id: "Debug",
@@ -42,10 +29,11 @@ const app = createApp({
     // do not use same name with ref
     const form = reactive({
       PROXY_ADDRESS: "",
+      RUN_TIME: "09:00:00",
+      TZ: "Asia/Shanghai",
       MESSAGE_TEMPLATE:
         "[盖瑞]今日火花[加一]\n—— [右边] 每日一言 [左边] ——\n[API]",
       HITOKOTO_TYPES: ["文学", "影视", "诗词", "哲学"],
-      MATCH_MODE: "nickname",
       BROWSER_TIMEOUT: 120000,
       FRIEND_LIST_WAIT_TIME: 2000,
       TASK_RETRY_TIMES: 3,
@@ -54,18 +42,24 @@ const app = createApp({
         {
           username: "user1",
           unique_id: "12345678905",
-          cookies: "cookie1",
+          cookies:
+            '[{"name":"sessionid","value":"your-sessionid","domain":".douyin.com","path":"/"},{"name":"ttwid","value":"your-ttwid","domain":".douyin.com","path":"/"}]',
           targets: ["friend1", "friend2"],
         },
       ],
     });
 
     const environmentVariables = computed(() => {
+      const [CRON_HOUR, CRON_MINUTE, CRON_SECOND] = form.RUN_TIME.split(":");
+
       return {
         PROXY_ADDRESS: form.PROXY_ADDRESS,
+        CRON_HOUR,
+        CRON_MINUTE,
+        CRON_SECOND,
+        TZ: form.TZ,
         MESSAGE_TEMPLATE: form.MESSAGE_TEMPLATE,
         HITOKOTO_TYPES: form.HITOKOTO_TYPES,
-        MATCH_MODE: form.MATCH_MODE,
         BROWSER_TIMEOUT: form.BROWSER_TIMEOUT,
         FRIEND_LIST_WAIT_TIME: form.FRIEND_LIST_WAIT_TIME,
         TASK_RETRY_TIMES: form.TASK_RETRY_TIMES,
@@ -160,7 +154,8 @@ const app = createApp({
       form.ACCOUNTS.push({
         username: "",
         unique_id: "",
-        cookies: "",
+        cookies:
+          '[{"name":"sessionid","value":"your-sessionid","domain":".douyin.com","path":"/"}]',
         targets: [],
       });
     };
@@ -170,7 +165,6 @@ const app = createApp({
     };
 
     return {
-      match_mode_options,
       log_level_options,
       message,
       form,

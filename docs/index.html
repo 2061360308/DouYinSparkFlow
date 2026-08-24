@@ -156,6 +156,18 @@
                                 <el-form-item label="代理地址（暂未实现）">
                                     <el-input v-model="form.PROXY_ADDRESS" />
                                 </el-form-item>
+                                <el-form-item label="执行时间（仅Docker部署有效）">
+                                    <el-time-picker v-model="form.RUN_TIME" format="HH:mm:ss" value-format="HH:mm:ss"
+                                        placeholder="09:00:00" />
+                                </el-form-item>
+                                <el-form-item label="时区">
+                                    <el-select v-model="form.TZ" placeholder="Asia/Shanghai">
+                                        <el-option label="Asia/Shanghai" value="Asia/Shanghai" />
+                                        <el-option label="Asia/Hong_Kong" value="Asia/Hong_Kong" />
+                                        <el-option label="Asia/Tokyo" value="Asia/Tokyo" />
+                                        <el-option label="UTC" value="UTC" />
+                                    </el-select>
+                                </el-form-item>
                                 <el-form-item label="消息模板">
                                     <el-input v-model="form.MESSAGE_TEMPLATE" :rows="4" type="textarea" />
                                 </el-form-item>
@@ -173,9 +185,6 @@
                                         <el-checkbox value="抖机灵">抖机灵</el-checkbox>
                                         <el-checkbox value="其他">其他</el-checkbox>
                                     </el-checkbox-group>
-                                </el-form-item>
-                                <el-form-item label="账号匹配模式">
-                                    <el-select v-model="form.MATCH_MODE" :options="match_mode_options" />
                                 </el-form-item>
                                 <el-form-item label="浏览器操作最长等待时间">
                                     <el-input-number v-model="form.BROWSER_TIMEOUT" :step="1000" :precision="0"

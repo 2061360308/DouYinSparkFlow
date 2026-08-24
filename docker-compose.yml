@@ -1,0 +1,14 @@
+services:
+  douyin-spark-flow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: douyin-spark-flow
+    restart: unless-stopped
+    shm_size: 1gb
+    environment:
+      GITHUB_ACTIONS: "true"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ${CONFIG_ENV_FILE:-./config/.env}:/app/.env:ro
+      - ${LOGS_DIR:-./logs}:/app/logs

@@ -53,7 +53,6 @@ def get_config():
         "hitokotoTypes": json.loads(
             os.getenv("HITOKOTO_TYPES", '["文学","影视","诗词","哲学"]')
         ),
-        "matchMode": os.getenv("MATCH_MODE", "nickname"),  # 是否使用短 ID 进行好友匹配
         "browserTimeout": int(
             os.getenv("BROWSER_TIMEOUT", "120000")
         ),  # 浏览器操作超时时间，单位毫秒

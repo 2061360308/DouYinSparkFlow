@@ -10,7 +10,6 @@ import time
 config = get_config()
 userData = get_userData()
 logger = setup_logger(level=config.get("logLevel", "Info"))
-matchMode = config.get("matchMode", "nickname")
 userIDDict = {}
 
 CONVERSATION_ITEM_SELECTOR = ".conversationConversationItemwrapper"
@@ -29,16 +28,16 @@ def handle_response(response: Response):
         # print(f"URL: {response.url}")
         # print(f"状态码: {response.status}")
         try:
-            # 获取接口返回的 JSON 数据（就是你在 Network 里看到的内容）
+            # 获取接口返回的 JSON 数据
             json_data = response.json()
             # print("\n📦 响应 JSON 数据：")
             # print(json.dumps(json_data, indent=4, ensure_ascii=False))
             for item in json_data.get("data", []):
-                short_id = item.get("short_id")
-                unique_id = item.get("unique_id")
-                sec_uid = item.get("sec_uid", "")
-                nickname = norm(item.get("nickname"))
-                remark_name = norm(item.get("remark_name", nickname))
+                short_id = item.get("short_id")  # short_id
+                unique_id = item.get("unique_id")  # unique_id
+                sec_uid = item.get("sec_uid", "")  # sec_uid 可能不存在，提供默认值为空字符串
+                nickname = norm(item.get("nickname"))  # 昵称
+                remark_name = norm(item.get("remark_name", nickname))  #  备注名，如果没有则使用昵称
                 userIDDict[remark_name] = [short_id, unique_id, sec_uid, nickname, remark_name]
         except Exception as e:
             tb = traceback.extract_tb(e.__traceback__)
