@@ -9,6 +9,10 @@ WEB_CHAT_URL = "https://www.douyin.com/chat"
 CONVERSATION_ITEM_SELECTOR = ".conversationConversationItemwrapper"
 CONVERSATION_TITLE_SELECTOR = ".conversationConversationItemtitle"
 CHAT_EDITOR_SELECTOR = ".messageEditorimChatEditorContainer"
+SEARCH_INPUT_SELECTORS = (
+    'input[placeholder="搜索"]',
+    'input[placeholder*="搜索"]',
+)
 
 logger = setup_logger(level=logging.DEBUG)
 
@@ -18,9 +22,25 @@ class TargetNotFoundError(RuntimeError):
 
 
 async def select_web_chat_target(page, target, timeout=30000):
-    """Select exactly one requested conversation on Douyin's web chat page."""
-    await page.wait_for_selector(CONVERSATION_ITEM_SELECTOR, timeout=timeout)
+    """Select one exact target, preferring global chat search over recent items."""
     normalized_target = target.strip()
+
+    for selector in SEARCH_INPUT_SELECTORS:
+        try:
+            search = page.locator(selector)
+            if await search.count() == 0:
+                continue
+            field = search.first
+            await field.fill(normalized_target)
+            exact = page.get_by_text(normalized_target, exact=True)
+            if await exact.count() > 0:
+                await exact.first.click()
+                return normalized_target
+        except (AttributeError, TypeError):
+            # Older page doubles and older layouts have no global search surface.
+            break
+
+    await page.wait_for_selector(CONVERSATION_ITEM_SELECTOR, timeout=timeout)
 
     for item in await page.locator(CONVERSATION_ITEM_SELECTOR).all():
         title = (
