@@ -6,5 +6,5 @@ RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" -r requirements.txt 
     && useradd --create-home --uid 10001 spark
 COPY --chown=spark:spark . /app
 USER spark
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 SPARK_LOG_DIR=/tmp/spark-logs
 CMD ["python", "-m", "spark_console.web.app"]

@@ -2,15 +2,15 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 
-# 创建 logs 文件夹（如果不存在）
-if not os.path.exists("logs"):
-    os.makedirs("logs")
+# 容器可把日志定向到只读应用目录之外的临时挂载。
+LOG_DIR = os.environ.get("SPARK_LOG_DIR", "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
 
 # 日志格式
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
 
 # 日志文件路径
-LOG_FILE = "logs/app.log"
+LOG_FILE = os.path.join(LOG_DIR, "app.log")
 
 # 配置日志
 def setup_logger(name="app", level=logging.INFO):
