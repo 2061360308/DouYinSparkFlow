@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from spark_console.models import DouyinLoginSession, ScanStatus, utc_now
 from spark_console.services import Conflict, NotFound, ValidationError
@@ -125,8 +126,8 @@ class ScanSessionService:
         return scan
 
     def claim_next(self) -> DouyinLoginSession | None:
-        scan_id = self.session.scalar(
-            select(DouyinLoginSession.id)
+        scan = self.session.scalar(
+            select(DouyinLoginSession)
             .where(
                 DouyinLoginSession.slot == "global",
                 DouyinLoginSession.status == ScanStatus.QUEUED,
@@ -134,21 +135,24 @@ class ScanSessionService:
             .order_by(DouyinLoginSession.created_at, DouyinLoginSession.id)
             .limit(1)
         )
-        if scan_id is None:
+        if scan is None:
             return None
+        current = self._now()
         result = self.session.execute(
             update(DouyinLoginSession)
             .where(
-                DouyinLoginSession.id == scan_id,
+                DouyinLoginSession.id == scan.id,
                 DouyinLoginSession.slot == "global",
                 DouyinLoginSession.status == ScanStatus.QUEUED,
+                DouyinLoginSession.expires_at > current,
             )
-            .values(status=ScanStatus.LOADING_QR, updated_at=self._now())
+            .values(status=ScanStatus.LOADING_QR, updated_at=current)
+            .execution_options(synchronize_session=False)
         )
         if result.rowcount != 1:
+            self._expire_one(scan, current)
             return None
-        self.session.flush()
-        return self._get(scan_id)
+        return self._reload(scan.id)
 
     def publish_qr(self, scan_id: str, png: bytes) -> DouyinLoginSession:
         if (
@@ -158,20 +162,19 @@ class ScanSessionService:
         ):
             raise ValidationError("invalid_qr_png")
         scan = self._get(scan_id)
-        self._transition(scan, ScanStatus.AWAITING_SCAN)
-        scan.qr_png = png
-        self.session.flush()
-        return scan
+        return self._cas_transition(
+            scan,
+            ScanStatus.AWAITING_SCAN,
+            qr_png=png,
+        )
 
     def mark_confirming(self, scan_id: str) -> DouyinLoginSession:
         scan = self._get(scan_id)
-        self._transition(scan, ScanStatus.CONFIRMING)
-        self.session.flush()
-        return scan
+        return self._cas_transition(scan, ScanStatus.CONFIRMING)
 
     def complete(self, scan_id: str, account_id: str) -> DouyinLoginSession:
         scan = self._get(scan_id)
-        return self._terminal(
+        return self._cas_terminal(
             scan,
             ScanStatus.SUCCEEDED,
             account_id=account_id,
@@ -181,11 +184,11 @@ class ScanSessionService:
         if code not in FAILURE_CODES:
             raise ValidationError("invalid_error_code")
         scan = self._get(scan_id)
-        return self._terminal(scan, ScanStatus.FAILED, error_code=code)
+        return self._cas_terminal(scan, ScanStatus.FAILED, error_code=code)
 
     def cancel_owned(self, owner_id: str, scan_id: str) -> DouyinLoginSession:
         scan = self.get_owned(owner_id, scan_id)
-        return self._terminal(
+        return self._cas_terminal(
             scan,
             ScanStatus.CANCELLED,
             error_code="cancelled",
@@ -203,23 +206,28 @@ class ScanSessionService:
         return scan
 
     def expire_stale(self) -> int:
-        stale = self.session.scalars(
-            select(DouyinLoginSession).where(
+        current = self._now()
+        result = self.session.execute(
+            update(DouyinLoginSession)
+            .where(
                 DouyinLoginSession.slot == "global",
                 DouyinLoginSession.status.in_(ACTIVE_STATUSES),
-                DouyinLoginSession.expires_at <= self._now(),
+                DouyinLoginSession.expires_at <= current,
             )
-        ).all()
-        for scan in stale:
-            self._terminal(
-                scan,
-                ScanStatus.EXPIRED,
+            .values(
+                status=ScanStatus.EXPIRED,
+                slot=None,
+                qr_png=None,
+                account_id=None,
                 error_code="login_timeout",
-                flush=False,
+                finished_at=current,
+                updated_at=current,
             )
-        if stale:
-            self.session.flush()
-        return len(stale)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount:
+            self._reload_cached_scans()
+        return result.rowcount
 
     def public_status(
         self, scan: DouyinLoginSession, now: datetime | None = None
@@ -233,13 +241,16 @@ class ScanSessionService:
                 0,
                 math.ceil((_aware(scan.expires_at) - current).total_seconds()),
             )
+        public_error = scan.error_code
+        if public_error is not None and public_error not in FAILURE_CODES:
+            public_error = "automation_failed"
         return {
             "id": scan.id,
             "status": status.value,
             "remaining_seconds": remaining_seconds,
-            "error": scan.error_code,
+            "error": public_error,
             "message": ERROR_MESSAGES.get(
-                scan.error_code, STATUS_MESSAGES[status]
+                public_error, STATUS_MESSAGES[status]
             ),
             "account_id": scan.account_id,
         }
@@ -250,38 +261,107 @@ class ScanSessionService:
             raise NotFound("scan session not found")
         return scan
 
-    def _transition(
-        self, scan: DouyinLoginSession, target: ScanStatus
+    def _cas_transition(
+        self,
+        scan: DouyinLoginSession,
+        target: ScanStatus,
+        **values,
     ) -> DouyinLoginSession:
-        current = self._status(scan)
-        if target not in ALLOWED.get(current, set()):
+        current = self._now()
+        sources = tuple(
+            source for source, targets in ALLOWED.items() if target in targets
+        )
+        result = self.session.execute(
+            update(DouyinLoginSession)
+            .where(
+                DouyinLoginSession.id == scan.id,
+                DouyinLoginSession.slot == "global",
+                DouyinLoginSession.status.in_(sources),
+                DouyinLoginSession.expires_at > current,
+            )
+            .values(status=target, updated_at=current, **values)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount == 1:
+            return self._reload(scan.id)
+        expired = self._expire_one(scan, current)
+        if expired is not None:
+            return expired
+        persisted = self._reload(scan.id)
+        persisted_status = self._status(persisted)
+        if (
+            persisted.slot == "global"
+            and persisted_status in ACTIVE_STATUSES
+            and target not in ALLOWED.get(persisted_status, set())
+        ):
             raise Conflict("invalid_transition")
-        scan.status = target
-        scan.updated_at = self._now()
-        return scan
+        raise Conflict("transition_conflict")
 
-    def _terminal(
+    def _cas_terminal(
         self,
         scan: DouyinLoginSession,
         target: ScanStatus,
         *,
         account_id: str | None = None,
         error_code: str | None = None,
-        flush: bool = True,
     ) -> DouyinLoginSession:
         if target not in TERMINAL_STATUSES:
             raise ValueError("terminal status required")
-        self._transition(scan, target)
-        finished_at = self._now()
-        scan.slot = None
-        scan.qr_png = None
-        scan.account_id = account_id
-        scan.error_code = error_code
-        scan.finished_at = finished_at
-        scan.updated_at = finished_at
-        if flush:
-            self.session.flush()
+        current = self._now()
+        return self._cas_transition(
+            scan,
+            target,
+            slot=None,
+            qr_png=None,
+            account_id=account_id,
+            error_code=error_code,
+            finished_at=current,
+        )
+
+    def _expire_one(
+        self, scan: DouyinLoginSession, current: datetime
+    ) -> DouyinLoginSession | None:
+        result = self.session.execute(
+            update(DouyinLoginSession)
+            .where(
+                DouyinLoginSession.id == scan.id,
+                DouyinLoginSession.slot == "global",
+                DouyinLoginSession.status.in_(ACTIVE_STATUSES),
+                DouyinLoginSession.expires_at <= current,
+            )
+            .values(
+                status=ScanStatus.EXPIRED,
+                slot=None,
+                qr_png=None,
+                account_id=None,
+                error_code="login_timeout",
+                finished_at=current,
+                updated_at=current,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            return None
+        return self._reload(scan.id)
+
+    def _reload(self, scan_id: str) -> DouyinLoginSession:
+        scan = self.session.scalar(
+            select(DouyinLoginSession)
+            .where(DouyinLoginSession.id == scan_id)
+            .execution_options(populate_existing=True)
+        )
+        if scan is None:
+            raise NotFound("scan session not found")
+        for attribute in ("expires_at", "created_at", "updated_at", "finished_at"):
+            value = getattr(scan, attribute)
+            if value is not None and value.tzinfo is None:
+                set_committed_value(scan, attribute, _aware(value))
         return scan
+
+    def _reload_cached_scans(self) -> None:
+        for instance in list(self.session.identity_map.values()):
+            if isinstance(instance, DouyinLoginSession):
+                self._reload(instance.id)
 
     def _now(self) -> datetime:
         return _aware(self.now())

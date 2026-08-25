@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from spark_console.db import create_schema
-from spark_console.models import DouyinAccount, ScanStatus, User
+from spark_console.models import DouyinAccount, DouyinLoginSession, ScanStatus, User
 from spark_console.services import Conflict, NotFound, ValidationError
 from spark_console.services.scan_sessions import (
     MAX_QR_PNG_BYTES,
@@ -26,7 +26,7 @@ class ScanSessionServiceTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite:///:memory:")
         create_schema(self.engine)
-        self.session = Session(self.engine)
+        self.session = Session(self.engine, expire_on_commit=False)
         self.clock = MutableClock(datetime(2026, 8, 25, 4, 0, tzinfo=timezone.utc))
         self.service = ScanSessionService(self.session, now=self.clock)
         self.owner = User(username="owner", password_hash="hash", role="user")
@@ -207,6 +207,143 @@ class ScanSessionServiceTests(unittest.TestCase):
         self.assertNotIn("owner_user_id", serialized)
         self.assertNotIn("qr_png", serialized)
         self.assertNotIn("slot", serialized)
+
+    def test_stale_worker_cannot_publish_after_owner_cancels(self):
+        scan = self.service.start(self.owner.id)
+        self.session.commit()
+
+        with Session(self.engine, expire_on_commit=False) as worker_session:
+            worker = ScanSessionService(worker_session, now=self.clock)
+            worker_scan = worker.claim_next()
+            worker_session.commit()
+            self.assertEqual(ScanStatus.LOADING_QR, worker_scan.status)
+
+            self.service.cancel_owned(self.owner.id, scan.id)
+            self.session.commit()
+
+            with self.assertRaisesRegex(Conflict, "^transition_conflict$"):
+                worker.publish_qr(scan.id, PNG_SIGNATURE + b"late")
+
+        with Session(self.engine) as verification:
+            persisted = verification.get(DouyinLoginSession, scan.id)
+            self.assertEqual(ScanStatus.CANCELLED, persisted.status)
+            self.assertIsNone(persisted.slot)
+            self.assertIsNone(persisted.qr_png)
+
+    def test_stale_worker_cannot_complete_after_session_fails(self):
+        account = self._account()
+        scan = self.service.start(self.owner.id)
+        self.session.commit()
+
+        with Session(self.engine, expire_on_commit=False) as worker_session:
+            worker = ScanSessionService(worker_session, now=self.clock)
+            worker.claim_next()
+            worker_scan = worker.publish_qr(scan.id, PNG_SIGNATURE + b"fixture")
+            worker_session.commit()
+            self.assertEqual(ScanStatus.AWAITING_SCAN, worker_scan.status)
+
+            self.service.fail(scan.id, "automation_failed")
+            self.session.commit()
+
+            with self.assertRaisesRegex(Conflict, "^transition_conflict$"):
+                worker.complete(scan.id, account.id)
+
+        with Session(self.engine) as verification:
+            persisted = verification.get(DouyinLoginSession, scan.id)
+            self.assertEqual(ScanStatus.FAILED, persisted.status)
+            self.assertEqual("automation_failed", persisted.error_code)
+            self.assertIsNone(persisted.account_id)
+
+    def test_transition_requires_persisted_global_slot(self):
+        scan = self.service.start(self.owner.id)
+        self.service.claim_next()
+        self.session.commit()
+
+        with Session(self.engine) as concurrent:
+            concurrent_scan = concurrent.get(DouyinLoginSession, scan.id)
+            concurrent_scan.slot = None
+            concurrent.commit()
+
+        with self.assertRaisesRegex(Conflict, "^transition_conflict$"):
+            self.service.publish_qr(scan.id, PNG_SIGNATURE + b"late")
+
+        with Session(self.engine) as verification:
+            persisted = verification.get(DouyinLoginSession, scan.id)
+            self.assertEqual(ScanStatus.LOADING_QR, persisted.status)
+            self.assertIsNone(persisted.slot)
+            self.assertIsNone(persisted.qr_png)
+
+    def test_claim_next_expires_queued_session_at_deadline(self):
+        scan = self.service.start(self.owner.id)
+        self.session.commit()
+        self.clock.value += timedelta(minutes=5)
+
+        self.assertIsNone(self.service.claim_next())
+
+        with Session(self.engine) as verification:
+            persisted = verification.get(DouyinLoginSession, scan.id)
+            self.assertEqual(ScanStatus.EXPIRED, persisted.status)
+            self.assertEqual("login_timeout", persisted.error_code)
+            self.assertIsNone(persisted.slot)
+
+    def test_every_active_transition_expires_session_at_deadline(self):
+        cases = (
+            ("publish", ScanStatus.LOADING_QR),
+            ("confirm", ScanStatus.AWAITING_SCAN),
+            ("complete", ScanStatus.AWAITING_SCAN),
+            ("fail", ScanStatus.LOADING_QR),
+            ("cancel", ScanStatus.QUEUED),
+        )
+        for case, expected_source in cases:
+            with self.subTest(case=case):
+                scan = self.service.start(self.owner.id)
+                if case != "cancel":
+                    self.service.claim_next()
+                if case in {"confirm", "complete"}:
+                    self.service.publish_qr(scan.id, PNG_SIGNATURE + b"fixture")
+                self.session.commit()
+                self.assertEqual(expected_source, scan.status)
+                self.clock.value += timedelta(minutes=5)
+
+                try:
+                    if case == "publish":
+                        result = self.service.publish_qr(
+                            scan.id, PNG_SIGNATURE + b"late"
+                        )
+                    elif case == "confirm":
+                        result = self.service.mark_confirming(scan.id)
+                    elif case == "complete":
+                        result = self.service.complete(scan.id, self._account().id)
+                    elif case == "fail":
+                        result = self.service.fail(scan.id, "automation_failed")
+                    else:
+                        result = self.service.cancel_owned(self.owner.id, scan.id)
+
+                    self.assertEqual(ScanStatus.EXPIRED, result.status)
+                finally:
+                    self.service.expire_stale()
+
+                self.session.commit()
+                with Session(self.engine) as verification:
+                    persisted = verification.get(DouyinLoginSession, scan.id)
+                    self.assertEqual(ScanStatus.EXPIRED, persisted.status)
+                    self.assertEqual("login_timeout", persisted.error_code)
+                    self.assertIsNone(persisted.slot)
+                    self.assertIsNone(persisted.qr_png)
+                    self.assertIsNone(persisted.account_id)
+
+    def test_public_status_sanitizes_unknown_persisted_error_code(self):
+        scan = self.service.start(self.owner.id)
+        scan.status = ScanStatus.FAILED
+        scan.slot = None
+        scan.error_code = "internal-driver-diagnostic"
+        self.session.flush()
+
+        public = self.service.public_status(scan, self.clock.value)
+
+        self.assertEqual("automation_failed", public["error"])
+        self.assertEqual("自动化登录失败，请重试", public["message"])
+        self.assertNotIn("internal-driver-diagnostic", repr(public))
 
 
 if __name__ == "__main__":
