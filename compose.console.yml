@@ -1,0 +1,48 @@
+name: douyin-spark-console
+x-common: &common
+  build:
+    context: .
+    dockerfile: Dockerfile.console
+    network: host
+    args:
+      PIP_INDEX_URL: ${SPARK_BUILD_PIP_INDEX_URL:-https://pypi.org/simple}
+  restart: unless-stopped
+  env_file: .env.console
+  volumes:
+    - spark-data:/data
+    - ./secrets/cookie.key:/run/secrets/cookie.key:ro
+    - ./secrets/session.key:/run/secrets/session.key:ro
+  networks: [spark-private]
+  read_only: true
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "3"}
+
+services:
+  spark-web:
+    <<: *common
+    ports: ["${SPARK_WEB_PUBLISH_IP:-127.0.0.1}:8899:8899"]
+    mem_limit: 256m
+    cpus: 0.50
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8899/health/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+  spark-worker:
+    <<: *common
+    command: [python, -m, spark_console.worker]
+    environment:
+      SPARK_WORKER_CONCURRENCY: "1"
+    mem_limit: 768m
+    cpus: 1.0
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]
+
+volumes:
+  spark-data:
+networks:
+  spark-private:
+    driver: bridge

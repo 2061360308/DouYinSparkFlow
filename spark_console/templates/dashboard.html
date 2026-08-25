@@ -1,0 +1,6 @@
+{% extends "base.html" %}{% block content %}
+<header class="page-head"><div><span class="eyebrow">DAILY SPARK</span><h1>今天，也让火花准时亮起</h1><p>所有时间均按北京时间执行；发送前会核验账号与目标好友。</p></div><a class="button" href="/tasks">＋ 新建续火任务</a></header>
+<section class="stats"><article><span>启用任务</span><strong>{{ tasks|selectattr('enabled')|list|length }}</strong><small>共 {{ tasks|length }} 个任务</small></article><article><span>已绑定账号</span><strong>{{ accounts|length }}</strong><small>Cookie 加密存储</small></article><article><span>最近执行</span><strong>{{ runs|length }}</strong><small>仅显示脱敏状态</small></article></section>
+<section class="panel"><div class="panel-head"><div><h2>今日任务</h2><p>单 Worker 串行执行，避免多个浏览器互相干扰</p></div></div>
+{% if tasks %}<div class="task-list">{% for task in tasks %}<article class="task-row"><div class="time">{{ task.send_time }}</div><div><strong>{{ task.target_name }}</strong><p>{{ task.message_template }}</p></div><span class="pill {{ 'good' if task.enabled else 'off' }}">{{ '已启用' if task.enabled else '已暂停' }}</span></article>{% endfor %}</div>{% else %}<div class="empty"><span>✦</span><h3>还没有续火任务</h3><p>先绑定抖音账号，再设置好友、时间和消息。</p><a class="button" href="/accounts">开始绑定账号</a></div>{% endif %}</section>
+{% endblock %}

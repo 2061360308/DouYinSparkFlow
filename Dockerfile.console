@@ -1,0 +1,10 @@
+FROM mcr.microsoft.com/playwright/python:v1.56.0-noble
+WORKDIR /app
+COPY requirements.txt requirements-console.txt ./
+ARG PIP_INDEX_URL=https://pypi.org/simple
+RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" -r requirements.txt -r requirements-console.txt \
+    && useradd --create-home --uid 10001 spark
+COPY --chown=spark:spark . /app
+USER spark
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 SPARK_LOG_DIR=/tmp/spark-logs
+CMD ["python", "-m", "spark_console.web.app"]
