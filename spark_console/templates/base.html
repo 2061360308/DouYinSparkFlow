@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ title }} · 火花守护</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+</head>
+<body>
+{% if nav is not defined or nav %}
+<aside class="sidebar">
+  <a class="brand" href="/dashboard"><span class="brand-mark">火</span><span>火花守护<small>SPARK CONSOLE</small></span></a>
+  <nav>
+    <a href="/dashboard">◫ 今日概览</a><a href="/accounts">◎ 抖音账号</a>
+    <a href="/tasks">⌁ 续火任务</a><a href="/runs">◷ 执行记录</a>
+    {% if is_admin %}<a href="/admin">◇ 管理后台</a>{% endif %}
+  </nav>
+  <form action="/logout" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="quiet" type="submit">退出登录 · {{ user.username }}</button></form>
+</aside>
+{% endif %}
+<main class="{% if nav is defined and not nav %}auth-main{% endif %}">
+  {% block content %}{% endblock %}
+</main>
+</body></html>
