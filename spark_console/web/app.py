@@ -17,11 +17,11 @@ from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.models import DouyinAccount, SparkTask, TaskRun, User
 from spark_console.rate_limit import FailedAttemptLimiter
 from spark_console.security import PasswordService, SessionService
-from spark_console.services import ServiceError
 from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
 from spark_console.services.tasks import TaskService
 from spark_console.services.users import UserService
+from spark_console.web.account_scan_routes import build_account_scan_router
 from spark_console.web.auth import WebAuth
 from spark_console.web.registration_routes import admin_invite_items, build_registration_router
 
@@ -49,6 +49,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     app.include_router(
         build_registration_router(engine, passwords, registration_limiter, auth, page)
     )
+    app.include_router(build_account_scan_router(engine, auth, cipher))
 
     @app.exception_handler(401)
     async def unauthorized(request: Request, _exc):
@@ -156,22 +157,6 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             user, _record, context = auth.user_context(request, db)
             accounts = AccountService(db, cipher, AuditService(db)).list_owned(user.id)
             return page(request, "accounts.html", title="抖音账号", accounts=accounts, **context)
-
-    @app.post("/accounts")
-    def add_account(
-        request: Request,
-        csrf_token: str = Form(default=""),
-        display_name: str = Form(),
-        cookies: str = Form(),
-    ):
-        with session_scope(engine) as db:
-            user, record = auth.current(request, db)
-            auth.csrf(record, csrf_token)
-            try:
-                AccountService(db, cipher, AuditService(db)).create(user.id, display_name, cookies)
-            except ServiceError as error:
-                raise HTTPException(400, str(error)) from error
-        return RedirectResponse("/accounts", status_code=303)
 
     @app.post("/accounts/{account_id}/delete")
     def delete_account(request: Request, account_id: str, csrf_token: str = Form(default="")):
