@@ -19,6 +19,9 @@
   let scanId = null;
   let currentStatus = null;
   let timer = null;
+  let startPending = false;
+  let closeRequested = false;
+  let cancelPending = false;
 
   function clearTimer() {
     if (timer !== null) window.clearTimeout(timer);
@@ -80,13 +83,14 @@
   }
 
   async function pollScan() {
-    if (!scanId) return;
+    if (!scanId || closeRequested || cancelPending) return;
     try {
       const response = await fetch(`/accounts/scan/${encodeURIComponent(scanId)}`, {
         cache: "no-store",
         credentials: "same-origin",
       });
       const state = await readJson(response);
+      if (closeRequested || cancelPending) return;
       if (!renderState(state)) {
         timer = window.setTimeout(pollScan, 2000);
       }
@@ -101,6 +105,9 @@
     clearTimer();
     scanId = null;
     currentStatus = null;
+    startPending = true;
+    closeRequested = false;
+    cancelPending = false;
     setQrVisible(false);
     showMessage("正在创建扫码会话", 0);
     setBusy(true);
@@ -115,10 +122,27 @@
       });
       const state = await readJson(response);
       scanId = state.id;
-      if (!renderState(state)) {
+      startPending = false;
+      const terminal = renderState(state);
+      if (closeRequested) {
+        if (TERMINAL.has(currentStatus) || await cancelScan()) {
+          closeRequested = false;
+          dialog.close();
+        } else {
+          closeRequested = false;
+        }
+        return;
+      }
+      if (!terminal) {
         timer = window.setTimeout(pollScan, 2000);
       }
     } catch (error) {
+      startPending = false;
+      if (closeRequested && !scanId) {
+        closeRequested = false;
+        dialog.close();
+        return;
+      }
       setBusy(false);
       cancelButton.disabled = true;
       showMessage(error.message, 0);
@@ -127,7 +151,12 @@
 
   async function cancelScan() {
     clearTimer();
-    if (!scanId || TERMINAL.has(currentStatus)) return;
+    if (!scanId || TERMINAL.has(currentStatus)) return true;
+    if (cancelPending) return false;
+    cancelPending = true;
+    closeButton.disabled = true;
+    cancelButton.disabled = true;
+    showMessage("正在取消绑定", 0);
     try {
       const response = await fetch(
         `/accounts/scan/${encodeURIComponent(scanId)}/cancel`,
@@ -139,29 +168,47 @@
         },
       );
       const state = await readJson(response);
+      cancelPending = false;
+      closeButton.disabled = false;
       renderState(state);
+      return true;
     } catch (error) {
-      setBusy(false);
-      showMessage(error.message, 0);
+      cancelPending = false;
+      closeButton.disabled = false;
+      cancelButton.disabled = false;
+      stageNode.setAttribute("aria-busy", "false");
+      showMessage("取消失败，请重试", 0);
+      return false;
     }
   }
 
-  async function requestClose() {
-    const active = scanId && !TERMINAL.has(currentStatus);
-    if (active && !window.confirm("关闭窗口将取消本次绑定，确定继续吗？")) return;
-    if (active) await cancelScan();
+  async function requestClose(confirmClose) {
+    const active = startPending || (scanId && !TERMINAL.has(currentStatus));
+    if (!active) {
+      dialog.close();
+      return;
+    }
+    if (confirmClose && !window.confirm("关闭窗口将取消本次绑定，确定继续吗？")) return;
+    if (closeRequested || cancelPending) return;
+    closeRequested = true;
     clearTimer();
-    dialog.close();
+    closeButton.disabled = true;
+    cancelButton.disabled = true;
+    showMessage("正在取消绑定", 0);
+    if (startPending) return;
+    if (await cancelScan()) {
+      closeRequested = false;
+      dialog.close();
+    } else {
+      closeRequested = false;
+    }
   }
 
   startButton.addEventListener("click", startScan);
-  closeButton.addEventListener("click", requestClose);
-  cancelButton.addEventListener("click", async () => {
-    await cancelScan();
-    dialog.close();
-  });
+  closeButton.addEventListener("click", () => requestClose(true));
+  cancelButton.addEventListener("click", () => requestClose(false));
   dialog.addEventListener("cancel", (event) => {
     event.preventDefault();
-    requestClose();
+    requestClose(true);
   });
 })();
