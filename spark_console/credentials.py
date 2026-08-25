@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
+import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote_to_bytes, urlsplit
@@ -32,6 +35,8 @@ _STORAGE_COOKIE_REQUIRED_KEYS = {
 }
 _STORAGE_COOKIE_OPTIONAL_KEYS = {"partitionKey", "_crHasCrossSiteAncestor"}
 _MAX_COOKIE_EXPIRES = 253_402_300_799
+_DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z", re.ASCII)
+_HOST_DELIMITERS = frozenset("%/\\[]^|@#?")
 
 
 class CredentialError(ValueError):
@@ -55,12 +60,13 @@ def _valid_url(value: object, *, origin_only: bool = False) -> bool:
     try:
         parsed = urlsplit(value)
         parsed.port
-    except ValueError:
+        hostname = parsed.hostname
+    except (UnicodeError, ValueError):
         return False
     if (
         parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or not _valid_host_encoding(parsed.hostname, reject_whitespace=True)
+        or not hostname
+        or _canonical_host(hostname, allow_ipv6=True) is None
         or parsed.username is not None
         or parsed.password is not None
     ):
@@ -70,31 +76,63 @@ def _valid_url(value: object, *, origin_only: bool = False) -> bool:
     )
 
 
-def _valid_host_encoding(value: str, *, reject_whitespace: bool = False) -> bool:
+def _canonical_host(value: str, *, allow_ipv6: bool) -> str | None:
     try:
         decoded = unquote_to_bytes(value).decode("utf-8")
-    except UnicodeDecodeError:
-        return False
-    if any(character in decoded for character in "%/\\[]^|"):
-        return False
-    ipv4_parts = decoded.lstrip(".").split(".")
-    if len(ipv4_parts) == 4 and all(part.isdigit() for part in ipv4_parts):
-        if not all(0 <= int(part) <= 255 for part in ipv4_parts):
-            return False
-    return not reject_whitespace or not any(
-        character.isspace() for character in decoded
-    )
+    except UnicodeError:
+        return None
+    if (
+        not decoded
+        or any(character in _HOST_DELIMITERS for character in decoded)
+        or any(
+            ord(character) <= 0x20
+            or ord(character) == 0x7F
+            or character.isspace()
+            or unicodedata.category(character).startswith("C")
+            for character in decoded
+        )
+    ):
+        return None
+
+    if ":" in decoded:
+        if not allow_ipv6 or ":" not in value:
+            return None
+        try:
+            return ipaddress.IPv6Address(decoded).compressed
+        except ipaddress.AddressValueError:
+            return None
+
+    host = decoded[:-1] if decoded.endswith(".") else decoded
+    if not host:
+        return None
+    try:
+        ascii_host = host.encode("idna").decode("ascii").lower()
+        unicode_host = ascii_host.encode("ascii").decode("idna")
+        if unicode_host.encode("idna").decode("ascii").lower() != ascii_host:
+            return None
+    except UnicodeError:
+        return None
+
+    labels = ascii_host.split(".")
+    if not labels or len(ascii_host) > 253:
+        return None
+    if labels[-1].isdigit():
+        if len(labels) != 4 or not all(label.isdigit() for label in labels):
+            return None
+        try:
+            return str(ipaddress.IPv4Address(ascii_host))
+        except ipaddress.AddressValueError:
+            return None
+    if not all(_DNS_LABEL.fullmatch(label) for label in labels):
+        return None
+    return ascii_host
 
 
 def _valid_domain(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and bool(value.lstrip("."))
-        and _valid_host_encoding(value)
-        and not any(character.isspace() for character in value)
-        and "/" not in value
-        and ":" not in value
-    )
+    if not isinstance(value, str):
+        return False
+    host = value[1:] if value.startswith(".") else value
+    return _canonical_host(host, allow_ipv6=False) is not None
 
 
 def _valid_expires(value: object) -> bool:

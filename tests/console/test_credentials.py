@@ -10,6 +10,23 @@ from spark_console.credentials import CredentialError, CredentialPayload
 from spark_console.executor import DouyinExecutor
 
 
+_PLAYWRIGHT_INVALID_LEGACY_LOCATIONS = {
+    "domain_percent": {"domain": "%", "path": "/"},
+    "domain_encoded_colon": {"domain": "foo%3Abar", "path": "/"},
+    "domain_at": {"domain": "@", "path": "/"},
+    "domain_fragment": {"domain": "#", "path": "/"},
+    "domain_query": {"domain": "?", "path": "/"},
+    "domain_short_numeric": {"domain": "999.999.999", "path": "/"},
+    "domain_overflow_ipv4": {"domain": "999.999.999.999", "path": "/"},
+    "domain_overflow_ipv4_dot": {"domain": "256.1.1.1.", "path": "/"},
+    "url_percent": {"url": "http://%/"},
+    "url_encoded_colon": {"url": "http://foo%3Abar/"},
+    "url_short_numeric": {"url": "http://999.999.999/"},
+    "url_overflow_ipv4": {"url": "http://999.999.999.999/"},
+    "url_overflow_ipv4_dot": {"url": "http://256.1.1.1./"},
+}
+
+
 class CredentialPayloadTests(unittest.TestCase):
     def test_version_one_cookie_array_is_added_after_context_creation(self):
         raw = b'[{"name":"sid","value":"legacy-secret","domain":".douyin.com","path":"/"}]'
@@ -122,6 +139,115 @@ class CredentialPayloadTests(unittest.TestCase):
                 raw = json.dumps([cookie], separators=(",", ":")).encode()
                 with self.assertRaises(CredentialError):
                     CredentialPayload.parse(raw, 1)
+
+    def test_version_one_rejects_complete_malformed_host_boundary(self):
+        invalid_locations = {
+            **_PLAYWRIGHT_INVALID_LEGACY_LOCATIONS,
+            "domain_incomplete_escape": {"domain": "bad%host", "path": "/"},
+            "domain_encoded_slash": {"domain": "foo%2Fbar", "path": "/"},
+            "domain_encoded_control": {"domain": "foo%00bar", "path": "/"},
+            "domain_encoded_format_control": {
+                "domain": "foo%E2%80%8Dbar",
+                "path": "/",
+            },
+            "domain_raw_whitespace": {"domain": "foo bar", "path": "/"},
+            "domain_encoded_whitespace": {"domain": "foo%20bar", "path": "/"},
+            "domain_empty_label": {"domain": "foo..bar", "path": "/"},
+            "domain_numeric_tld": {"domain": "example.999", "path": "/"},
+            "domain_oversize_label": {"domain": f"{'a' * 64}.com", "path": "/"},
+            "url_encoded_slash": {"url": "http://foo%2Fbar/"},
+            "url_encoded_control": {"url": "http://foo%00bar/"},
+            "url_encoded_format_control": {"url": "http://foo%E2%80%8Dbar/"},
+            "url_encoded_whitespace": {"url": "http://foo%20bar/"},
+            "url_numeric_tld": {"url": "http://example.999/"},
+        }
+
+        for case, location in invalid_locations.items():
+            with self.subTest(case=case):
+                cookie = {"name": "probe", "value": "x", **location}
+                raw = json.dumps([cookie], separators=(",", ":")).encode()
+                with self.assertRaises(CredentialError):
+                    CredentialPayload.parse(raw, 1)
+
+    def test_both_versions_normalize_lone_surrogate_hosts_to_credential_error(self):
+        invalid_payloads = (
+            (
+                json.dumps(
+                    [
+                        {
+                            "name": "probe",
+                            "value": "x",
+                            "domain": "\ud800",
+                            "path": "/",
+                        }
+                    ]
+                ).encode(),
+                1,
+            ),
+            (
+                json.dumps(
+                    [{"name": "probe", "value": "x", "url": "http://\ud800/"}]
+                ).encode(),
+                1,
+            ),
+            (
+                json.dumps(
+                    {
+                        "version": 2,
+                        "storage_state": {
+                            "cookies": [
+                                {
+                                    "name": "probe",
+                                    "value": "x",
+                                    "domain": "\ud800",
+                                    "path": "/",
+                                    "expires": -1,
+                                    "httpOnly": True,
+                                    "secure": True,
+                                    "sameSite": "Lax",
+                                }
+                            ],
+                            "origins": [],
+                        },
+                    },
+                    separators=(",", ":"),
+                ).encode(),
+                2,
+            ),
+        )
+
+        for raw, version in invalid_payloads:
+            with self.subTest(version=version, payload_size=len(raw)):
+                with self.assertRaises(CredentialError) as caught:
+                    CredentialPayload.parse(raw, version)
+                error_digest = hashlib.sha256(str(caught.exception).encode()).hexdigest()
+                self.assertEqual(
+                    "76ad6d4bd91704539d13dd7575172491eb024803cd6861f7f68f2b52a3fd4441",
+                    error_digest,
+                )
+
+    def test_version_one_preserves_supported_dns_idna_ip_and_localhost_hosts(self):
+        valid_locations = {
+            "domain_dns": {"domain": ".douyin.com", "path": "/"},
+            "domain_localhost": {"domain": "localhost", "path": "/"},
+            "domain_ipv4": {"domain": "127.0.0.1", "path": "/"},
+            "domain_unicode": {"domain": "例子.测试", "path": "/"},
+            "domain_idna": {"domain": "xn--fsqu00a.xn--0zwm56d", "path": "/"},
+            "url_dns": {"url": "https://www.douyin.com/path"},
+            "url_localhost": {"url": "http://localhost/"},
+            "url_ipv4": {"url": "http://127.0.0.1/"},
+            "url_unicode": {"url": "https://例子.测试/"},
+            "url_ipv6": {"url": "http://[::1]/"},
+        }
+
+        for case, location in valid_locations.items():
+            with self.subTest(case=case):
+                cookie = {"name": "probe", "value": "x", **location}
+                raw = json.dumps(
+                    [cookie], ensure_ascii=False, separators=(",", ":")
+                ).encode()
+                payload = CredentialPayload.parse(raw, 1)
+                self.assertEqual(1, len(payload.cookies_to_add()))
 
     def test_version_two_requires_exact_storage_state_shape(self):
         cookie = {
@@ -328,12 +454,13 @@ class ExecutorCredentialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("cookie_invalid", result.error_code)
 
     async def test_executor_maps_playwright_invalid_location_to_cookie_invalid(self):
-        _, result = await self._execute_until_target_selection(
-            b'[{"name":"sid","value":"location-marker","url":"http://%/"}]',
-            1,
-        )
-
-        self.assertEqual("cookie_invalid", result.error_code)
+        for case, location in _PLAYWRIGHT_INVALID_LEGACY_LOCATIONS.items():
+            with self.subTest(case=case):
+                cookie = {"name": "probe", "value": "x", **location}
+                raw = json.dumps([cookie], separators=(",", ":")).encode()
+                browser, result = await self._execute_until_target_selection(raw, 1)
+                self.assertEqual("cookie_invalid", result.error_code)
+                self.assertIsNone(browser.context_options)
 
     async def test_executor_closes_browser_when_context_construction_fails(self):
         browser = _FakeBrowser(fail_new_context=True)
@@ -352,49 +479,15 @@ class PlaywrightLocationCompatibilityTests(unittest.IsolatedAsyncioTestCase):
     async def test_parser_rejects_locations_rejected_by_playwright(self):
         from playwright.async_api import Error, async_playwright
 
-        legacy_cookies = {
-            "domain_percent": {
-                "name": "probe",
-                "value": "x",
-                "domain": "%",
-                "path": "/",
-            },
-            "url_percent": {
-                "name": "probe",
-                "value": "x",
-                "url": "http://%/",
-            },
-            "domain_ipv4": {
-                "name": "probe",
-                "value": "x",
-                "domain": "999.999.999.999",
-                "path": "/",
-            },
-            "url_ipv4": {
-                "name": "probe",
-                "value": "x",
-                "url": "http://999.999.999.999/",
-            },
-        }
-        storage_cookie = {
-            "name": "probe",
-            "value": "x",
-            "domain": "%",
-            "path": "/",
-            "expires": -1,
-            "httpOnly": True,
-            "secure": True,
-            "sameSite": "Lax",
-        }
-
         async with async_playwright() as playwright:
             if not Path(playwright.chromium.executable_path).exists():
                 self.skipTest("Playwright Chromium binary is not installed")
             browser = await playwright.chromium.launch(headless=True)
             context = await browser.new_context()
             try:
-                for case, cookie in legacy_cookies.items():
+                for case, location in _PLAYWRIGHT_INVALID_LEGACY_LOCATIONS.items():
                     with self.subTest(case=case):
+                        cookie = {"name": "probe", "value": "x", **location}
                         playwright_rejected = False
                         try:
                             await context.add_cookies([cookie])
@@ -405,24 +498,48 @@ class PlaywrightLocationCompatibilityTests(unittest.IsolatedAsyncioTestCase):
                         with self.assertRaises(CredentialError):
                             CredentialPayload.parse(raw, 1)
 
-                playwright_rejected = False
-                try:
-                    await browser.new_context(
-                        storage_state={"cookies": [storage_cookie], "origins": []}
-                    )
-                except Error:
-                    playwright_rejected = True
-                self.assertTrue(playwright_rejected)
-                envelope = {
-                    "version": 2,
-                    "storage_state": {
-                        "cookies": [storage_cookie],
-                        "origins": [],
-                    },
+                invalid_domains = {
+                    case: location["domain"]
+                    for case, location in _PLAYWRIGHT_INVALID_LEGACY_LOCATIONS.items()
+                    if "domain" in location
                 }
-                raw = json.dumps(envelope, separators=(",", ":")).encode()
-                with self.assertRaises(CredentialError):
-                    CredentialPayload.parse(raw, 2)
+                for case, domain in invalid_domains.items():
+                    with self.subTest(case=f"storage_{case}"):
+                        storage_cookie = {
+                            "name": "probe",
+                            "value": "x",
+                            "domain": domain,
+                            "path": "/",
+                            "expires": -1,
+                            "httpOnly": True,
+                            "secure": True,
+                            "sameSite": "Lax",
+                        }
+                        playwright_rejected = False
+                        created_context = None
+                        try:
+                            created_context = await browser.new_context(
+                                storage_state={
+                                    "cookies": [storage_cookie],
+                                    "origins": [],
+                                }
+                            )
+                        except Error:
+                            playwright_rejected = True
+                        finally:
+                            if created_context is not None:
+                                await created_context.close()
+                        self.assertTrue(playwright_rejected)
+                        envelope = {
+                            "version": 2,
+                            "storage_state": {
+                                "cookies": [storage_cookie],
+                                "origins": [],
+                            },
+                        }
+                        raw = json.dumps(envelope, separators=(",", ":")).encode()
+                        with self.assertRaises(CredentialError):
+                            CredentialPayload.parse(raw, 2)
             finally:
                 await context.close()
                 await browser.close()

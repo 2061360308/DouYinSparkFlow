@@ -1,5 +1,6 @@
 import hashlib
 import unittest
+from unittest.mock import patch
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
@@ -139,24 +140,41 @@ class ServiceTests(unittest.TestCase):
 
     def test_storage_state_rejects_playwright_invalid_domain_before_encryption(self):
         before = len(self.session.scalars(select(DouyinAccount)).all())
-        state = {
-            "cookies": [
-                {
-                    "name": "sid",
-                    "value": "invalid-location-marker",
-                    "domain": "%",
-                    "path": "/",
-                    "expires": -1,
-                    "httpOnly": True,
-                    "secure": True,
-                    "sameSite": "Lax",
-                }
-            ],
-            "origins": [],
-        }
+        invalid_domains = (
+            "foo%3Abar",
+            "@",
+            "#",
+            "?",
+            "999.999.999",
+            "256.1.1.1.",
+        )
 
-        with self.assertRaises(ValidationError):
-            self.accounts.create_from_storage_state(self.owner.id, "扫码账号", state)
+        with patch.object(
+            self.accounts.cipher,
+            "encrypt",
+            side_effect=AssertionError("encryption boundary crossed"),
+        ):
+            for case, domain in enumerate(invalid_domains):
+                with self.subTest(case=case):
+                    state = {
+                        "cookies": [
+                            {
+                                "name": "probe",
+                                "value": "x",
+                                "domain": domain,
+                                "path": "/",
+                                "expires": -1,
+                                "httpOnly": True,
+                                "secure": True,
+                                "sameSite": "Lax",
+                            }
+                        ],
+                        "origins": [],
+                    }
+                    with self.assertRaises(ValidationError):
+                        self.accounts.create_from_storage_state(
+                            self.owner.id, "扫码账号", state
+                        )
 
         after = len(self.session.scalars(select(DouyinAccount)).all())
         self.assertEqual(before, after)
