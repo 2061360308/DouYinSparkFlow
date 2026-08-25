@@ -76,7 +76,7 @@ class _LifecycleScanner:
         self.expire_before_return = expire_before_return
         self.observed_statuses = []
 
-    async def run(self, on_qr, on_confirming, cancelled):
+    async def run(self, on_qr, on_confirming, cancelled, *, expires_at=None):
         on_qr(PNG_SIGNATURE + b"worker-qr-fixture")
         with Session(self.engine) as session:
             self.observed_statuses.append(
@@ -103,18 +103,58 @@ class _RaisingScanner:
     def __init__(self, error):
         self.error = error
 
-    async def run(self, _on_qr, _on_confirming, _cancelled):
+    async def run(
+        self, _on_qr, _on_confirming, _cancelled, *, expires_at=None
+    ):
         raise self.error
 
 
 class _SensitiveFailureScanner:
-    async def run(self, on_qr, _on_confirming, _cancelled):
+    async def run(
+        self, on_qr, _on_confirming, _cancelled, *, expires_at=None
+    ):
         on_qr(PNG_SIGNATURE + QR_MARKER.encode())
         raise RuntimeError(
             "|".join(
                 (EXCEPTION_MARKER, COOKIE_MARKER, STORAGE_MARKER, QR_MARKER)
             )
         )
+
+
+class _DeadlineScanner:
+    def __init__(self):
+        self.expires_at = None
+
+    async def run(
+        self, on_qr, _on_confirming, _cancelled, *, expires_at=None
+    ):
+        self.expires_at = expires_at
+        on_qr(PNG_SIGNATURE + b"deadline-qr-fixture")
+        if expires_at is None:
+            raise LoginTimedOut()
+        deadline = expires_at
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+        remaining = max(
+            0, (deadline - datetime.now(timezone.utc)).total_seconds()
+        )
+        await asyncio.sleep(remaining + 0.01)
+        raise LoginTimedOut()
+
+
+class _StopAwareScanner:
+    def __init__(self):
+        self.started = asyncio.Event()
+        self.expires_at = None
+
+    async def run(
+        self, _on_qr, _on_confirming, cancelled, *, expires_at=None
+    ):
+        self.expires_at = expires_at
+        self.started.set()
+        while not cancelled():
+            await asyncio.sleep(0)
+        raise ScanCancelled()
 
 
 class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
@@ -160,6 +200,10 @@ class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
                 "account_id": scan.account_id,
                 "error_code": scan.error_code,
             }
+
+    def _set_expiry(self, scan_id, expires_at):
+        with session_scope(self.engine) as session:
+            session.get(DouyinLoginSession, scan_id).expires_at = expires_at
 
     async def test_success_uses_real_state_machine_and_encrypted_account_service(self):
         scan_id = self._start_scan()
@@ -311,6 +355,45 @@ class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertFalse(await worker.run_once())
+
+    async def test_persisted_expiry_drives_timeout_and_terminal_cleanup(self):
+        scan_id = self._start_scan()
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=0.05)
+        self._set_expiry(scan_id, expires_at)
+        scanner = _DeadlineScanner()
+
+        self.assertTrue(
+            await AuthWorker(self.settings, self.engine, scanner=scanner).run_once()
+        )
+
+        persisted = self._persisted(scan_id)
+        self.assertIsNotNone(scanner.expires_at)
+        self.assertEqual(
+            expires_at.replace(tzinfo=None),
+            scanner.expires_at.replace(tzinfo=None),
+        )
+        self.assertEqual(ScanStatus.EXPIRED, persisted["status"])
+        self.assertEqual("login_timeout", persisted["error_code"])
+        self.assertIsNone(persisted["slot"])
+        self.assertIsNone(persisted["qr_png"])
+
+    async def test_stopping_event_cancels_active_scan_and_releases_slot(self):
+        scan_id = self._start_scan()
+        scanner = _StopAwareScanner()
+        stopping = asyncio.Event()
+        worker = AuthWorker(self.settings, self.engine, scanner=scanner)
+        task = asyncio.create_task(worker.run_once(stopping))
+        await asyncio.wait_for(scanner.started.wait(), timeout=0.2)
+
+        stopping.set()
+
+        self.assertTrue(await asyncio.wait_for(task, timeout=0.2))
+        persisted = self._persisted(scan_id)
+        self.assertIsNotNone(scanner.expires_at)
+        self.assertEqual(ScanStatus.FAILED, persisted["status"])
+        self.assertEqual("cancelled", persisted["error_code"])
+        self.assertIsNone(persisted["slot"])
+        self.assertIsNone(persisted["qr_png"])
 
 
 if __name__ == "__main__":

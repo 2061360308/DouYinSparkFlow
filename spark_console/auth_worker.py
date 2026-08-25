@@ -52,13 +52,14 @@ class AuthWorker:
         with session_scope(self.engine) as db:
             ScanSessionService(db).expire_stale()
 
-    async def run_once(self) -> bool:
+    async def run_once(self, stopping: asyncio.Event | None = None) -> bool:
         with session_scope(self.engine) as db:
             scan = ScanSessionService(db).claim_next()
             if scan is None:
                 return False
             scan_id = scan.id
             owner_id = scan.owner_user_id
+            expires_at = scan.expires_at
 
         def on_qr(png: bytes) -> None:
             with session_scope(self.engine) as db:
@@ -69,6 +70,8 @@ class AuthWorker:
                 ScanSessionService(db).mark_confirming(scan_id)
 
         def cancelled() -> bool:
+            if stopping is not None and stopping.is_set():
+                return True
             with Session(self.engine) as db:
                 persisted = db.get(DouyinLoginSession, scan_id)
                 return (
@@ -80,7 +83,14 @@ class AuthWorker:
         scanned = None
         storage_state = None
         try:
-            scanned = await self.scanner.run(on_qr, on_confirming, cancelled)
+            scanned = await self.scanner.run(
+                on_qr,
+                on_confirming,
+                cancelled,
+                expires_at=expires_at,
+            )
+            if stopping is not None and stopping.is_set():
+                raise ScanCancelled()
             storage_state = scanned.storage_state
             if (
                 not isinstance(storage_state, dict)
@@ -151,7 +161,7 @@ async def run_loop() -> None:
         except NotImplementedError:
             pass
     while not stopping.is_set():
-        await worker.run_once()
+        await worker.run_once(stopping)
         try:
             await asyncio.wait_for(
                 stopping.wait(), timeout=settings.worker_poll_seconds

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Callable
 
 
@@ -85,29 +86,70 @@ class DouyinQrScanner:
         self.login_timeout_seconds = login_timeout_seconds
         self.poll_interval_seconds = poll_interval_seconds
 
-    async def run(self, on_qr, on_confirming, cancelled) -> ScannedAccount:
+    async def run(
+        self,
+        on_qr,
+        on_confirming,
+        cancelled,
+        *,
+        expires_at: datetime | None = None,
+    ) -> ScannedAccount:
+        deadline = self._deadline(expires_at)
+        self._checkpoint(cancelled, deadline)
         browser = None
         context = None
         async with self.playwright_factory() as playwright:
             try:
-                browser = await playwright.chromium.launch(headless=True)
-                context = await browser.new_context()
-                page = await context.new_page()
-                await page.goto(
-                    CREATOR_URL,
-                    wait_until="domcontentloaded",
-                    timeout=120_000,
+                browser = await self._await_stage(
+                    playwright.chromium.launch(headless=True),
+                    cancelled,
+                    deadline,
                 )
-                qr = await self._find_qr(page, cancelled)
-                png = await qr.screenshot(type="png")
+                context = await self._await_stage(
+                    browser.new_context(), cancelled, deadline
+                )
+                page = await self._await_stage(
+                    context.new_page(), cancelled, deadline
+                )
+                await self._await_stage(
+                    page.goto(
+                        CREATOR_URL,
+                        wait_until="domcontentloaded",
+                        timeout=120_000,
+                    ),
+                    cancelled,
+                    deadline,
+                )
+                qr = await self._await_stage(
+                    self._find_qr(page, cancelled), cancelled, deadline
+                )
+                png = await self._await_stage(
+                    qr.screenshot(type="png"), cancelled, deadline
+                )
                 if not isinstance(png, bytes) or not png.startswith(PNG_SIGNATURE):
                     raise QrLoadFailed()
-                await _invoke(on_qr, png)
+                await self._await_stage(
+                    _invoke(on_qr, png), cancelled, deadline
+                )
 
-                await self._wait_for_login(page, on_confirming, cancelled)
-                display_name = await self._required_text(page, DISPLAY_NAME_SELECTOR)
-                unique_id = await self._optional_text(page, UNIQUE_ID_SELECTOR)
-                storage_state = await context.storage_state()
+                await self._await_stage(
+                    self._wait_for_login(page, on_confirming, cancelled),
+                    cancelled,
+                    deadline,
+                )
+                display_name = await self._await_stage(
+                    self._required_text(page, DISPLAY_NAME_SELECTOR),
+                    cancelled,
+                    deadline,
+                )
+                unique_id = await self._await_stage(
+                    self._optional_text(page, UNIQUE_ID_SELECTOR),
+                    cancelled,
+                    deadline,
+                )
+                storage_state = await self._await_stage(
+                    context.storage_state(), cancelled, deadline
+                )
                 return ScannedAccount(display_name, unique_id, storage_state)
             finally:
                 try:
@@ -152,8 +194,7 @@ class DouyinQrScanner:
             self._wait_for_any_text(page, VERIFICATION_TEXT)
         )
         cancellation = asyncio.create_task(self._wait_until_cancelled(cancelled))
-        deadline = asyncio.create_task(asyncio.sleep(self.login_timeout_seconds))
-        pending = {authenticated, confirming, verification, cancellation, deadline}
+        pending = {authenticated, confirming, verification, cancellation}
         try:
             while pending:
                 done, pending = await asyncio.wait(
@@ -171,9 +212,6 @@ class DouyinQrScanner:
                 if authenticated in done:
                     authenticated.result()
                     return
-                if deadline in done:
-                    deadline.result()
-                    raise LoginTimedOut()
         finally:
             for task in pending:
                 task.cancel()
@@ -206,6 +244,62 @@ class DouyinQrScanner:
             if cancelled():
                 return
             await asyncio.sleep(self.poll_interval_seconds)
+
+    def _deadline(self, expires_at: datetime | None) -> float:
+        if expires_at is None:
+            remaining = self.login_timeout_seconds
+        else:
+            value = expires_at
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            else:
+                value = value.astimezone(timezone.utc)
+            remaining = (value - datetime.now(timezone.utc)).total_seconds()
+        return asyncio.get_running_loop().time() + max(0, remaining)
+
+    @staticmethod
+    def _checkpoint(cancelled, deadline: float) -> None:
+        if cancelled():
+            raise ScanCancelled()
+        if asyncio.get_running_loop().time() >= deadline:
+            raise LoginTimedOut()
+
+    async def _await_stage(self, awaitable, cancelled, deadline: float):
+        try:
+            self._checkpoint(cancelled, deadline)
+        except BaseException:
+            if inspect.iscoroutine(awaitable):
+                awaitable.close()
+            elif isinstance(awaitable, asyncio.Future):
+                awaitable.cancel()
+            raise
+        operation = asyncio.create_task(awaitable)
+        cancellation = asyncio.create_task(self._wait_until_cancelled(cancelled))
+        timeout = asyncio.create_task(
+            asyncio.sleep(
+                max(0, deadline - asyncio.get_running_loop().time())
+            )
+        )
+        watchers = {cancellation, timeout}
+        try:
+            done, _pending = await asyncio.wait(
+                {operation, *watchers}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if operation in done or operation.done():
+                return operation.result()
+            operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
+            if cancellation in done:
+                cancellation.result()
+                raise ScanCancelled()
+            timeout.result()
+            raise LoginTimedOut()
+        finally:
+            if not operation.done():
+                operation.cancel()
+            for task in watchers:
+                task.cancel()
+            await asyncio.gather(operation, *watchers, return_exceptions=True)
 
     @staticmethod
     async def _required_text(page, selector: str) -> str:

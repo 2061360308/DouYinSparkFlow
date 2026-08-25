@@ -1,5 +1,8 @@
 import asyncio
+import gc
 import unittest
+import warnings
+from datetime import datetime, timedelta, timezone
 
 from spark_console.auth_scanner import (
     AUTHENTICATED_SELECTOR,
@@ -49,6 +52,7 @@ class _Page:
         self.mode = mode
         self.authenticated = asyncio.Event()
         self.never = asyncio.Event()
+        self.navigation_started = asyncio.Event()
         self.qr = _Locator(visible=qr_visible, png=PNG)
         self.panel = _Locator(
             visible=True,
@@ -56,6 +60,9 @@ class _Page:
         )
 
     async def goto(self, *_args, **_kwargs):
+        self.navigation_started.set()
+        if self.mode == "navigation":
+            await self.never.wait()
         return None
 
     def locator(self, selector):
@@ -157,14 +164,22 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         asyncio.get_running_loop().slow_callback_duration = 1.0
 
-    def _scanner(self, mode="success", *, qr_visible=True, fail_storage_state=False):
+    def _scanner(
+        self,
+        mode="success",
+        *,
+        qr_visible=True,
+        fail_storage_state=False,
+        qr_timeout_seconds=0.01,
+        login_timeout_seconds=0.2,
+    ):
         page = _Page(mode, qr_visible=qr_visible)
         context = _Context(page, fail_storage_state=fail_storage_state)
         browser = _Browser(context)
         scanner = DouyinQrScanner(
             playwright_factory=lambda: _PlaywrightManager(browser),
-            qr_timeout_seconds=0.01,
-            login_timeout_seconds=0.03,
+            qr_timeout_seconds=qr_timeout_seconds,
+            login_timeout_seconds=login_timeout_seconds,
             poll_interval_seconds=0,
         )
         return scanner, browser, context
@@ -199,13 +214,98 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(browser.closed)
 
     async def test_login_deadline_maps_to_login_timed_out(self):
-        scanner, browser, context = self._scanner(mode="timeout")
+        scanner, browser, context = self._scanner(
+            mode="timeout", login_timeout_seconds=0.03
+        )
 
         with self.assertRaises(LoginTimedOut):
             await scanner.run(lambda _png: None, lambda: None, lambda: False)
 
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
+
+    async def test_persisted_deadline_interrupts_navigation(self):
+        scanner, browser, context = self._scanner(
+            mode="navigation", login_timeout_seconds=1
+        )
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=0.03)
+
+        with self.assertRaises(LoginTimedOut):
+            await asyncio.wait_for(
+                scanner.run(
+                    lambda _png: None,
+                    lambda _confirmed: None,
+                    lambda: False,
+                    expires_at=expires_at,
+                ),
+                timeout=0.2,
+            )
+
+        self.assertTrue(context.page.navigation_started.is_set())
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_persisted_deadline_caps_qr_loading(self):
+        scanner, browser, context = self._scanner(
+            mode="timeout",
+            qr_visible=False,
+            qr_timeout_seconds=1,
+            login_timeout_seconds=1,
+        )
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=0.03)
+
+        with self.assertRaises(LoginTimedOut):
+            await asyncio.wait_for(
+                scanner.run(
+                    lambda _png: None,
+                    lambda _confirmed: None,
+                    lambda: False,
+                    expires_at=expires_at,
+                ),
+                timeout=0.2,
+            )
+
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_persisted_deadline_caps_login_wait(self):
+        scanner, browser, context = self._scanner(
+            mode="timeout", login_timeout_seconds=1
+        )
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=0.03)
+
+        with self.assertRaises(LoginTimedOut):
+            await asyncio.wait_for(
+                scanner.run(
+                    lambda _png: None,
+                    lambda _confirmed: None,
+                    lambda: False,
+                    expires_at=expires_at,
+                ),
+                timeout=0.2,
+            )
+
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_expired_checkpoint_closes_unstarted_stage_awaitable(self):
+        scanner, _browser, _context = self._scanner()
+        awaitable = asyncio.sleep(0)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", RuntimeWarning)
+            with self.assertRaises(LoginTimedOut):
+                await scanner._await_stage(
+                    awaitable,
+                    lambda: False,
+                    asyncio.get_running_loop().time() - 1,
+                )
+            del awaitable
+            gc.collect()
+
+        self.assertFalse(
+            any(issubclass(item.category, RuntimeWarning) for item in caught)
+        )
 
     async def test_extra_verification_is_not_bypassed(self):
         scanner, browser, context = self._scanner(mode="verification")
@@ -216,12 +316,30 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 
-    async def test_cancellation_stops_scan_and_closes_resources(self):
+    async def test_cancellation_before_launch_stops_scan(self):
         scanner, browser, context = self._scanner(mode="timeout")
 
         with self.assertRaises(ScanCancelled):
             await scanner.run(lambda _png: None, lambda: None, lambda: True)
 
+    async def test_late_cancellation_interrupts_navigation_and_closes_resources(self):
+        scanner, browser, context = self._scanner(
+            mode="navigation", login_timeout_seconds=1
+        )
+        stopping = asyncio.Event()
+        task = asyncio.create_task(
+            scanner.run(
+                lambda _png: None,
+                lambda _confirmed: None,
+                stopping.is_set,
+            )
+        )
+        await asyncio.wait_for(context.page.navigation_started.wait(), timeout=0.1)
+
+        stopping.set()
+
+        with self.assertRaises(ScanCancelled):
+            await asyncio.wait_for(task, timeout=0.2)
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 
