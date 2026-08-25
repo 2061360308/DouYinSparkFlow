@@ -21,6 +21,7 @@ from spark_console.services import ServiceError
 from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
 from spark_console.services.tasks import TaskService
+from spark_console.services.users import UserService
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -235,6 +236,75 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             user, _record, context = user_context(request, db)
             runs = db.execute(select(TaskRun, SparkTask).join(SparkTask).where(SparkTask.owner_user_id == user.id).order_by(TaskRun.scheduled_for.desc()).limit(100)).all()
             return page(request, "runs.html", title="执行记录", runs=runs, **context)
+
+    def admin_context(request: Request, db):
+        user, record = current(request, db)
+        if user.role != "admin":
+            raise HTTPException(404)
+        return user, record, {"user": user, "csrf_token": record.csrf_token, "is_admin": True}
+
+    @app.get("/admin")
+    def admin_page(request: Request):
+        with session_scope(engine) as db:
+            _admin, _record, context = admin_context(request, db)
+            users = db.scalars(select(User).order_by(User.created_at)).all()
+            tasks = db.execute(select(SparkTask, User).join(User, SparkTask.owner_user_id == User.id).order_by(SparkTask.send_time)).all()
+            runs = db.scalars(select(TaskRun).order_by(TaskRun.scheduled_for.desc()).limit(20)).all()
+            return page(request, "admin.html", title="管理后台", users=users, tasks=tasks, runs=runs, **context)
+
+    @app.post("/admin/users")
+    def admin_create_user(request: Request, csrf_token: str = Form(default=""), username: str = Form()):
+        with session_scope(engine) as db:
+            admin, record, context = admin_context(request, db)
+            csrf(record, csrf_token)
+            service = UserService(db, passwords, AuditService(db))
+            _user, temporary = service.create(username)
+            users = db.scalars(select(User).order_by(User.created_at)).all()
+            tasks = db.execute(select(SparkTask, User).join(User, SparkTask.owner_user_id == User.id).order_by(SparkTask.send_time)).all()
+            return page(request, "admin.html", title="管理后台", users=users, tasks=tasks, runs=[], one_time_password=temporary, **context)
+
+    @app.post("/admin/users/{user_id}/toggle")
+    def admin_toggle_user(request: Request, user_id: str, csrf_token: str = Form(default="")):
+        with session_scope(engine) as db:
+            admin, record, _context = admin_context(request, db)
+            csrf(record, csrf_token)
+            user = db.get(User, user_id)
+            if user is None:
+                raise HTTPException(404)
+            UserService(db, passwords, AuditService(db)).set_disabled(admin.id, user.id, user.status == "active")
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/users/{user_id}/delete")
+    def admin_delete_user(request: Request, user_id: str, csrf_token: str = Form(default=""), confirmation: str = Form()):
+        with session_scope(engine) as db:
+            admin, record, _context = admin_context(request, db)
+            csrf(record, csrf_token)
+            UserService(db, passwords, AuditService(db)).delete(admin.id, user_id, confirmation)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/tasks/{task_id}/toggle")
+    def admin_toggle_task(request: Request, task_id: str, csrf_token: str = Form(default="")):
+        with session_scope(engine) as db:
+            _admin, record, _context = admin_context(request, db)
+            csrf(record, csrf_token)
+            task = db.get(SparkTask, task_id)
+            if task is None:
+                raise HTTPException(404)
+            task.enabled = not task.enabled
+            AuditService(db).write(_admin.id, "task.enabled" if task.enabled else "task.disabled", "spark_task", task.id)
+        return RedirectResponse("/admin", status_code=303)
+
+    @app.post("/admin/tasks/{task_id}/delete")
+    def admin_delete_task(request: Request, task_id: str, csrf_token: str = Form(default="")):
+        with session_scope(engine) as db:
+            admin, record, _context = admin_context(request, db)
+            csrf(record, csrf_token)
+            task = db.get(SparkTask, task_id)
+            if task is None:
+                raise HTTPException(404)
+            db.delete(task)
+            AuditService(db).write(admin.id, "task.deleted", "spark_task", task_id)
+        return RedirectResponse("/admin", status_code=303)
 
     return app
 

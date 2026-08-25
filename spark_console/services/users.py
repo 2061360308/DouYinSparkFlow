@@ -6,7 +6,7 @@ import string
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from spark_console.models import User, WebSession
+from spark_console.models import DouyinAccount, SparkTask, User, WebSession
 from spark_console.security import PasswordService
 from spark_console.services import Conflict, NotFound, ValidationError
 from spark_console.services.audits import AuditService
@@ -72,3 +72,17 @@ class UserService:
         user.status = "disabled" if disabled else "active"
         self.audit.write(actor_id, "user.disabled" if disabled else "user.enabled", "user", user.id)
         return user
+
+    def delete(self, actor_id: str, user_id: str, confirmation: str) -> None:
+        user = self.session.get(User, user_id)
+        if user is None:
+            raise NotFound("user not found")
+        if user.id == actor_id:
+            raise ValidationError("不能删除当前管理员账号")
+        if confirmation != user.username:
+            raise ValidationError("确认用户名不匹配")
+        self.session.query(SparkTask).filter(SparkTask.owner_user_id == user.id).delete()
+        self.session.query(DouyinAccount).filter(DouyinAccount.owner_user_id == user.id).delete()
+        self.session.query(WebSession).filter(WebSession.user_id == user.id).delete()
+        self.session.delete(user)
+        self.audit.write(actor_id, "user.deleted", "user", user_id)
