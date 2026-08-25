@@ -41,6 +41,34 @@ docker compose -f compose.console.yml run --rm spark-web python -m spark_console
 
 管理员可在网页创建普通用户；临时密码只显示一次，用户首次登录必须修改。
 
+## 域名与 HTTPS
+
+生产环境保持 `SPARK_WEB_PUBLISH_IP=127.0.0.1` 和
+`SPARK_SECURE_COOKIES=true`，由宿主机 Nginx 代理控制台。仓库中的
+[`deploy/nginx/wangze.oilu.cn.conf`](../deploy/nginx/wangze.oilu.cn.conf)
+是当前域名入口配置；部署后先运行 `nginx -t`，通过后再 reload：
+
+```bash
+sudo install -m 0644 deploy/nginx/wangze.oilu.cn.conf /etc/nginx/sites-available/wangze.oilu.cn
+sudo ln -s /etc/nginx/sites-available/wangze.oilu.cn /etc/nginx/sites-enabled/wangze.oilu.cn
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+使用 Certbot 签发证书并启用 HTTP 到 HTTPS 跳转：
+
+```bash
+sudo certbot --nginx -d wangze.oilu.cn --redirect
+sudo certbot renew --dry-run
+```
+
+完成后验证域名、证书和回环端口；公网不得再直接访问 8899：
+
+```bash
+curl --fail https://wangze.oilu.cn/health/ready
+curl --fail http://127.0.0.1:8899/health/ready
+```
+
 ## 旧账号导入
 
 旧 JSON 只从服务器文件读取，命令输出只包含账号和任务数量：
