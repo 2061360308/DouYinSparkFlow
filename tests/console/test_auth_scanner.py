@@ -60,7 +60,7 @@ class _Locator:
 
 
 class _Page:
-    def __init__(self, mode="success", *, qr_visible=True, semantic_qr=False):
+    def __init__(self, mode="success", *, qr_visible=True, semantic_qr=False, normal_verification_tab=False):
         self.mode = mode
         self.authenticated = asyncio.Event()
         self.never = asyncio.Event()
@@ -78,6 +78,7 @@ class _Page:
             if semantic_qr
             else []
         )
+        self.normal_verification_tab = normal_verification_tab
 
     async def goto(self, *_args, **_kwargs):
         self.navigation_started.set()
@@ -97,6 +98,8 @@ class _Page:
         return _Locator()
 
     async def wait_for_selector(self, selector, **_kwargs):
+        if selector == "text=验证码" and self.normal_verification_tab:
+            return _Locator(visible=True, text="验证码登录")
         if selector == AUTHENTICATED_SELECTOR:
             await self.authenticated.wait()
             return _Locator(visible=True)
@@ -192,11 +195,17 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         *,
         qr_visible=True,
         semantic_qr=False,
+        normal_verification_tab=False,
         fail_storage_state=False,
         qr_timeout_seconds=0.01,
         login_timeout_seconds=0.2,
     ):
-        page = _Page(mode, qr_visible=qr_visible, semantic_qr=semantic_qr)
+        page = _Page(
+            mode,
+            qr_visible=qr_visible,
+            semantic_qr=semantic_qr,
+            normal_verification_tab=normal_verification_tab,
+        )
         context = _Context(page, fail_storage_state=fail_storage_state)
         browser = _Browser(context)
         scanner = DouyinQrScanner(
@@ -219,6 +228,25 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([PNG], qr_images)
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
+
+    async def test_normal_verification_login_tab_is_not_extra_verification(self):
+        scanner, _browser, context = self._scanner(
+            mode="timeout", normal_verification_tab=True
+        )
+        checks = 0
+
+        def cancelled():
+            nonlocal checks
+            checks += 1
+            return checks > 10
+
+        try:
+            with self.assertRaises(ScanCancelled):
+                await scanner._wait_for_login(
+                    context.page, lambda _value: None, cancelled
+                )
+        except VerificationRequired:
+            self.fail("normal verification-code login tab must not block QR login")
 
     async def test_scanner_returns_account_after_qr_and_mobile_confirmation(self):
         scanner, browser, context = self._scanner()

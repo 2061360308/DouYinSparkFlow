@@ -34,7 +34,7 @@ UNIQUE_ID_SELECTOR = (
     "/div/div[2]/div/div[2]/div[1]/div[2]/div[1]/div[3]"
 )
 CONFIRMING_TEXT = ("扫码成功", "请在手机上确认", "已扫码")
-VERIFICATION_TEXT = ("安全验证", "验证码", "请完成验证")
+VERIFICATION_TEXT = ("安全验证", "请完成验证")
 
 
 class QrLoadFailed(Exception):
