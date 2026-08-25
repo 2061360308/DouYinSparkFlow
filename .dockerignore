@@ -1,0 +1,11 @@
+.git
+.github
+.venv
+__pycache__
+*.pyc
+usersData.json
+.env.console
+secrets
+logs
+*.db
+backups
