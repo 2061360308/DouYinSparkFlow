@@ -39,8 +39,9 @@ class DouyinExecutor:
             payload = CredentialPayload.parse(bytes(cookie_payload), credential_version)
             async with async_playwright() as playwright:
                 browser = await playwright.chromium.launch(headless=True)
-                context = await browser.new_context(**payload.context_options())
+                context = None
                 try:
+                    context = await browser.new_context(**payload.context_options())
                     legacy_cookies = payload.cookies_to_add()
                     if legacy_cookies:
                         await context.add_cookies(legacy_cookies)
@@ -58,8 +59,11 @@ class DouyinExecutor:
                     await confirm_message_sent(page, editor, message, timeout=20000)
                     return ExecutionResult(True, ExecutionStage.COMPLETE)
                 finally:
-                    await context.close()
-                    await browser.close()
+                    try:
+                        if context is not None:
+                            await context.close()
+                    finally:
+                        await browser.close()
         except TargetNotFoundError:
             return ExecutionResult(False, ExecutionStage.SELECTING_TARGET, "target_not_found", "未找到完全匹配的目标好友")
         except CredentialError:

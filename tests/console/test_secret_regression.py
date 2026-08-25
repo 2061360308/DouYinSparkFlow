@@ -33,7 +33,18 @@ class SecretRegressionTests(unittest.TestCase):
                 user.id,
                 "扫码账号",
                 {
-                    "cookies": [{"name": "sid", "value": "page-cookie-marker"}],
+                    "cookies": [
+                        {
+                            "name": "sid",
+                            "value": "page-cookie-marker",
+                            "domain": ".douyin.com",
+                            "path": "/",
+                            "expires": -1,
+                            "httpOnly": True,
+                            "secure": True,
+                            "sameSite": "Lax",
+                        }
+                    ],
                     "origins": [
                         {
                             "origin": "https://www.douyin.com",
@@ -57,8 +68,10 @@ class SecretRegressionTests(unittest.TestCase):
                 ],
                 ensure_ascii=False,
             )
-            self.assertFalse("page-cookie-marker" in serialized_page + serialized_audit)
-            self.assertFalse("page-storage-marker" in serialized_page + serialized_audit)
+            cookie_marker = "page-cookie-marker"
+            storage_marker = "page-storage-marker"
+            self.assertFalse(cookie_marker in serialized_page + serialized_audit)
+            self.assertFalse(storage_marker in serialized_page + serialized_audit)
         engine.dispose()
 
 

@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -90,7 +91,16 @@ class WorkerCredentialTests(unittest.IsolatedAsyncioTestCase):
                     "扫码账号",
                     {
                         "cookies": [
-                            {"name": "sid", "value": "worker-secret-marker"}
+                            {
+                                "name": "sid",
+                                "value": "worker-secret-marker",
+                                "domain": ".douyin.com",
+                                "path": "/",
+                                "expires": -1,
+                                "httpOnly": True,
+                                "secure": True,
+                                "sameSite": "Lax",
+                            }
                         ],
                         "origins": [],
                     },
@@ -108,13 +118,30 @@ class WorkerCredentialTests(unittest.IsolatedAsyncioTestCase):
                 session.commit()
 
             executor = _RecordingExecutor()
+            payload = bytearray(b"worker-secret-marker")
+            decrypted = False
+            original_get = Session.get
+
+            def decrypt_for_worker(_service, _account_id):
+                nonlocal decrypted
+                decrypted = True
+                return payload
+
+            def reject_post_decrypt_lookup(db, entity, ident, **kwargs):
+                if entity is DouyinAccount and decrypted:
+                    raise RuntimeError("database lookup after credential decryption")
+                return original_get(db, entity, ident, **kwargs)
+
             try:
-                result = await Worker(settings, engine, executor=executor).run_once(now)
+                with patch.object(
+                    AccountService, "decrypt_for_worker", decrypt_for_worker
+                ), patch.object(Session, "get", reject_post_decrypt_lookup):
+                    result = await Worker(settings, engine, executor=executor).run_once(now)
             finally:
                 engine.dispose()
             self.assertEqual("success", result.status)
             self.assertEqual(2, executor.credential_version)
-            self.assertEqual(bytearray(), executor.payload_reference)
+            self.assertEqual(0, len(payload))
 
 
 if __name__ == "__main__":

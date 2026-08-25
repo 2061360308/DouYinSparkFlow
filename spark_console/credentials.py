@@ -1,8 +1,37 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
+
+
+_LEGACY_COOKIE_KEYS = {
+    "name",
+    "value",
+    "url",
+    "domain",
+    "path",
+    "expires",
+    "httpOnly",
+    "secure",
+    "sameSite",
+    "partitionKey",
+    "_crHasCrossSiteAncestor",
+}
+_STORAGE_COOKIE_REQUIRED_KEYS = {
+    "name",
+    "value",
+    "domain",
+    "path",
+    "expires",
+    "httpOnly",
+    "secure",
+    "sameSite",
+}
+_STORAGE_COOKIE_OPTIONAL_KEYS = {"partitionKey", "_crHasCrossSiteAncestor"}
+_MAX_COOKIE_EXPIRES = 253_402_300_799
 
 
 class CredentialError(ValueError):
@@ -20,20 +49,125 @@ def _load_json(raw: bytes) -> Any:
         raise _invalid() from None
 
 
-def _valid_cookie(cookie: object) -> bool:
-    return (
-        isinstance(cookie, dict)
-        and isinstance(cookie.get("name"), str)
-        and isinstance(cookie.get("value"), str)
+def _valid_url(value: object, *, origin_only: bool = False) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlsplit(value)
+        parsed.port
+    except ValueError:
+        return False
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return False
+    return not origin_only or (
+        parsed.path in {"", "/"} and not parsed.query and not parsed.fragment
     )
 
 
+def _valid_domain(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value.lstrip("."))
+        and not any(character.isspace() for character in value)
+        and "/" not in value
+        and ":" not in value
+    )
+
+
+def _valid_expires(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and (value == -1 or 0 <= value <= _MAX_COOKIE_EXPIRES)
+    )
+
+
+def _valid_cookie_options(cookie: dict[str, object]) -> bool:
+    if "expires" in cookie and not _valid_expires(cookie["expires"]):
+        return False
+    for key in ("httpOnly", "secure"):
+        if key in cookie and type(cookie[key]) is not bool:
+            return False
+    if "sameSite" in cookie:
+        same_site = cookie["sameSite"]
+        if not isinstance(same_site, str) or same_site not in {
+            "Strict",
+            "Lax",
+            "None",
+        }:
+            return False
+    if "partitionKey" in cookie and not _valid_url(
+        cookie["partitionKey"], origin_only=True
+    ):
+        return False
+    if "_crHasCrossSiteAncestor" in cookie and (
+        type(cookie["_crHasCrossSiteAncestor"]) is not bool
+        or "partitionKey" not in cookie
+    ):
+        return False
+    return True
+
+
+def _valid_legacy_cookie(cookie: object) -> bool:
+    if (
+        not isinstance(cookie, dict)
+        or not set(cookie).issubset(_LEGACY_COOKIE_KEYS)
+        or not isinstance(cookie.get("name"), str)
+        or not isinstance(cookie.get("value"), str)
+    ):
+        return False
+    has_url = "url" in cookie
+    has_domain_path = "domain" in cookie or "path" in cookie
+    if has_url == has_domain_path:
+        return False
+    if has_url:
+        if not _valid_url(cookie["url"]):
+            return False
+    elif not (
+        _valid_domain(cookie.get("domain"))
+        and isinstance(cookie.get("path"), str)
+        and cookie["path"].startswith("/")
+    ):
+        return False
+    return _valid_cookie_options(cookie)
+
+
+def _valid_storage_cookie(cookie: object) -> bool:
+    if not isinstance(cookie, dict):
+        return False
+    keys = set(cookie)
+    if (
+        not _STORAGE_COOKIE_REQUIRED_KEYS.issubset(keys)
+        or not keys.issubset(
+            _STORAGE_COOKIE_REQUIRED_KEYS | _STORAGE_COOKIE_OPTIONAL_KEYS
+        )
+        or not isinstance(cookie["name"], str)
+        or not isinstance(cookie["value"], str)
+        or not _valid_domain(cookie["domain"])
+        or not isinstance(cookie["path"], str)
+        or not cookie["path"].startswith("/")
+    ):
+        return False
+    return _valid_cookie_options(cookie)
+
+
 def _valid_origin(origin: object) -> bool:
-    if not isinstance(origin, dict) or not isinstance(origin.get("origin"), str):
+    if (
+        not isinstance(origin, dict)
+        or set(origin) != {"origin", "localStorage"}
+        or not _valid_url(origin.get("origin"), origin_only=True)
+    ):
         return False
     local_storage = origin.get("localStorage")
     return isinstance(local_storage, list) and all(
         isinstance(item, dict)
+        and set(item) == {"name", "value"}
         and isinstance(item.get("name"), str)
         and isinstance(item.get("value"), str)
         for item in local_storage
@@ -54,7 +188,7 @@ class CredentialPayload:
             if (
                 not isinstance(cookies, list)
                 or not cookies
-                or not all(_valid_cookie(cookie) for cookie in cookies)
+                or not all(_valid_legacy_cookie(cookie) for cookie in cookies)
             ):
                 raise _invalid()
             return cls({}, cookies)
@@ -63,18 +197,21 @@ class CredentialPayload:
             envelope = _load_json(raw)
             if (
                 not isinstance(envelope, dict)
+                or set(envelope) != {"version", "storage_state"}
                 or type(envelope.get("version")) is not int
                 or envelope.get("version") != 2
                 or not isinstance(envelope.get("storage_state"), dict)
             ):
                 raise _invalid()
             storage_state = envelope["storage_state"]
+            if set(storage_state) != {"cookies", "origins"}:
+                raise _invalid()
             cookies = storage_state.get("cookies")
             origins = storage_state.get("origins")
             if (
                 not isinstance(cookies, list)
                 or not cookies
-                or not all(_valid_cookie(cookie) for cookie in cookies)
+                or not all(_valid_storage_cookie(cookie) for cookie in cookies)
                 or not isinstance(origins, list)
                 or not all(_valid_origin(origin) for origin in origins)
             ):

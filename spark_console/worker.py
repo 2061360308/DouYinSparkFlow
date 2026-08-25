@@ -40,14 +40,15 @@ class Worker:
             if current_time - scheduled > timedelta(minutes=10):
                 return finish_run(run, "skipped", "late", current_time, "missed_window", "任务已超过 10 分钟发送窗口")
             account_service = AccountService(db, self.cipher, AuditService(db))
-            cookies = account_service.decrypt_for_worker(task.douyin_account_id)
             account = db.get(DouyinAccount, task.douyin_account_id)
+            credential_version = account.cookie_version
+            cookies = account_service.decrypt_for_worker(task.douyin_account_id)
             try:
                 result = await self.executor.execute(
                     cookies,
                     task.target_name,
                     task.message_template,
-                    credential_version=account.cookie_version,
+                    credential_version=credential_version,
                 )
             finally:
                 cookies[:] = b"\0" * len(cookies)

@@ -1,3 +1,4 @@
+import hashlib
 import unittest
 
 from sqlalchemy import create_engine, select
@@ -54,9 +55,14 @@ class ServiceTests(unittest.TestCase):
     def test_cookie_is_encrypted_and_never_returned_by_list(self):
         self.session.flush()
         stored = self.session.get(DouyinAccount, self.account.id)
-        self.assertFalse(b"secret" in stored.encrypted_cookies)
+        cookie_marker = b"secret"
+        self.assertFalse(cookie_marker in stored.encrypted_cookies)
         public = self.accounts.list_owned(self.owner.id)
-        self.assertEqual([{"id": self.account.id, "display_name": "我的账号", "validation_state": "unknown"}], public)
+        self.assertEqual(1, len(public))
+        self.assertEqual({"id", "display_name", "validation_state"}, set(public[0]))
+        self.assertEqual(self.account.id, public[0]["id"])
+        self.assertEqual("我的账号", public[0]["display_name"])
+        self.assertEqual("unknown", public[0]["validation_state"])
 
     def test_storage_state_is_encrypted_with_identity_and_safe_projection(self):
         state = {
@@ -66,6 +72,10 @@ class ServiceTests(unittest.TestCase):
                     "value": "storage-cookie-marker",
                     "domain": ".douyin.com",
                     "path": "/",
+                    "expires": -1,
+                    "httpOnly": True,
+                    "secure": True,
+                    "sameSite": "Lax",
                 }
             ],
             "origins": [
@@ -86,12 +96,21 @@ class ServiceTests(unittest.TestCase):
         stored = self.session.get(DouyinAccount, account.id)
         identity = self.session.get(DouyinAccountIdentity, account.id)
         encrypted = stored.encrypted_cookies
-        self.assertFalse(b"storage-cookie-marker" in encrypted)
-        self.assertFalse(b"local-storage-marker" in encrypted)
+        cookie_marker = b"storage-cookie-marker"
+        storage_marker = b"local-storage-marker"
+        self.assertFalse(cookie_marker in encrypted)
+        self.assertFalse(storage_marker in encrypted)
         self.assertEqual(2, stored.cookie_version)
         self.assertEqual("valid", stored.validation_state)
         self.assertIsNotNone(stored.last_verified_at)
         self.assertEqual("douyin-123", identity.douyin_unique_id)
+        plaintext = self.accounts.cipher.decrypt(
+            stored.encrypted_cookies, stored.cookie_nonce
+        )
+        self.assertEqual(
+            "2275bd33a9235dd8a676e0a62ce3b965a24e5a28054245ec6e85c2c65717ffd1",
+            hashlib.sha256(plaintext).hexdigest(),
+        )
         projected = next(
             item for item in self.accounts.list_owned(self.owner.id) if item["id"] == account.id
         )
@@ -103,8 +122,8 @@ class ServiceTests(unittest.TestCase):
             f"{event.action} {event.detail or ''}"
             for event in self.session.scalars(select(AuditEvent)).all()
         )
-        self.assertFalse("storage-cookie-marker" in audits)
-        self.assertFalse("local-storage-marker" in audits)
+        self.assertFalse(cookie_marker.decode() in audits)
+        self.assertFalse(storage_marker.decode() in audits)
 
     def test_storage_state_rejects_empty_cookies_before_creating_account(self):
         before = len(self.session.scalars(select(DouyinAccount)).all())
@@ -124,6 +143,11 @@ class ServiceTests(unittest.TestCase):
         )
 
         self.assertEqual("生活号", renamed.display_name)
+        rename_events = self.session.scalars(
+            select(AuditEvent).where(AuditEvent.action == "account.renamed")
+        ).all()
+        self.assertEqual(1, len(rename_events))
+        self.assertTrue(all(event.detail is None for event in rename_events))
         with self.assertRaises(NotFound):
             self.accounts.rename_owned(self.other.id, self.account.id, "越权名称")
         with self.assertRaises(ValidationError):
@@ -151,7 +175,8 @@ class ServiceTests(unittest.TestCase):
         events = self.session.scalars(select(AuditEvent)).all()
         self.assertTrue(events)
         serialized = " ".join((e.detail or "") + e.action for e in events)
-        self.assertFalse("secret" in serialized)
+        cookie_marker = "secret"
+        self.assertFalse(cookie_marker in serialized)
 
 
 if __name__ == "__main__":

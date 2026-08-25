@@ -1,3 +1,5 @@
+import hashlib
+import json
 import unittest
 from types import ModuleType
 from unittest.mock import patch
@@ -12,26 +14,36 @@ class CredentialPayloadTests(unittest.TestCase):
 
         payload = CredentialPayload.parse(raw, 1)
 
-        self.assertEqual({}, payload.context_options())
-        self.assertTrue(payload.cookies_to_add()[0]["value"] == "legacy-secret")
+        self.assertEqual(0, len(payload.context_options()))
+        serialized = json.dumps(
+            payload.cookies_to_add(), ensure_ascii=False, separators=(",", ":")
+        ).encode()
+        self.assertEqual(
+            "ae0bc243fe74434d60a4232494f4b386939fb856e26dddb60938fb3b6475fc5c",
+            hashlib.sha256(serialized).hexdigest(),
+        )
 
     def test_version_two_storage_state_becomes_context_option(self):
-        raw = b'{"version":2,"storage_state":{"cookies":[{"name":"sid","value":"secret","domain":".douyin.com","path":"/"}],"origins":[]}}'
+        raw = b'{"version":2,"storage_state":{"cookies":[{"name":"sid","value":"secret","domain":".douyin.com","path":"/","expires":-1,"httpOnly":true,"secure":true,"sameSite":"Lax"}],"origins":[]}}'
 
         payload = CredentialPayload.parse(raw, 2)
 
-        self.assertTrue(
-            payload.context_options()["storage_state"]["cookies"][0]["value"]
-            == "secret"
+        serialized = json.dumps(
+            payload.context_options()["storage_state"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+        self.assertEqual(
+            "c1ebe021888e7fac25261d8b5a6932d2889d41251145a2ebbdec75b37f953de9",
+            hashlib.sha256(serialized).hexdigest(),
         )
-        self.assertEqual([], payload.cookies_to_add())
+        self.assertEqual(0, len(payload.cookies_to_add()))
 
     def test_empty_cookie_arrays_are_rejected_for_both_versions(self):
         fixtures = (
             (b"[]", 1),
             (b'{"version":2,"storage_state":{"cookies":[],"origins":[]}}', 2),
         )
-
         for raw, version in fixtures:
             with self.subTest(version=version):
                 with self.assertRaises(CredentialError):
@@ -44,12 +56,125 @@ class CredentialPayloadTests(unittest.TestCase):
             (b'{"version":1,"storage_state":{"cookies":[{"name":"sid","value":"marker-secret"}],"origins":[]}}', 2),
             (b'{"version":2,"storage_state":{"cookies":["marker-secret"],"origins":[]}}', 2),
         )
+        secret_marker = "marker-secret"
 
         for raw, version in fixtures:
             with self.subTest(version=version):
                 with self.assertRaises(CredentialError) as caught:
                     CredentialPayload.parse(raw, version)
-                self.assertFalse("marker-secret" in str(caught.exception))
+                self.assertFalse(secret_marker in str(caught.exception))
+
+    def test_version_one_rejects_cookie_shapes_playwright_rejects(self):
+        valid = {
+            "name": "sid",
+            "value": "credential-marker",
+            "domain": ".douyin.com",
+            "path": "/",
+        }
+        invalid_cookies = {
+            "missing_location": {"name": "sid", "value": "credential-marker"},
+            "malformed_url": {
+                "name": "sid",
+                "value": "credential-marker",
+                "url": "http://[",
+            },
+            "malformed_port": {
+                "name": "sid",
+                "value": "credential-marker",
+                "url": "https://www.douyin.com:not-a-port/",
+            },
+            "mixed_location": {**valid, "url": "https://www.douyin.com/"},
+            "bad_expires_type": {**valid, "expires": "never"},
+            "bad_expires_value": {**valid, "expires": -2},
+            "bad_http_only": {**valid, "httpOnly": 1},
+            "bad_secure": {**valid, "secure": "yes"},
+            "bad_same_site": {**valid, "sameSite": "Invalid"},
+            "bad_same_site_type": {**valid, "sameSite": ["Lax"]},
+            "unknown_field": {**valid, "credential": "unexpected"},
+        }
+
+        for case, cookie in invalid_cookies.items():
+            with self.subTest(case=case):
+                raw = json.dumps([cookie], separators=(",", ":")).encode()
+                with self.assertRaises(CredentialError):
+                    CredentialPayload.parse(raw, 1)
+
+    def test_version_two_requires_exact_storage_state_shape(self):
+        cookie = {
+            "name": "sid",
+            "value": "credential-marker",
+            "domain": ".douyin.com",
+            "path": "/",
+            "expires": -1,
+            "httpOnly": True,
+            "secure": True,
+            "sameSite": "Lax",
+        }
+        valid_state = {"cookies": [cookie], "origins": []}
+        invalid_envelopes = {
+            "extra_envelope_key": {
+                "version": 2,
+                "storage_state": valid_state,
+                "credential": "unexpected",
+            },
+            "extra_state_key": {
+                "version": 2,
+                "storage_state": {**valid_state, "credential": "unexpected"},
+            },
+            "incomplete_cookie": {
+                "version": 2,
+                "storage_state": {
+                    "cookies": [
+                        {key: value for key, value in cookie.items() if key != "expires"}
+                    ],
+                    "origins": [],
+                },
+            },
+            "extra_cookie_key": {
+                "version": 2,
+                "storage_state": {
+                    "cookies": [{**cookie, "credential": "unexpected"}],
+                    "origins": [],
+                },
+            },
+            "extra_origin_key": {
+                "version": 2,
+                "storage_state": {
+                    "cookies": [cookie],
+                    "origins": [
+                        {
+                            "origin": "https://www.douyin.com",
+                            "localStorage": [],
+                            "credential": "unexpected",
+                        }
+                    ],
+                },
+            },
+            "extra_local_storage_key": {
+                "version": 2,
+                "storage_state": {
+                    "cookies": [cookie],
+                    "origins": [
+                        {
+                            "origin": "https://www.douyin.com",
+                            "localStorage": [
+                                {
+                                    "name": "token",
+                                    "value": "credential-marker",
+                                    "credential": "unexpected",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            },
+        }
+
+        for case, envelope in invalid_envelopes.items():
+            with self.subTest(case=case):
+                raw = json.dumps(envelope, separators=(",", ":")).encode()
+                with self.assertRaises(CredentialError):
+                    CredentialPayload.parse(raw, 2)
 
 
 class _FakePage:
@@ -72,16 +197,20 @@ class _FakeContext:
 
 
 class _FakeBrowser:
-    def __init__(self):
+    def __init__(self, fail_new_context=False):
         self.context_options = None
         self.context = _FakeContext()
+        self.fail_new_context = fail_new_context
+        self.close_count = 0
 
     async def new_context(self, **options):
         self.context_options = options
+        if self.fail_new_context:
+            raise RuntimeError("context construction failed")
         return self.context
 
     async def close(self):
-        return None
+        self.close_count += 1
 
 
 class _FakeChromium:
@@ -106,10 +235,10 @@ class _FakePlaywrightManager:
 
 
 class ExecutorCredentialTests(unittest.IsolatedAsyncioTestCase):
-    async def _execute_until_target_selection(self, raw, version):
+    async def _execute_until_target_selection(self, raw, version, browser=None):
         from core.web_chat import TargetNotFoundError
 
-        browser = _FakeBrowser()
+        browser = browser or _FakeBrowser()
         async_api = ModuleType("playwright.async_api")
         async_api.async_playwright = lambda: _FakePlaywrightManager(browser)
         playwright = ModuleType("playwright")
@@ -142,17 +271,17 @@ class ExecutorCredentialTests(unittest.IsolatedAsyncioTestCase):
 
         browser, result = await self._execute_until_target_selection(raw, 1)
 
-        self.assertFalse(browser.context_options)
+        self.assertEqual(0, len(browser.context_options))
         self.assertEqual(1, len(browser.context.cookies_added))
         self.assertEqual("target_not_found", result.error_code)
 
     async def test_executor_creates_version_two_context_without_adding_cookies(self):
-        raw = b'{"version":2,"storage_state":{"cookies":[{"name":"sid","value":"storage-executor-marker","domain":".douyin.com","path":"/"}],"origins":[]}}'
+        raw = b'{"version":2,"storage_state":{"cookies":[{"name":"sid","value":"storage-executor-marker","domain":".douyin.com","path":"/","expires":-1,"httpOnly":true,"secure":true,"sameSite":"Lax"}],"origins":[]}}'
 
         browser, result = await self._execute_until_target_selection(raw, 2)
 
         self.assertTrue("storage_state" in browser.context_options)
-        self.assertFalse(browser.context.cookies_added)
+        self.assertEqual(0, len(browser.context.cookies_added))
         self.assertEqual("target_not_found", result.error_code)
 
     async def test_executor_maps_malformed_versioned_payload_to_existing_public_error(self):
@@ -162,6 +291,15 @@ class ExecutorCredentialTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual("cookie_invalid", result.error_code)
+
+    async def test_executor_closes_browser_when_context_construction_fails(self):
+        browser = _FakeBrowser(fail_new_context=True)
+        raw = b'[{"name":"sid","value":"cleanup-marker","domain":".douyin.com","path":"/"}]'
+
+        _, result = await self._execute_until_target_selection(raw, 1, browser)
+
+        self.assertEqual("automation_failed", result.error_code)
+        self.assertEqual(1, browser.close_count)
 
 
 if __name__ == "__main__":
