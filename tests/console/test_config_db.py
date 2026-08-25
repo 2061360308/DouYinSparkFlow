@@ -46,7 +46,25 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual("Asia/Shanghai", settings.timezone)
             self.assertEqual("127.0.0.1", settings.web_bind)
             self.assertEqual(8899, settings.web_port)
+            self.assertTrue(settings.secure_cookies)
             self.assertTrue(settings.database_url.endswith("spark.db"))
+
+    def test_can_explicitly_allow_http_session_cookie_for_temporary_deployment(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            cookie_key = root_path / "cookie.key"
+            session_key = root_path / "session.key"
+            cookie_key.write_bytes(b"c" * 32)
+            session_key.write_bytes(b"s" * 32)
+            settings = Settings.from_env(
+                {
+                    "SPARK_DATA_DIR": root,
+                    "SPARK_COOKIE_KEY_FILE": str(cookie_key),
+                    "SPARK_SESSION_KEY_FILE": str(session_key),
+                    "SPARK_SECURE_COOKIES": "false",
+                }
+            )
+            self.assertFalse(settings.secure_cookies)
 
 
 class DatabaseTests(unittest.TestCase):

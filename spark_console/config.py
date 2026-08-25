@@ -16,6 +16,7 @@ class Settings:
     web_port: int = 8899
     worker_poll_seconds: int = 10
     clock_offset_limit_seconds: int = 5
+    secure_cookies: bool = True
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> "Settings":
@@ -46,4 +47,6 @@ class Settings:
             clock_offset_limit_seconds=int(
                 environ.get("SPARK_CLOCK_OFFSET_LIMIT_SECONDS", "5")
             ),
+            secure_cookies=environ.get("SPARK_SECURE_COOKIES", "true").strip().lower()
+            not in {"0", "false", "no", "off"},
         )

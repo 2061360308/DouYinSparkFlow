@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -78,6 +79,19 @@ class UserWebTests(unittest.TestCase):
         self.assertEqual(400, response.status_code)
         self.assertIn("用户名或密码错误", response.text)
         self.assertIn('name="password"', response.text)
+
+    def test_http_mode_issues_a_session_cookie_the_browser_can_return(self):
+        http_settings = replace(self.settings, secure_cookies=False)
+        with TestClient(
+            create_app(http_settings, self.engine), base_url="http://testserver"
+        ) as client:
+            response = client.post(
+                "/login",
+                data={"username": "friend", "password": "Temporary-123!"},
+                follow_redirects=False,
+            )
+            self.assertNotIn("secure", response.headers["set-cookie"].lower())
+            self.assertEqual(200, client.get("/change-password").status_code)
 
     def test_cookie_value_never_appears_after_account_save(self):
         self.login()

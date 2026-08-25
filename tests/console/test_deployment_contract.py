@@ -8,7 +8,7 @@ class DeploymentContractTests(unittest.TestCase):
         self.compose = Path("compose.console.yml").read_text(encoding="utf-8")
 
     def test_loopback_only_and_no_bps_or_docker_socket(self):
-        self.assertIn('127.0.0.1:8899:8899', self.compose)
+        self.assertIn('${SPARK_WEB_PUBLISH_IP:-127.0.0.1}:8899:8899', self.compose)
         self.assertNotIn("bps", self.compose.lower())
         self.assertNotIn("/var/run/docker.sock", self.compose)
 

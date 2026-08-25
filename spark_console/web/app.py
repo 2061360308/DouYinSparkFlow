@@ -115,7 +115,12 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             destination = "/change-password" if user.must_change_password else "/dashboard"
         response = RedirectResponse(destination, status_code=303)
         response.set_cookie(
-            "spark_session", raw, httponly=True, secure=True, samesite="strict", max_age=8 * 3600
+            "spark_session",
+            raw,
+            httponly=True,
+            secure=settings.secure_cookies,
+            samesite="strict",
+            max_age=8 * 3600,
         )
         return response
 

@@ -22,7 +22,7 @@ x-common: &common
 services:
   spark-web:
     <<: *common
-    ports: ["127.0.0.1:8899:8899"]
+    ports: ["${SPARK_WEB_PUBLISH_IP:-127.0.0.1}:8899:8899"]
     mem_limit: 256m
     cpus: 0.50
     tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
