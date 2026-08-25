@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
@@ -37,6 +38,8 @@ UNIQUE_ID_SELECTOR = (
 )
 CONFIRMING_TEXT = ("扫码成功", "请在手机上确认", "已扫码")
 VERIFICATION_TEXT = ("安全验证", "请完成验证")
+
+logger = logging.getLogger(__name__)
 
 
 class QrLoadFailed(Exception):
@@ -133,9 +136,19 @@ class DouyinQrScanner:
                 await self._await_stage(
                     _invoke(on_qr, png), cancelled, deadline
                 )
+                baseline_auth_cookies = self._auth_cookie_fingerprint(
+                    await self._await_stage(context.cookies(), cancelled, deadline)
+                )
 
                 await self._await_stage(
-                    self._wait_for_login(page, on_confirming, cancelled),
+                    self._wait_for_login(
+                        page,
+                        on_confirming,
+                        cancelled,
+                        context=context,
+                        qr=qr,
+                        baseline_auth_cookies=baseline_auth_cookies,
+                    ),
                     cancelled,
                     deadline,
                 )
@@ -199,7 +212,25 @@ class DouyinQrScanner:
             await asyncio.sleep(self.poll_interval_seconds)
         raise QrLoadFailed()
 
-    async def _wait_for_login(self, page, on_confirming, cancelled) -> None:
+    async def _wait_for_login(
+        self,
+        page,
+        on_confirming,
+        cancelled,
+        *,
+        context=None,
+        qr=None,
+        baseline_auth_cookies=frozenset(),
+    ) -> None:
+        confirmed = False
+
+        async def confirm_once(_value=True):
+            nonlocal confirmed
+            if confirmed:
+                return
+            confirmed = True
+            await _invoke(on_confirming, True)
+
         authenticated = asyncio.create_task(
             page.wait_for_selector(
                 AUTHENTICATED_SELECTOR, state="visible", timeout=0
@@ -222,6 +253,18 @@ class DouyinQrScanner:
             verification,
             cancellation,
         }
+        credentials = None
+        if context is not None and qr is not None:
+            credentials = asyncio.create_task(
+                self._wait_for_authenticated_credentials(
+                    page,
+                    context,
+                    qr,
+                    baseline_auth_cookies,
+                    confirm_once,
+                )
+            )
+            pending.add(credentials)
         try:
             while pending:
                 done, pending = await asyncio.wait(
@@ -235,17 +278,60 @@ class DouyinQrScanner:
                     raise VerificationRequired()
                 if confirming in done:
                     confirming.result()
-                    await _invoke(on_confirming, True)
+                    await confirm_once()
                 if authenticated in done:
                     authenticated.result()
                     return
                 if authenticated_url in done:
                     authenticated_url.result()
                     return
+                if credentials is not None and credentials in done:
+                    credentials.result()
+                    return
         finally:
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _wait_for_authenticated_credentials(
+        self, page, context, qr, baseline, on_confirming
+    ) -> None:
+        qr_hidden = False
+        while True:
+            if not qr_hidden:
+                try:
+                    qr_hidden = not await qr.is_visible()
+                except Exception:
+                    qr_hidden = True
+                if qr_hidden:
+                    logger.warning(
+                        "auth scan qr consumed path=%s", urlparse(page.url).path
+                    )
+                    await on_confirming(True)
+            if qr_hidden:
+                current = self._auth_cookie_fingerprint(await context.cookies())
+                if current and current != baseline:
+                    logger.warning(
+                        "auth scan credentials changed path=%s",
+                        urlparse(page.url).path,
+                    )
+                    return
+            await asyncio.sleep(self.poll_interval_seconds)
+
+    @staticmethod
+    def _auth_cookie_fingerprint(cookies) -> frozenset[tuple[str, str, str, str]]:
+        return frozenset(
+            (
+                str(cookie.get("name", "")),
+                str(cookie.get("domain", "")),
+                str(cookie.get("path", "")),
+                str(cookie.get("value", "")),
+            )
+            for cookie in cookies
+            if isinstance(cookie, dict)
+            and cookie.get("httpOnly") is True
+            and str(cookie.get("domain", "")).lower().endswith("douyin.com")
+        )
 
     async def _wait_for_authenticated_url(self, page) -> None:
         while True:

@@ -59,7 +59,7 @@ class Element {
   }
 }
 
-function createEnvironment(fetchImpl) {
+function createEnvironment(fetchImpl, {preload = false} = {}) {
   const selectors = [
     "[data-account-scan]",
     "#scan-start",
@@ -74,14 +74,28 @@ function createEnvironment(fetchImpl) {
   ];
   const elements = Object.fromEntries(selectors.map((selector) => [selector, new Element()]));
   elements["[data-account-scan]"].dataset.csrfToken = "csrf-fixture";
+  elements["[data-account-scan]"].dataset.preload = preload ? "true" : "false";
   const timers = new Map();
+  const windowListeners = new Map();
+  const beacons = [];
   let nextTimer = 1;
   global.document = {querySelector(selector) { return elements[selector]; }};
   global.fetch = fetchImpl;
+  Object.defineProperty(global, "navigator", {
+    configurable: true,
+    value: {
+      sendBeacon(url, body) {
+        beacons.push({url, body: String(body)});
+        return true;
+      },
+    },
+  });
+  let reloadCount = 0;
   global.window = {
+    addEventListener(name, listener) { windowListeners.set(name, listener); },
     clearTimeout(id) { timers.delete(id); },
     confirm() { return true; },
-    location: {assign() {}, reload() {}},
+    location: {assign() {}, reload() { reloadCount += 1; }},
     setTimeout(callback, delay) {
       const id = nextTimer++;
       timers.set(id, {callback, delay});
@@ -93,7 +107,13 @@ function createEnvironment(fetchImpl) {
     "utf8",
   );
   vm.runInThisContext(source, {filename: "account_scan.js"});
-  return {elements, timers};
+  return {
+    beacons,
+    elements,
+    reloadCount: () => reloadCount,
+    timers,
+    windowListeners,
+  };
 }
 
 async function flush() {
@@ -184,11 +204,74 @@ async function activeCancelFailure() {
   assert(dialog.closeCount === 1, "successful cancellation retry did not close dialog");
 }
 
+async function preloadClick() {
+  const calls = [];
+  const {elements} = createEnvironment(async (url) => {
+    calls.push(url);
+    return response(200, {
+      id: "scan-preloaded",
+      status: "awaiting_scan",
+      remaining_seconds: 250,
+      error: null,
+      message: "请使用抖音 App 扫码并在手机确认",
+      account_id: null,
+    });
+  }, {preload: true});
+
+  await flush();
+  assert(calls.length === 1 && calls[0] === "/accounts/scan", "scan was not preloaded before the click");
+  await elements["#scan-start"].emit("click");
+  assert(calls.length === 1, "click created a second scan instead of reusing preload");
+  assert(elements["#scan-dialog"].open, "preloaded scan dialog did not open");
+  assert(!elements["#scan-qr"].hidden, "preloaded QR was not shown immediately");
+}
+
+async function pagehideCancel() {
+  const {beacons, elements, windowListeners} = createEnvironment(async () => response(201, {
+    id: "scan-leaving",
+    status: "queued",
+    remaining_seconds: 300,
+    error: null,
+    message: "等待开始扫码",
+    account_id: null,
+  }));
+
+  await elements["#scan-start"].emit("click");
+  windowListeners.get("pagehide")();
+  assert(beacons.length === 1, "page exit did not send a background cancellation");
+  assert(beacons[0].url === "/accounts/scan/scan-leaving/cancel", "page exit cancelled the wrong scan");
+  assert(beacons[0].body.includes("csrf_token=csrf-fixture"), "page exit cancellation omitted CSRF");
+}
+
+async function successClose() {
+  const {elements, reloadCount, timers} = createEnvironment(async () => response(201, {
+    id: "scan-success",
+    status: "succeeded",
+    remaining_seconds: 0,
+    error: null,
+    message: "绑定成功",
+    account_id: "account-1",
+  }));
+
+  await elements["#scan-start"].emit("click");
+  assert(elements["#scan-status"].textContent === "登录成功，正在刷新账号列表", "success feedback was not shown");
+  assert(elements["#scan-dialog"].closeCount === 0, "dialog closed before success feedback was visible");
+  assert(reloadCount() === 0, "page refreshed before success feedback was visible");
+  const scheduled = [...timers.values()];
+  assert(scheduled.length === 1, "success close was not scheduled");
+  scheduled[0].callback();
+  assert(elements["#scan-dialog"].closeCount === 1, "success did not close the dialog");
+  assert(reloadCount() === 1, "success did not refresh the account list");
+}
+
 async function main() {
   const scenario = process.argv[2];
   if (scenario === "pending-close") await pendingIntent("#scan-close");
   else if (scenario === "pending-cancel") await pendingIntent("#scan-cancel");
   else if (scenario === "active-cancel-failure") await activeCancelFailure();
+  else if (scenario === "preload-click") await preloadClick();
+  else if (scenario === "pagehide-cancel") await pagehideCancel();
+  else if (scenario === "success-close") await successClose();
   else throw new Error(`unknown scenario: ${scenario}`);
   process.stdout.write(JSON.stringify({scenario, ok: true}));
 }

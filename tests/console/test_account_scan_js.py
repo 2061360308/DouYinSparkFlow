@@ -31,6 +31,15 @@ class AccountScanJavaScriptTests(unittest.TestCase):
     def test_cancel_failure_stays_visible_shows_fixed_error_and_allows_retry(self):
         self.run_scenario("active-cancel-failure")
 
+    def test_preloaded_scan_is_reused_when_binding_button_is_clicked(self):
+        self.run_scenario("preload-click")
+
+    def test_leaving_page_sends_background_cancellation(self):
+        self.run_scenario("pagehide-cancel")
+
+    def test_success_message_closes_dialog_before_refresh(self):
+        self.run_scenario("success-close")
+
 
 if __name__ == "__main__":
     unittest.main()

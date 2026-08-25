@@ -80,7 +80,11 @@ def build_account_scan_router(
             try:
                 scan = service.start(user.id)
             except Conflict:
-                return _error(409, "slot_busy", "当前有人正在绑定，请稍后重试")
+                scan = service.active_owned(user.id)
+                if scan is None:
+                    return _error(409, "slot_busy", "扫码通道正在使用，请稍后重试")
+                projection = service.public_status(scan)
+                return JSONResponse(projection, status_code=200, headers=NO_STORE)
             projection = service.public_status(scan)
         return JSONResponse(projection, status_code=201, headers=NO_STORE)
 

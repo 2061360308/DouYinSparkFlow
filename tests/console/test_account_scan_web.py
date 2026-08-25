@@ -170,10 +170,23 @@ class AccountScanWebTests(unittest.TestCase):
         self.assertEqual(
             {
                 "error": "slot_busy",
-                "message": "当前有人正在绑定，请稍后重试",
+                "message": "扫码通道正在使用，请稍后重试",
             },
             busy.json(),
         )
+
+    def test_same_owner_resumes_active_scan_instead_of_reporting_busy(self):
+        created = self.owner_client.post(
+            "/accounts/scan", data={"csrf_token": self.owner_csrf}
+        )
+
+        resumed = self.owner_client.post(
+            "/accounts/scan", data={"csrf_token": self.owner_csrf}
+        )
+
+        self.assertEqual(201, created.status_code)
+        self.assertEqual(200, resumed.status_code)
+        self.assertEqual(created.json()["id"], resumed.json()["id"])
 
     def test_start_requests_are_rate_limited_with_a_stable_error(self):
         responses = [
@@ -183,7 +196,7 @@ class AccountScanWebTests(unittest.TestCase):
             for _ in range(6)
         ]
 
-        self.assertEqual([201, 409, 409, 409, 409, 429], [r.status_code for r in responses])
+        self.assertEqual([201, 200, 200, 200, 200, 429], [r.status_code for r in responses])
         self.assertEqual(
             {"error": "rate_limited", "message": "请求过于频繁，请稍后重试"},
             responses[-1].json(),
@@ -343,6 +356,13 @@ class AccountScanWebTests(unittest.TestCase):
         self.assertNotIn("Cookie JSON", response.text)
         self.assertNotIn("Token", response.text)
         self.assertNotIn("storage_state", response.text)
+
+    def test_account_page_preloads_only_when_user_has_no_bound_account(self):
+        owner_page = self.owner_client.get("/accounts")
+        other_page = self.other_client.get("/accounts")
+
+        self.assertIn('data-preload="false"', owner_page.text)
+        self.assertIn('data-preload="true"', other_page.text)
 
     def test_old_manual_account_submission_is_rejected(self):
         response = self.owner_client.post(

@@ -125,6 +125,18 @@ class ScanSessionService:
             raise Conflict("slot_busy") from None
         return scan
 
+    def active_owned(self, owner_id: str) -> DouyinLoginSession | None:
+        return self.session.scalar(
+            select(DouyinLoginSession)
+            .where(
+                DouyinLoginSession.owner_user_id == owner_id,
+                DouyinLoginSession.slot == "global",
+                DouyinLoginSession.status.in_(ACTIVE_STATUSES),
+            )
+            .order_by(DouyinLoginSession.created_at.desc())
+            .limit(1)
+        )
+
     def claim_next(self) -> DouyinLoginSession | None:
         scan = self.session.scalar(
             select(DouyinLoginSession)

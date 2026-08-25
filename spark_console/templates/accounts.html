@@ -40,7 +40,7 @@
     {% endif %}
   </section>
 
-  <section class="panel scan-entry" data-account-scan data-csrf-token="{{ csrf_token }}">
+  <section class="panel scan-entry" data-account-scan data-csrf-token="{{ csrf_token }}" data-preload="{{ 'true' if not accounts else 'false' }}">
     <span class="scan-kicker">DOUYIN APP</span>
     <h2>绑定新账号</h2>
     <p class="muted">二维码仅在本次绑定期间有效，全平台同一时间处理一个扫码会话。</p>

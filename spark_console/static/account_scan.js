@@ -22,6 +22,8 @@
   let startPending = false;
   let closeRequested = false;
   let cancelPending = false;
+  let preparedState = null;
+  let preloadPromise = null;
 
   function clearTimer() {
     if (timer !== null) window.clearTimeout(timer);
@@ -60,9 +62,76 @@
     setBusy(!terminal);
     cancelButton.disabled = terminal;
     if (state.status === "succeeded") {
-      window.location.reload();
+      showMessage("登录成功，正在刷新账号列表", 0);
+      setQrVisible(false);
+      cancelButton.disabled = true;
+      timer = window.setTimeout(() => {
+        if (dialog.open) dialog.close();
+        window.location.reload();
+      }, 900);
     }
     return terminal;
+  }
+
+  async function pollPrepared() {
+    if (!scanId || startPending || closeRequested || cancelPending) return;
+    try {
+      const response = await fetch(`/accounts/scan/${encodeURIComponent(scanId)}`, {
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+      const state = await readJson(response);
+      preparedState = state;
+      currentStatus = state.status;
+      if (state.status === "awaiting_scan") {
+        qrNode.src = `/accounts/scan/${encodeURIComponent(scanId)}/qr?t=${Date.now()}`;
+        setQrVisible(true);
+        setBusy(false);
+        return;
+      }
+      if (TERMINAL.has(state.status)) {
+        scanId = null;
+        preparedState = null;
+        setBusy(false);
+        return;
+      }
+      timer = window.setTimeout(pollPrepared, 1000);
+    } catch (_error) {
+      scanId = null;
+      preparedState = null;
+      setBusy(false);
+    }
+  }
+
+  async function preloadScan() {
+    startPending = true;
+    setBusy(true);
+    try {
+      const response = await fetch("/accounts/scan", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+        body: new URLSearchParams({csrf_token: csrfToken}),
+      });
+      const state = await readJson(response);
+      scanId = state.id;
+      currentStatus = state.status;
+      preparedState = state;
+      startPending = false;
+      setBusy(false);
+      if (state.status === "awaiting_scan") {
+        qrNode.src = `/accounts/scan/${encodeURIComponent(scanId)}/qr?t=${Date.now()}`;
+        setQrVisible(true);
+      } else if (!TERMINAL.has(state.status)) {
+        timer = window.setTimeout(pollPrepared, 1000);
+      }
+    } catch (_error) {
+      startPending = false;
+      scanId = null;
+      currentStatus = null;
+      preparedState = null;
+      setBusy(false);
+    }
   }
 
   async function readJson(response) {
@@ -102,6 +171,19 @@
   }
 
   async function startScan() {
+    if (preloadPromise) {
+      await preloadPromise;
+      preloadPromise = null;
+    }
+    if (scanId && preparedState && !TERMINAL.has(preparedState.status)) {
+      clearTimer();
+      closeRequested = false;
+      cancelPending = false;
+      if (!dialog.open) dialog.showModal();
+      const terminal = renderState(preparedState);
+      if (!terminal) timer = window.setTimeout(pollScan, 1000);
+      return;
+    }
     clearTimer();
     scanId = null;
     currentStatus = null;
@@ -211,4 +293,16 @@
     event.preventDefault();
     requestClose(true);
   });
+  window.addEventListener("pagehide", () => {
+    if (!scanId || TERMINAL.has(currentStatus)) return;
+    clearTimer();
+    navigator.sendBeacon(
+      `/accounts/scan/${encodeURIComponent(scanId)}/cancel`,
+      new URLSearchParams({csrf_token: csrfToken}),
+    );
+    scanId = null;
+  });
+  if (root.dataset.preload === "true") {
+    preloadPromise = preloadScan();
+  }
 })();

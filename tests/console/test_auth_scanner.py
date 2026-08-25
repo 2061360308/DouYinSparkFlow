@@ -24,8 +24,9 @@ PNG = b"\x89PNG\r\n\x1a\nscanner-fixture"
 
 
 class _Locator:
-    def __init__(self, *, visible=False, png=None, text="", children=None, items=None, box=None, decorative=False):
+    def __init__(self, *, visible=False, visible_sequence=None, png=None, text="", children=None, items=None, box=None, decorative=False):
         self.visible = visible
+        self.visible_sequence = list(visible_sequence or [])
         self.png = png
         self.text = text
         self.children = children or {}
@@ -41,6 +42,8 @@ class _Locator:
         return self.children.get(selector, _Locator())
 
     async def is_visible(self, **_kwargs):
+        if self.visible_sequence:
+            self.visible = self.visible_sequence.pop(0)
         return self.visible
 
     async def screenshot(self, **_kwargs):
@@ -66,7 +69,13 @@ class _Page:
         self.authenticated = asyncio.Event()
         self.never = asyncio.Event()
         self.navigation_started = asyncio.Event()
-        self.qr = _Locator(visible=qr_visible, png=PNG)
+        self.qr = _Locator(
+            visible=qr_visible,
+            visible_sequence=[True, True, False]
+            if mode == "credential_success"
+            else None,
+            png=PNG,
+        )
         self.panel = _Locator(
             visible=True,
             children={} if semantic_qr else {selector: self.qr for selector in QR_SELECTORS},
@@ -123,10 +132,12 @@ class _Page:
 
 
 class _Context:
-    def __init__(self, page, *, fail_storage_state=False):
+    def __init__(self, page, *, fail_storage_state=False, credential_success=False):
         self.page = page
         self.fail_storage_state = fail_storage_state
         self.closed = False
+        self.credential_success = credential_success
+        self.cookie_reads = 0
 
     async def new_page(self):
         return self.page
@@ -134,8 +145,7 @@ class _Context:
     async def storage_state(self):
         if self.fail_storage_state:
             raise RuntimeError("fixed storage failure")
-        return {
-            "cookies": [
+        cookies = [
                 {
                     "name": "sid",
                     "value": "scanner-cookie-marker",
@@ -146,9 +156,31 @@ class _Context:
                     "secure": True,
                     "sameSite": "Lax",
                 }
-            ],
+            ]
+        if self.credential_success:
+            cookies.append(
+                {
+                    "name": "auth-session",
+                    "value": "authenticated-marker",
+                    "domain": ".douyin.com",
+                    "path": "/",
+                    "expires": -1,
+                    "httpOnly": True,
+                    "secure": True,
+                    "sameSite": "Lax",
+                }
+            )
+        return {
+            "cookies": cookies,
             "origins": [],
         }
+
+    async def cookies(self):
+        self.cookie_reads += 1
+        state = await self.storage_state()
+        if self.credential_success and self.cookie_reads == 1:
+            return state["cookies"][:1]
+        return state["cookies"]
 
     async def close(self):
         self.closed = True
@@ -213,7 +245,11 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
             normal_verification_tab=normal_verification_tab,
             profile_visible=profile_visible,
         )
-        context = _Context(page, fail_storage_state=fail_storage_state)
+        context = _Context(
+            page,
+            fail_storage_state=fail_storage_state,
+            credential_success=mode == "credential_success",
+        )
         browser = _Browser(context)
         scanner = DouyinQrScanner(
             playwright_factory=lambda: _PlaywrightManager(browser),
@@ -288,6 +324,24 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("抖音账号", result.display_name)
         self.assertTrue(result.storage_state["cookies"])
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_hidden_qr_and_new_http_only_cookie_complete_without_legacy_dom(self):
+        scanner, browser, context = self._scanner(
+            mode="credential_success", profile_visible=False
+        )
+        confirmations = []
+
+        result = await scanner.run(
+            lambda _png: None,
+            confirmations.append,
+            lambda: False,
+        )
+
+        self.assertEqual("抖音账号", result.display_name)
+        self.assertEqual([True], confirmations)
+        self.assertEqual(2, len(result.storage_state["cookies"]))
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 
