@@ -92,6 +92,15 @@ class UserWebTests(unittest.TestCase):
         self.assertIn("修改密码", change_page.text)
         self.assertIn('name="new_password_confirmation"', change_page.text)
 
+    def test_change_password_page_uses_centered_security_layout(self):
+        self.login()
+
+        page = self.client.get("/change-password")
+
+        self.assertEqual(200, page.status_code)
+        self.assertIn('class="security-page"', page.text)
+        self.assertIn('class="auth-card security-card"', page.text)
+
     def test_change_password_rejects_mismatched_confirmation(self):
         self.login()
         page = self.client.get("/change-password")

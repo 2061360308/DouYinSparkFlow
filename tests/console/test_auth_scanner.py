@@ -60,8 +60,9 @@ class _Locator:
 
 
 class _Page:
-    def __init__(self, mode="success", *, qr_visible=True, semantic_qr=False, normal_verification_tab=False):
+    def __init__(self, mode="success", *, qr_visible=True, semantic_qr=False, normal_verification_tab=False, profile_visible=True):
         self.mode = mode
+        self.url = "https://creator.douyin.com/"
         self.authenticated = asyncio.Event()
         self.never = asyncio.Event()
         self.navigation_started = asyncio.Event()
@@ -79,6 +80,7 @@ class _Page:
             else []
         )
         self.normal_verification_tab = normal_verification_tab
+        self.profile_visible = profile_visible
 
     async def goto(self, *_args, **_kwargs):
         self.navigation_started.set()
@@ -92,7 +94,7 @@ class _Page:
         if selector == LOGIN_PANEL_SELECTORS[0]:
             return self.panel
         if selector == DISPLAY_NAME_SELECTOR:
-            return _Locator(visible=True, text=" 测试昵称 ")
+            return _Locator(visible=self.profile_visible, text=" 测试昵称 " if self.profile_visible else "")
         if selector == UNIQUE_ID_SELECTOR:
             return _Locator(visible=True, text=" 抖音号：douyin-123 ")
         return _Locator()
@@ -104,9 +106,12 @@ class _Page:
             await self.authenticated.wait()
             return _Locator(visible=True)
         if any(text in selector for text in CONFIRMING_TEXT):
-            if self.mode == "success":
+            if self.mode in {"success", "url_success"}:
                 await asyncio.sleep(0)
-                asyncio.get_running_loop().call_soon(self.authenticated.set)
+                if self.mode == "success":
+                    asyncio.get_running_loop().call_soon(self.authenticated.set)
+                else:
+                    self.url = "https://creator.douyin.com/creator-micro/home"
                 return _Locator(visible=True)
             await self.never.wait()
         if any(text in selector for text in VERIFICATION_TEXT):
@@ -196,6 +201,7 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         qr_visible=True,
         semantic_qr=False,
         normal_verification_tab=False,
+        profile_visible=True,
         fail_storage_state=False,
         qr_timeout_seconds=0.01,
         login_timeout_seconds=0.2,
@@ -205,6 +211,7 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
             qr_visible=qr_visible,
             semantic_qr=semantic_qr,
             normal_verification_tab=normal_verification_tab,
+            profile_visible=profile_visible,
         )
         context = _Context(page, fail_storage_state=fail_storage_state)
         browser = _Browser(context)
@@ -265,6 +272,22 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(qr_images))
         self.assertTrue(qr_images[0].startswith(b"\x89PNG"))
         self.assertEqual([True], confirmations)
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_authenticated_creator_url_completes_when_legacy_home_dom_is_absent(self):
+        scanner, browser, context = self._scanner(
+            mode="url_success", profile_visible=False
+        )
+
+        result = await scanner.run(
+            lambda _png: None,
+            lambda _confirmed: None,
+            lambda: False,
+        )
+
+        self.assertEqual("抖音账号", result.display_name)
+        self.assertTrue(result.storage_state["cookies"])
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 

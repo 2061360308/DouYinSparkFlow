@@ -5,6 +5,7 @@ import inspect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
+from urllib.parse import urlparse
 
 
 CREATOR_URL = "https://creator.douyin.com/"
@@ -25,6 +26,7 @@ QR_SELECTORS = (
 AUTHENTICATED_SELECTOR = (
     'xpath=//*[contains(@id,"garfish_app_for_douyin_creator_pc_home")]'
 )
+AUTHENTICATED_PATH_PREFIX = "/creator-micro/"
 DISPLAY_NAME_SELECTOR = (
     'xpath=//*[contains(@id,"garfish_app_for_douyin_creator_pc_home")]'
     "/div/div[2]/div/div[2]/div[1]/div[2]/div[1]/div[1]/div[1]"
@@ -138,10 +140,10 @@ class DouyinQrScanner:
                     deadline,
                 )
                 display_name = await self._await_stage(
-                    self._required_text(page, DISPLAY_NAME_SELECTOR),
+                    self._optional_text(page, DISPLAY_NAME_SELECTOR),
                     cancelled,
                     deadline,
-                )
+                ) or "抖音账号"
                 unique_id = await self._await_stage(
                     self._optional_text(page, UNIQUE_ID_SELECTOR),
                     cancelled,
@@ -203,6 +205,9 @@ class DouyinQrScanner:
                 AUTHENTICATED_SELECTOR, state="visible", timeout=0
             )
         )
+        authenticated_url = asyncio.create_task(
+            self._wait_for_authenticated_url(page)
+        )
         confirming = asyncio.create_task(
             self._wait_for_any_text(page, CONFIRMING_TEXT)
         )
@@ -210,7 +215,13 @@ class DouyinQrScanner:
             self._wait_for_any_text(page, VERIFICATION_TEXT)
         )
         cancellation = asyncio.create_task(self._wait_until_cancelled(cancelled))
-        pending = {authenticated, confirming, verification, cancellation}
+        pending = {
+            authenticated,
+            authenticated_url,
+            confirming,
+            verification,
+            cancellation,
+        }
         try:
             while pending:
                 done, pending = await asyncio.wait(
@@ -228,10 +239,20 @@ class DouyinQrScanner:
                 if authenticated in done:
                     authenticated.result()
                     return
+                if authenticated_url in done:
+                    authenticated_url.result()
+                    return
         finally:
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _wait_for_authenticated_url(self, page) -> None:
+        while True:
+            path = urlparse(page.url).path
+            if path.startswith(AUTHENTICATED_PATH_PREFIX):
+                return
+            await asyncio.sleep(self.poll_interval_seconds)
 
     @staticmethod
     async def _wait_for_any_text(page, values: tuple[str, ...]) -> None:
