@@ -5,3 +5,11 @@ chrome/
 logs/
 .DS_Store
 usersData.json
+.env.console
+secrets/
+data/
+backups/
+*.db
+*.db-shm
+*.db-wal
+*.key

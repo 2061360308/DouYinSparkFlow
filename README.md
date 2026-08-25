@@ -1,5 +1,17 @@
 # DouYin Spark Flow
 
+## 多用户火花控制台（功能分支）
+
+本仓库新增了一个独立的 FastAPI 控制台：受邀用户可加密保存自己的抖音 Cookie，设置目标好友、北京时间、发送内容并查看脱敏执行结果；管理员可以创建或停用用户、查看、暂停和删除所有任务。
+
+- Cookie 使用 AES-256-GCM 加密，密码使用 Argon2id；页面不回显 Cookie。
+- SQLite 使用 WAL，Worker 全局单并发，同一次计划只执行一次，失败不自动重发。
+- Docker Compose 仅绑定 `127.0.0.1:8899`，使用独立网络、数据卷和资源限制，不接入既有业务容器网络。
+- 正式给朋友使用前必须配置可信域名和 HTTPS。不得直接开放 8899 端口或通过明文 HTTP 传递账号凭据。
+- 部署前要求根分区至少剩余 5 GiB，并确认系统时间误差不超过 5 秒。
+
+完整部署、备份、导入和回滚步骤见 [控制台运维手册](docs/console-operations.md)。本功能仍属于浏览器自动化，页面变化和平台风控可能导致发送失败，使用者应遵守平台规则。
+
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python)
 ![Playwright](https://img.shields.io/badge/Playwright-%E2%9C%94-green?logo=playwright)
 ![chrome-headless-shell](https://img.shields.io/badge/chrome--headless--shell-%E2%9C%94-brightgreen?logo=googlechrome)
