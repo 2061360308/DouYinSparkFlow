@@ -1,6 +1,7 @@
 {% extends "base.html" %}{% block content %}
 <section class="auth-card"><div class="brand solo"><span class="brand-mark">火</span><span>火花守护<small>让每天的问候准时抵达</small></span></div>
 <h1>欢迎回来</h1><p class="muted">使用管理员提供的账号登录</p>
+{% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
 <form method="post" class="stack"><label>用户名<input name="username" autocomplete="username" required></label><label>密码<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">登录控制台</button></form>
 <p class="fine">账号凭据与抖音 Cookie 会加密保存，不会在页面再次展示。</p></section>
 {% endblock %}

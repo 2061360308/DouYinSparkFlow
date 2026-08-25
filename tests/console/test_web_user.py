@@ -69,6 +69,16 @@ class UserWebTests(unittest.TestCase):
         )
         self.assertEqual(403, response.status_code)
 
+    def test_wrong_password_renders_visible_login_error(self):
+        response = self.client.post(
+            "/login",
+            data={"username": "friend", "password": "definitely-wrong"},
+            follow_redirects=False,
+        )
+        self.assertEqual(400, response.status_code)
+        self.assertIn("用户名或密码错误", response.text)
+        self.assertIn('name="password"', response.text)
+
     def test_cookie_value_never_appears_after_account_save(self):
         self.login()
         page = self.client.get("/change-password")

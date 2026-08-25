@@ -60,8 +60,10 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         if not supplied or not secrets.compare_digest(record.csrf_token, supplied):
             raise HTTPException(403, "CSRF validation failed")
 
-    def page(request: Request, name: str, **context):
-        return templates.TemplateResponse(request=request, name=name, context=context)
+    def page(request: Request, name: str, status_code: int = 200, **context):
+        return templates.TemplateResponse(
+            request=request, name=name, context=context, status_code=status_code
+        )
 
     @app.exception_handler(401)
     async def unauthorized(request: Request, _exc):
@@ -92,14 +94,21 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         return page(request, "login.html", title="登录", nav=False)
 
     @app.post("/login")
-    def login(username: str = Form(), password: str = Form()):
+    def login(request: Request, username: str = Form(), password: str = Form()):
         with session_scope(engine) as db:
             user = db.scalar(select(User).where(User.username == username.strip().lower()))
             valid = user is not None and user.status == "active" and passwords.verify(user.password_hash, password)
             if not valid:
                 if user is not None:
                     user.failed_login_count += 1
-                raise HTTPException(401, "用户名或密码错误")
+                return page(
+                    request,
+                    "login.html",
+                    status_code=400,
+                    title="登录",
+                    nav=False,
+                    error="用户名或密码错误",
+                )
             user.failed_login_count = 0
             raw, record = sessions.create_record(user.id)
             db.add(record)
