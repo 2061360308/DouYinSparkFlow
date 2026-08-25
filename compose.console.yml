@@ -3,6 +3,7 @@ x-common: &common
   build:
     context: .
     dockerfile: Dockerfile.console
+    network: host
   restart: unless-stopped
   env_file: .env.console
   volumes:

@@ -18,6 +18,11 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('SPARK_WORKER_CONCURRENCY: "1"', worker)
         self.assertIn("mem_limit: 768m", worker)
 
+    def test_host_network_is_limited_to_image_build(self):
+        self.assertIn("dockerfile: Dockerfile.console\n    network: host", self.compose)
+        service_body = self.compose.split("services:", 1)[1]
+        self.assertNotRegex(service_body, r"(?m)^\s{4}network_mode:\s*host")
+
     def test_example_environment_has_names_but_no_credential_values(self):
         example = Path(".env.console.example").read_text(encoding="utf-8")
         self.assertNotRegex(example, r"(?im)^(?:.*password|.*token|.*secret)=.+$")
