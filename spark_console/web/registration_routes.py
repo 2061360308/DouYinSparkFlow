@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import ipaddress
+from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from spark_console.db import session_scope
@@ -14,9 +17,18 @@ from spark_console.services.audits import AuditService
 from spark_console.services.invites import InviteService
 from spark_console.services.users import UserService, validate_registration_password
 from spark_console.web.auth import WebAuth
+from spark_console.models import InviteCode, SparkTask, TaskRun, User
 
 
 PUBLIC_ERROR = "注册信息或邀请码无效"
+
+
+@dataclass(frozen=True)
+class AdminInvite:
+    invite: InviteCode
+    status: str
+    used_by_username: str | None
+    can_revoke: bool
 
 
 def registration_client_key(request: Request) -> str:
@@ -39,10 +51,10 @@ def build_registration_router(engine, passwords: PasswordService, limiter: Faile
     @router.post("/register")
     def register(
         request: Request,
-        username: str = Form(),
-        password: str = Form(),
-        password_confirmation: str = Form(),
-        invite_code: str = Form(),
+        username: str = Form(default=""),
+        password: str = Form(default=""),
+        password_confirmation: str = Form(default=""),
+        invite_code: str = Form(default=""),
     ):
         key = registration_client_key(request)
         if not limiter.allow(key):
@@ -69,7 +81,7 @@ def build_registration_router(engine, passwords: PasswordService, limiter: Faile
             admin, record, context = auth.admin_context(request, db)
             auth.csrf(record, csrf_token)
             _invite, plaintext = InviteService(db, AuditService(db)).create(admin.id)
-            invites = InviteService(db, AuditService(db)).list_all()
+            invites = admin_invite_items(db)
             users, tasks, runs = _admin_page_data(db)
             return page(
                 request,
@@ -100,10 +112,6 @@ def build_registration_router(engine, passwords: PasswordService, limiter: Faile
 
 
 def _admin_page_data(db):
-    from sqlalchemy import select
-
-    from spark_console.models import SparkTask, TaskRun, User
-
     users = db.scalars(select(User).order_by(User.created_at)).all()
     tasks = db.execute(
         select(SparkTask, User)
@@ -112,3 +120,34 @@ def _admin_page_data(db):
     ).all()
     runs = db.scalars(select(TaskRun).order_by(TaskRun.scheduled_for.desc()).limit(20)).all()
     return users, tasks, runs
+
+
+def admin_invite_items(db) -> list[AdminInvite]:
+    now = datetime.now(timezone.utc)
+    rows = db.execute(
+        select(InviteCode, User.username)
+        .outerjoin(User, InviteCode.used_by_user_id == User.id)
+        .order_by(InviteCode.created_at.desc())
+    ).all()
+    items = []
+    for invite, username in rows:
+        expires_at = invite.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if invite.used_at is not None:
+            status = "已使用"
+        elif invite.revoked_at is not None:
+            status = "已撤销"
+        elif expires_at <= now:
+            status = "已过期"
+        else:
+            status = "有效"
+        items.append(
+            AdminInvite(
+                invite=invite,
+                status=status,
+                used_by_username=username,
+                can_revoke=status == "有效",
+            )
+        )
+    return items

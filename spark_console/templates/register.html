@@ -2,6 +2,6 @@
 <section class="auth-card"><div class="brand solo"><span class="brand-mark">火</span><span>火花守护<small>让每天的问候准时抵达</small></span></div>
 <h1>创建账号</h1><p class="muted">输入管理员提供的邀请码即可加入。</p>
 {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
-<form method="post" class="stack"><label>用户名<input name="username" autocomplete="username" minlength="3" required></label><label>密码<input type="password" name="password" autocomplete="new-password" minlength="10" required></label><label>确认密码<input type="password" name="password_confirmation" autocomplete="new-password" minlength="10" required></label><label>邀请码<input name="invite_code" autocomplete="off" required></label><button type="submit">注册并登录</button></form>
+<form method="post" class="stack"><label>用户名<input name="username" autocomplete="username" minlength="3" required></label><label>密码<input type="password" name="password" autocomplete="new-password" minlength="10" required></label><label>确认密码<input type="password" name="password_confirmation" autocomplete="new-password" minlength="10" required></label><label>邀请码<input name="invite_code" autocomplete="off" required></label><button type="submit">注册并返回登录</button></form>
 <p class="auth-link">已有账号？<a href="/login">返回登录</a></p></section>
 {% endblock %}

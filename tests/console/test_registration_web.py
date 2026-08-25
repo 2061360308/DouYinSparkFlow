@@ -2,6 +2,7 @@ import hashlib
 import re
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -16,7 +17,7 @@ from spark_console.security import PasswordService
 from spark_console.services.audits import AuditService
 from spark_console.services.invites import InviteService
 from spark_console.web.app import create_app
-from spark_console.web.registration_routes import registration_client_key
+from spark_console.web.registration_routes import admin_invite_items, registration_client_key
 
 
 PUBLIC_ERROR = "注册信息或邀请码无效"
@@ -54,9 +55,10 @@ class RegistrationWebTests(unittest.TestCase):
             )
             session.add_all([self.admin, self.friend])
             session.flush()
-            _invite, self.invite_plaintext = InviteService(
+            invite, self.invite_plaintext = InviteService(
                 session, AuditService(session)
             ).create(self.admin.id)
+            self.unused_invite_id = invite.id
         self.client = TestClient(
             create_app(self.settings, self.engine), base_url="https://testserver"
         )
@@ -151,6 +153,24 @@ class RegistrationWebTests(unittest.TestCase):
         self.assertEqual(429, limited.status_code)
         self.assertIn(PUBLIC_ERROR, limited.text)
 
+    def test_missing_registration_fields_use_the_public_error_and_failure_limiter(self):
+        complete = self.registration_data()
+        missing_fields = [
+            {key: value for key, value in complete.items() if key != field}
+            for field in complete
+        ]
+        for index, data in enumerate(missing_fields + [missing_fields[-1]] * 6):
+            response = self.client.post("/register", data=data, follow_redirects=False)
+            self.assertEqual(400, response.status_code, f"missing field attempt {index}")
+            self.assertIn(PUBLIC_ERROR, response.text)
+
+        limited = self.client.post(
+            "/register", data=self.registration_data(username="still-blocked"), follow_redirects=False
+        )
+
+        self.assertEqual(429, limited.status_code)
+        self.assertIn(PUBLIC_ERROR, limited.text)
+
     def test_registration_client_key_uses_valid_real_ip_and_falls_back_on_invalid_value(self):
         request = Request(
             {
@@ -173,6 +193,13 @@ class RegistrationWebTests(unittest.TestCase):
 
         self.assertEqual("203.0.113.7", registration_client_key(request))
         self.assertEqual("127.0.0.1", registration_client_key(invalid))
+
+    def test_register_page_accurately_says_registration_returns_to_login(self):
+        response = self.client.get("/register")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("注册并返回登录", response.text)
+        self.assertNotIn("注册并登录", response.text)
 
     def test_invite_generation_is_admin_only_and_displays_code_once(self):
         self.login("friend", "FriendPass123")
@@ -226,6 +253,54 @@ class RegistrationWebTests(unittest.TestCase):
         self.assertEqual("/admin", response.headers["location"])
         with Session(self.engine) as session:
             self.assertIsNotNone(session.get(InviteCode, invite_id).revoked_at)
+
+    def test_admin_invite_list_projects_lifecycle_and_consumer_details(self):
+        now = datetime.now(timezone.utc)
+        with session_scope(self.engine) as session:
+            expired = InviteCode(
+                code_hash=hashlib.sha256(b"expired").hexdigest(),
+                created_by_user_id=self.admin.id,
+                expires_at=now - timedelta(minutes=1),
+            )
+            used = InviteCode(
+                code_hash=hashlib.sha256(b"used").hexdigest(),
+                created_by_user_id=self.admin.id,
+                expires_at=now + timedelta(days=1),
+                used_by_user_id=self.friend.id,
+                used_at=now,
+            )
+            revoked = InviteCode(
+                code_hash=hashlib.sha256(b"revoked").hexdigest(),
+                created_by_user_id=self.admin.id,
+                expires_at=now + timedelta(days=1),
+                revoked_at=now,
+            )
+            session.add_all([expired, used, revoked])
+            session.flush()
+            expired_id, used_id, revoked_id = expired.id, used.id, revoked.id
+        self.login()
+
+        response = self.client.get("/admin")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("有效", response.text)
+        self.assertIn("已过期", response.text)
+        self.assertIn("已使用", response.text)
+        self.assertIn("已撤销", response.text)
+        self.assertIn("有效期至", response.text)
+        self.assertIn("使用者：friend", response.text)
+        self.assertIn(f"/admin/invites/{self.unused_invite_id}/revoke", response.text)
+        for invite_id in (expired_id, used_id, revoked_id):
+            self.assertNotIn(f"/admin/invites/{invite_id}/revoke", response.text)
+        with Session(self.engine) as session:
+            items = {item.invite.id: item for item in admin_invite_items(session)}
+        self.assertEqual("有效", items[self.unused_invite_id].status)
+        self.assertTrue(items[self.unused_invite_id].can_revoke)
+        self.assertEqual("已过期", items[expired_id].status)
+        self.assertFalse(items[expired_id].can_revoke)
+        self.assertEqual("已使用", items[used_id].status)
+        self.assertEqual("friend", items[used_id].used_by_username)
+        self.assertEqual("已撤销", items[revoked_id].status)
 
 
 if __name__ == "__main__":

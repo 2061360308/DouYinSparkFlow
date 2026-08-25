@@ -23,7 +23,7 @@ from spark_console.services.audits import AuditService
 from spark_console.services.tasks import TaskService
 from spark_console.services.users import UserService
 from spark_console.web.auth import WebAuth
-from spark_console.web.registration_routes import build_registration_router
+from spark_console.web.registration_routes import admin_invite_items, build_registration_router
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -235,8 +235,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             users = db.scalars(select(User).order_by(User.created_at)).all()
             tasks = db.execute(select(SparkTask, User).join(User, SparkTask.owner_user_id == User.id).order_by(SparkTask.send_time)).all()
             runs = db.scalars(select(TaskRun).order_by(TaskRun.scheduled_for.desc()).limit(20)).all()
-            from spark_console.services.invites import InviteService
-            invites = InviteService(db, AuditService(db)).list_all()
+            invites = admin_invite_items(db)
             return page(request, "admin.html", title="管理后台", users=users, tasks=tasks, runs=runs, invites=invites, **context)
 
     @app.post("/admin/users")
@@ -248,8 +247,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             _user, temporary = service.create(username)
             users = db.scalars(select(User).order_by(User.created_at)).all()
             tasks = db.execute(select(SparkTask, User).join(User, SparkTask.owner_user_id == User.id).order_by(SparkTask.send_time)).all()
-            from spark_console.services.invites import InviteService
-            invites = InviteService(db, AuditService(db)).list_all()
+            invites = admin_invite_items(db)
             return page(request, "admin.html", title="管理后台", users=users, tasks=tasks, runs=[], invites=invites, one_time_password=temporary, **context)
 
     @app.post("/admin/users/{user_id}/toggle")
