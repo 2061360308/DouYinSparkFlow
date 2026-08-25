@@ -4,7 +4,7 @@ import json
 import math
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote_to_bytes, urlsplit
 
 
 _LEGACY_COOKIE_KEYS = {
@@ -60,6 +60,7 @@ def _valid_url(value: object, *, origin_only: bool = False) -> bool:
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.hostname
+        or not _valid_host_encoding(parsed.hostname, reject_whitespace=True)
         or parsed.username is not None
         or parsed.password is not None
     ):
@@ -69,10 +70,27 @@ def _valid_url(value: object, *, origin_only: bool = False) -> bool:
     )
 
 
+def _valid_host_encoding(value: str, *, reject_whitespace: bool = False) -> bool:
+    try:
+        decoded = unquote_to_bytes(value).decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    if any(character in decoded for character in "%/\\[]^|"):
+        return False
+    ipv4_parts = decoded.lstrip(".").split(".")
+    if len(ipv4_parts) == 4 and all(part.isdigit() for part in ipv4_parts):
+        if not all(0 <= int(part) <= 255 for part in ipv4_parts):
+            return False
+    return not reject_whitespace or not any(
+        character.isspace() for character in decoded
+    )
+
+
 def _valid_domain(value: object) -> bool:
     return (
         isinstance(value, str)
         and bool(value.lstrip("."))
+        and _valid_host_encoding(value)
         and not any(character.isspace() for character in value)
         and "/" not in value
         and ":" not in value

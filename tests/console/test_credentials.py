@@ -1,6 +1,8 @@
+import asyncio
 import hashlib
 import json
 import unittest
+from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
 
@@ -73,6 +75,28 @@ class CredentialPayloadTests(unittest.TestCase):
         }
         invalid_cookies = {
             "missing_location": {"name": "sid", "value": "credential-marker"},
+            "invalid_domain_percent": {
+                "name": "sid",
+                "value": "credential-marker",
+                "domain": "%",
+                "path": "/",
+            },
+            "invalid_domain_ipv4": {
+                "name": "sid",
+                "value": "credential-marker",
+                "domain": "999.999.999.999",
+                "path": "/",
+            },
+            "invalid_url_percent": {
+                "name": "sid",
+                "value": "credential-marker",
+                "url": "http://%/",
+            },
+            "invalid_url_ipv4": {
+                "name": "sid",
+                "value": "credential-marker",
+                "url": "http://999.999.999.999/",
+            },
             "malformed_url": {
                 "name": "sid",
                 "value": "credential-marker",
@@ -120,6 +144,17 @@ class CredentialPayloadTests(unittest.TestCase):
             "extra_state_key": {
                 "version": 2,
                 "storage_state": {**valid_state, "credential": "unexpected"},
+            },
+            "indexed_db_is_out_of_scope": {
+                "version": 2,
+                "storage_state": {**valid_state, "indexedDB": []},
+            },
+            "invalid_storage_cookie_domain": {
+                "version": 2,
+                "storage_state": {
+                    "cookies": [{**cookie, "domain": "%"}],
+                    "origins": [],
+                },
             },
             "incomplete_cookie": {
                 "version": 2,
@@ -292,6 +327,14 @@ class ExecutorCredentialTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("cookie_invalid", result.error_code)
 
+    async def test_executor_maps_playwright_invalid_location_to_cookie_invalid(self):
+        _, result = await self._execute_until_target_selection(
+            b'[{"name":"sid","value":"location-marker","url":"http://%/"}]',
+            1,
+        )
+
+        self.assertEqual("cookie_invalid", result.error_code)
+
     async def test_executor_closes_browser_when_context_construction_fails(self):
         browser = _FakeBrowser(fail_new_context=True)
         raw = b'[{"name":"sid","value":"cleanup-marker","domain":".douyin.com","path":"/"}]'
@@ -300,6 +343,89 @@ class ExecutorCredentialTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("automation_failed", result.error_code)
         self.assertEqual(1, browser.close_count)
+
+
+class PlaywrightLocationCompatibilityTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        asyncio.get_running_loop().slow_callback_duration = 1.0
+
+    async def test_parser_rejects_locations_rejected_by_playwright(self):
+        from playwright.async_api import Error, async_playwright
+
+        legacy_cookies = {
+            "domain_percent": {
+                "name": "probe",
+                "value": "x",
+                "domain": "%",
+                "path": "/",
+            },
+            "url_percent": {
+                "name": "probe",
+                "value": "x",
+                "url": "http://%/",
+            },
+            "domain_ipv4": {
+                "name": "probe",
+                "value": "x",
+                "domain": "999.999.999.999",
+                "path": "/",
+            },
+            "url_ipv4": {
+                "name": "probe",
+                "value": "x",
+                "url": "http://999.999.999.999/",
+            },
+        }
+        storage_cookie = {
+            "name": "probe",
+            "value": "x",
+            "domain": "%",
+            "path": "/",
+            "expires": -1,
+            "httpOnly": True,
+            "secure": True,
+            "sameSite": "Lax",
+        }
+
+        async with async_playwright() as playwright:
+            if not Path(playwright.chromium.executable_path).exists():
+                self.skipTest("Playwright Chromium binary is not installed")
+            browser = await playwright.chromium.launch(headless=True)
+            context = await browser.new_context()
+            try:
+                for case, cookie in legacy_cookies.items():
+                    with self.subTest(case=case):
+                        playwright_rejected = False
+                        try:
+                            await context.add_cookies([cookie])
+                        except Error:
+                            playwright_rejected = True
+                        self.assertTrue(playwright_rejected)
+                        raw = json.dumps([cookie], separators=(",", ":")).encode()
+                        with self.assertRaises(CredentialError):
+                            CredentialPayload.parse(raw, 1)
+
+                playwright_rejected = False
+                try:
+                    await browser.new_context(
+                        storage_state={"cookies": [storage_cookie], "origins": []}
+                    )
+                except Error:
+                    playwright_rejected = True
+                self.assertTrue(playwright_rejected)
+                envelope = {
+                    "version": 2,
+                    "storage_state": {
+                        "cookies": [storage_cookie],
+                        "origins": [],
+                    },
+                }
+                raw = json.dumps(envelope, separators=(",", ":")).encode()
+                with self.assertRaises(CredentialError):
+                    CredentialPayload.parse(raw, 2)
+            finally:
+                await context.close()
+                await browser.close()
 
 
 if __name__ == "__main__":
