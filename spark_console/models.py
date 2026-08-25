@@ -64,7 +64,9 @@ class SparkTask(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
     owner_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    douyin_account_id: Mapped[str] = mapped_column(ForeignKey("douyin_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    douyin_account_id: Mapped[str | None] = mapped_column(
+        ForeignKey("douyin_accounts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     target_name: Mapped[str] = mapped_column(String(64), nullable=False)
     send_time: Mapped[str] = mapped_column(String(5), nullable=False)
     message_template: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -120,4 +122,3 @@ class AuditEvent(Base):
     resource_id: Mapped[str | None] = mapped_column(String(36))
     detail: Mapped[str | None] = mapped_column(String(240))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-

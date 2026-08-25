@@ -6,3 +6,4 @@ SQLAlchemy==2.0.43
 argon2-cffi==25.1.0
 cryptography==45.0.6
 httpx==0.28.1
+tzdata==2025.2
