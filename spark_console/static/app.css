@@ -4,3 +4,4 @@
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
 .inline-form{display:flex;gap:9px;margin-bottom:18px}.inline-form input{min-width:0}.password-once{display:grid;gap:6px;margin-bottom:22px}.password-once code{font-size:20px;letter-spacing:.05em;color:var(--ink)}
 .form-error{margin-top:18px;padding:11px 13px;border-left:3px solid var(--ember);border-radius:8px;background:#fff0ed;color:#a52f24;font-size:14px;font-weight:700}
+.auth-link{margin:20px 0 0;color:var(--muted);font-size:14px}.auth-link a{color:var(--ember-dark);font-weight:700;text-decoration:underline}

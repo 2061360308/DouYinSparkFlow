@@ -80,6 +80,12 @@ class UserWebTests(unittest.TestCase):
         self.assertIn("用户名或密码错误", response.text)
         self.assertIn('name="password"', response.text)
 
+    def test_login_page_offers_invite_registration(self):
+        response = self.client.get("/login")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn('href="/register"', response.text)
+
     def test_login_stylesheet_uses_same_origin_path_behind_https_proxy(self):
         with TestClient(
             create_app(self.settings, self.engine), base_url="http://internal"
