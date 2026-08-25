@@ -6,12 +6,14 @@
 
 Worker 只有一个实例、并发为 1；失败任务不会自动重试。启用 Worker 前必须确认系统时间误差不超过 5 秒、根分区空闲不少于 5 GiB，并记录现有业务容器健康状态。
 
+`spark-auth` 是独立的单实例扫码进程，只加入 `spark-private`，不发布宿主机端口、不挂载 Docker socket，并沿用只读根文件系统和 `no-new-privileges`。它与 `spark-web` 共享 `spark-data` 和两份只读密钥文件；不得把密钥内容写入 `.env.console`、命令行、聊天或日志。
+
 ## 首次安装
 
 ```bash
 install -d -m 0750 /opt/douyin-spark-console/secrets
 cp .env.console.example .env.console
-docker compose -f compose.console.yml build
+docker compose --env-file .env.console -f compose.console.yml build spark-web spark-auth
 docker volume create douyin-spark-console_spark-data
 docker run --rm -u 0 -v douyin-spark-console_spark-data:/data douyin-spark-console-spark-web chown -R 10001:10001 /data
 ```
@@ -29,7 +31,7 @@ chmod 0400 secrets/*.key
 只启动 Web 并验证回环地址：
 
 ```bash
-docker compose -f compose.console.yml up -d spark-web
+docker compose --env-file .env.console -f compose.console.yml up -d --no-deps spark-web
 curl --fail http://127.0.0.1:8899/health/ready
 ```
 
@@ -40,6 +42,40 @@ docker compose -f compose.console.yml run --rm spark-web python -m spark_console
 ```
 
 管理员可在网页创建普通用户；临时密码只显示一次，用户首次登录必须修改。
+
+## 二维码与邀请功能升级
+
+升级前记录当前控制台提交和容器状态，并执行 SQLite 备份。`backup-db` 输出卷内备份路径；必须保存该路径并确认命令成功后才能继续。备份文件、当前数据库和 `spark-data` 卷都不得删除。
+
+```bash
+git rev-parse HEAD
+docker compose --env-file .env.console -f compose.console.yml ps
+docker compose --env-file .env.console -f compose.console.yml run --rm spark-web python -m spark_console.cli backup-db
+```
+
+只构建 `spark-web` 与 `spark-auth`，然后只重建这两个服务。`--no-deps` 和显式服务名是部署边界：不要使用未列服务名的 `up`，不要启动或重建 `spark-worker`，也不要停用旧 timers。
+
+```bash
+docker compose --env-file .env.console -f compose.console.yml build spark-web spark-auth
+docker compose --env-file .env.console -f compose.console.yml up -d --no-deps spark-web spark-auth
+curl --fail https://wangze.oilu.cn/health/ready
+docker compose --env-file .env.console -f compose.console.yml ps
+```
+
+验收时确认 `spark-auth` 为运行状态且 `PORTS` 为空，`spark-web` 仍只发布到回环地址；同时对照升级前记录，确认 BPS 容器、网络、卷、端口和旧 timers 都未改变。自动化检查不得生成或打印邀请码明文，也不得展示 Cookie、Token、存储状态、二维码历史或环境内容。
+
+若验收失败，只停止 `spark-auth`，再切换到已审核的上一控制台提交，并只构建、重建 `spark-web`：
+
+```bash
+docker compose --env-file .env.console -f compose.console.yml stop spark-auth
+git switch --detach <previous-console-commit>
+docker compose --env-file .env.console -f compose.console.yml build spark-web
+docker compose --env-file .env.console -f compose.console.yml up -d --no-deps spark-web
+curl --fail https://wangze.oilu.cn/health/ready
+docker compose --env-file .env.console -f compose.console.yml ps
+```
+
+此回滚不恢复数据库、不删除新增表、版本 2 账号、备份或 `spark-data` 卷，也不启动或重建 `spark-worker`。旧版 Web 不执行版本 2 账号，但数据会保留以便再次升级；原有 Cookie-only 账号和旧 timers 保持原状。严禁运行 `down -v`，严禁操作 BPS 资源。
 
 ## 域名与 HTTPS
 
@@ -93,8 +129,8 @@ docker compose -f compose.console.yml ps
 ## 备份与回滚
 
 ```bash
-docker compose -f compose.console.yml run --rm spark-web python -m spark_console.cli backup-db
-docker compose -f compose.console.yml stop spark-worker
+docker compose --env-file .env.console -f compose.console.yml run --rm spark-web python -m spark_console.cli backup-db
+docker compose --env-file .env.console -f compose.console.yml stop spark-worker
 ```
 
 回滚时先停止新 Worker，再重新启用原有 timers，并核对下一次触发时间。不要删除新数据库、旧配置、Docker 卷或备份。数据库恢复必须在 Web 和 Worker 均停止时进行，并先保留当前数据库副本。

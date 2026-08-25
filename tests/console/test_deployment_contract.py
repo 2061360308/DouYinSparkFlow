@@ -18,6 +18,22 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('SPARK_WORKER_CONCURRENCY: "1"', worker)
         self.assertIn("mem_limit: 768m", worker)
 
+    def test_auth_service_is_unpublished_singleton_and_resource_limited(self):
+        auth = self.compose.split("  spark-auth:", 1)[1].split("  spark-worker:", 1)[0]
+        self.assertIn("<<: *common", auth)
+        self.assertIn("command: [python, -m, spark_console.auth_worker]", auth)
+        self.assertNotIn("ports:", auth)
+        self.assertNotIn("/var/run/docker.sock", auth)
+        self.assertIn("mem_limit: 768m", auth)
+        self.assertIn("cpus: 1.0", auth)
+        self.assertIn('tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]', auth)
+
+        common = self.compose.split("x-common: &common", 1)[1].split("\nservices:", 1)[0]
+        self.assertIn("networks: [spark-private]", common)
+        self.assertIn("read_only: true", common)
+        self.assertIn("security_opt: [no-new-privileges:true]", common)
+        self.assertNotIn("network_mode:", auth)
+
     def test_host_network_is_limited_to_image_build(self):
         self.assertIn("dockerfile: Dockerfile.console\n    network: host", self.compose)
         service_body = self.compose.split("services:", 1)[1]
