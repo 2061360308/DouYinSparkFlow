@@ -5,7 +5,13 @@ from sqlalchemy.orm import Session
 
 from spark_console.crypto import CookieCipher
 from spark_console.db import create_schema
-from spark_console.models import AuditEvent, DouyinAccount, SparkTask, User
+from spark_console.models import (
+    AuditEvent,
+    DouyinAccount,
+    DouyinAccountIdentity,
+    SparkTask,
+    User,
+)
 from spark_console.security import PasswordService
 from spark_console.services import NotFound, ValidationError
 from spark_console.services.accounts import AccountService
@@ -48,9 +54,80 @@ class ServiceTests(unittest.TestCase):
     def test_cookie_is_encrypted_and_never_returned_by_list(self):
         self.session.flush()
         stored = self.session.get(DouyinAccount, self.account.id)
-        self.assertNotIn(b"secret", stored.encrypted_cookies)
+        self.assertFalse(b"secret" in stored.encrypted_cookies)
         public = self.accounts.list_owned(self.owner.id)
         self.assertEqual([{"id": self.account.id, "display_name": "我的账号", "validation_state": "unknown"}], public)
+
+    def test_storage_state_is_encrypted_with_identity_and_safe_projection(self):
+        state = {
+            "cookies": [
+                {
+                    "name": "sid",
+                    "value": "storage-cookie-marker",
+                    "domain": ".douyin.com",
+                    "path": "/",
+                }
+            ],
+            "origins": [
+                {
+                    "origin": "https://www.douyin.com",
+                    "localStorage": [
+                        {"name": "session", "value": "local-storage-marker"}
+                    ],
+                }
+            ],
+        }
+
+        account = self.accounts.create_from_storage_state(
+            self.owner.id, " 扫码账号 ", state, " douyin-123 "
+        )
+        self.session.flush()
+
+        stored = self.session.get(DouyinAccount, account.id)
+        identity = self.session.get(DouyinAccountIdentity, account.id)
+        encrypted = stored.encrypted_cookies
+        self.assertFalse(b"storage-cookie-marker" in encrypted)
+        self.assertFalse(b"local-storage-marker" in encrypted)
+        self.assertEqual(2, stored.cookie_version)
+        self.assertEqual("valid", stored.validation_state)
+        self.assertIsNotNone(stored.last_verified_at)
+        self.assertEqual("douyin-123", identity.douyin_unique_id)
+        projected = next(
+            item for item in self.accounts.list_owned(self.owner.id) if item["id"] == account.id
+        )
+        self.assertEqual(
+            {"id", "display_name", "validation_state"}, set(projected)
+        )
+
+        audits = " ".join(
+            f"{event.action} {event.detail or ''}"
+            for event in self.session.scalars(select(AuditEvent)).all()
+        )
+        self.assertFalse("storage-cookie-marker" in audits)
+        self.assertFalse("local-storage-marker" in audits)
+
+    def test_storage_state_rejects_empty_cookies_before_creating_account(self):
+        before = len(self.session.scalars(select(DouyinAccount)).all())
+
+        with self.assertRaises(ValidationError):
+            self.accounts.create_from_storage_state(
+                self.owner.id,
+                "扫码账号",
+                {"cookies": [], "origins": []},
+            )
+
+        self.assertEqual(before, len(self.session.scalars(select(DouyinAccount)).all()))
+
+    def test_owner_can_rename_account_but_another_user_cannot(self):
+        renamed = self.accounts.rename_owned(
+            self.owner.id, self.account.id, " 生活号 "
+        )
+
+        self.assertEqual("生活号", renamed.display_name)
+        with self.assertRaises(NotFound):
+            self.accounts.rename_owned(self.other.id, self.account.id, "越权名称")
+        with self.assertRaises(ValidationError):
+            self.accounts.rename_owned(self.owner.id, self.account.id, " ")
 
     def test_deleting_account_erases_cookie_and_disables_tasks(self):
         task = self.tasks.create(
@@ -74,7 +151,7 @@ class ServiceTests(unittest.TestCase):
         events = self.session.scalars(select(AuditEvent)).all()
         self.assertTrue(events)
         serialized = " ".join((e.detail or "") + e.action for e in events)
-        self.assertNotIn("secret", serialized)
+        self.assertFalse("secret" in serialized)
 
 
 if __name__ == "__main__":
