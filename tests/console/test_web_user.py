@@ -80,6 +80,22 @@ class UserWebTests(unittest.TestCase):
         self.assertIn("用户名或密码错误", response.text)
         self.assertIn('name="password"', response.text)
 
+    def test_login_stylesheet_uses_same_origin_path_behind_https_proxy(self):
+        with TestClient(
+            create_app(self.settings, self.engine), base_url="http://internal"
+        ) as client:
+            response = client.get(
+                "/login",
+                headers={
+                    "host": "wangze.oilu.cn",
+                    "x-forwarded-proto": "https",
+                },
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn('href="/static/app.css"', response.text)
+        self.assertNotIn('href="http://wangze.oilu.cn/static/app.css"', response.text)
+
     def test_http_mode_issues_a_session_cookie_the_browser_can_return(self):
         http_settings = replace(self.settings, secure_cookies=False)
         with TestClient(
