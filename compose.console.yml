@@ -4,6 +4,8 @@ x-common: &common
     context: .
     dockerfile: Dockerfile.console
     network: host
+    args:
+      PIP_INDEX_URL: ${SPARK_BUILD_PIP_INDEX_URL:-https://pypi.org/simple}
   restart: unless-stopped
   env_file: .env.console
   volumes:
