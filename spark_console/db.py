@@ -26,6 +26,7 @@ def create_engine_for(settings: Settings) -> Engine:
 
 
 def create_schema(engine: Engine) -> None:
+    """Create all declared tables additively for fresh and existing databases."""
     Base.metadata.create_all(engine)
     with session_scope(engine) as session:
         if session.get(WorkerLock, 1) is None:

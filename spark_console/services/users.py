@@ -12,6 +12,15 @@ from spark_console.services import Conflict, NotFound, ValidationError
 from spark_console.services.audits import AuditService
 
 
+def validate_registration_password(password: str) -> None:
+    if (
+        len(password) < 10
+        or not any(character.isalpha() for character in password)
+        or not any(character.isdigit() for character in password)
+    ):
+        raise ValidationError("注册信息或邀请码无效")
+
+
 class UserService:
     def __init__(self, session: Session, passwords: PasswordService, audit: AuditService):
         self.session = session

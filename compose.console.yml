@@ -32,6 +32,12 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+  spark-auth:
+    <<: *common
+    command: [python, -m, spark_console.auth_worker]
+    mem_limit: 768m
+    cpus: 1.0
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]
   spark-worker:
     <<: *common
     command: [python, -m, spark_console.worker]

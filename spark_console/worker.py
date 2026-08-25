@@ -12,7 +12,7 @@ from spark_console.config import Settings
 from spark_console.crypto import CookieCipher
 from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.executor import DouyinExecutor
-from spark_console.models import SparkTask
+from spark_console.models import DouyinAccount, SparkTask
 from spark_console.scheduler import claim_next_due_task, finish_run
 from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
@@ -40,9 +40,16 @@ class Worker:
             if current_time - scheduled > timedelta(minutes=10):
                 return finish_run(run, "skipped", "late", current_time, "missed_window", "任务已超过 10 分钟发送窗口")
             account_service = AccountService(db, self.cipher, AuditService(db))
+            account = db.get(DouyinAccount, task.douyin_account_id)
+            credential_version = account.cookie_version
             cookies = account_service.decrypt_for_worker(task.douyin_account_id)
             try:
-                result = await self.executor.execute(cookies, task.target_name, task.message_template)
+                result = await self.executor.execute(
+                    cookies,
+                    task.target_name,
+                    task.message_template,
+                    credential_version=credential_version,
+                )
             finally:
                 cookies[:] = b"\0" * len(cookies)
                 cookies.clear()

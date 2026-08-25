@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from enum import StrEnum
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, LargeBinary, String, Text, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -47,6 +48,60 @@ class DouyinAccount(Base):
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class ScanStatus(StrEnum):
+    QUEUED = "queued"
+    LOADING_QR = "loading_qr"
+    AWAITING_SCAN = "awaiting_scan"
+    CONFIRMING = "confirming"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
+
+
+class InviteCode(Base):
+    __tablename__ = "invite_codes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DouyinLoginSession(Base):
+    __tablename__ = "douyin_login_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    owner_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    slot: Mapped[str | None] = mapped_column(String(16), unique=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default=ScanStatus.QUEUED)
+    qr_png: Mapped[bytes | None] = mapped_column(LargeBinary)
+    account_id: Mapped[str | None] = mapped_column(ForeignKey("douyin_accounts.id", ondelete="SET NULL"))
+    error_code: Mapped[str | None] = mapped_column(String(48))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DouyinAccountIdentity(Base):
+    __tablename__ = "douyin_account_identities"
+
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("douyin_accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    douyin_unique_id: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class SparkTask(Base):
