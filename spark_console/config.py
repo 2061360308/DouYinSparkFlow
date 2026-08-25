@@ -47,4 +47,3 @@ class Settings:
                 environ.get("SPARK_CLOCK_OFFSET_LIMIT_SECONDS", "5")
             ),
         )
-

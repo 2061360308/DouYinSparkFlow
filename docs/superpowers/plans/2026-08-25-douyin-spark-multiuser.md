@@ -112,7 +112,7 @@ class DatabaseTests(unittest.TestCase):
 
 - [ ] **Step 2: Run the focused tests and verify RED**
 
-Run: `python -m unittest -v tests.console.test_config_db`  
+Run: `python -m unittest -v tests.console.test_config_db`
 Expected: import failure because `spark_console.config`, `db`, and `models` do not exist.
 
 - [ ] **Step 3: Add pinned console dependencies**
@@ -159,7 +159,7 @@ Implement UUID primary keys, UTC timestamps, the six specified tables, foreign k
 
 - [ ] **Step 5: Run focused and full tests and verify GREEN**
 
-Run: `python -m unittest -v tests.console.test_config_db && python -m unittest discover -s tests -v`  
+Run: `python -m unittest -v tests.console.test_config_db && python -m unittest discover -s tests -v`
 Expected: all tests pass with no warnings containing credential values.
 
 - [ ] **Step 6: Commit the foundation**
@@ -204,7 +204,7 @@ class SessionTests(unittest.TestCase):
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m unittest -v tests.console.test_crypto_security`  
+Run: `python -m unittest -v tests.console.test_crypto_security`
 Expected: import failure for `CookieCipher` and `SessionService`.
 
 - [ ] **Step 3: Implement AES-256-GCM and security services**
@@ -233,7 +233,7 @@ Use Argon2id defaults from `argon2.PasswordHasher`, 32-byte URL-safe session tok
 
 - [ ] **Step 4: Run focused and full tests and verify GREEN**
 
-Run: `python -m unittest -v tests.console.test_crypto_security && python -m unittest discover -s tests -v`  
+Run: `python -m unittest -v tests.console.test_crypto_security && python -m unittest discover -s tests -v`
 Expected: all tests pass.
 
 - [ ] **Step 5: Commit security boundaries**
@@ -278,7 +278,7 @@ def test_deleting_account_erases_cookie_and_disables_tasks(self):
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m unittest -v tests.console.test_services`  
+Run: `python -m unittest -v tests.console.test_services`
 Expected: import failure for the service classes.
 
 - [ ] **Step 3: Implement strict service boundaries**
@@ -311,7 +311,7 @@ Never expose `encrypted_cookies` or `cookie_nonce` from a service response. Impl
 
 - [ ] **Step 4: Run focused and full tests and verify GREEN**
 
-Run: `python -m unittest -v tests.console.test_services && python -m unittest discover -s tests -v`  
+Run: `python -m unittest -v tests.console.test_services && python -m unittest discover -s tests -v`
 Expected: all tests pass.
 
 - [ ] **Step 5: Commit service layer**
@@ -366,7 +366,7 @@ def test_cookie_value_never_appears_after_account_save(self):
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m unittest -v tests.console.test_web_user`  
+Run: `python -m unittest -v tests.console.test_web_user`
 Expected: import failure for `create_app`.
 
 - [ ] **Step 3: Implement FastAPI application and routes**
@@ -406,7 +406,7 @@ Build responsive sidebar/bottom navigation, task forms, status pills with text a
 
 - [ ] **Step 5: Run focused and full tests and verify GREEN**
 
-Run: `python -m unittest -v tests.console.test_web_user && python -m unittest discover -s tests -v`  
+Run: `python -m unittest -v tests.console.test_web_user && python -m unittest discover -s tests -v`
 Expected: all tests pass; rendered HTML contains no Cookie values.
 
 - [ ] **Step 6: Commit user console**
@@ -450,7 +450,7 @@ async def test_missing_target_raises_and_cannot_report_success(self):
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m unittest -v tests.test_web_chat tests.console.test_executor`  
+Run: `python -m unittest -v tests.test_web_chat tests.console.test_executor`
 Expected: search behavior or executor imports fail.
 
 - [ ] **Step 3: Implement search-first selection with scroll fallback**
@@ -539,7 +539,7 @@ Replace the ellipsis during implementation with the complete existing Playwright
 
 - [ ] **Step 5: Run focused and full tests and verify GREEN**
 
-Run: `python -m unittest -v tests.test_web_chat tests.test_tasks tests.console.test_executor && python -m unittest discover -s tests -v`  
+Run: `python -m unittest -v tests.test_web_chat tests.test_tasks tests.console.test_executor && python -m unittest discover -s tests -v`
 Expected: all tests pass.
 
 - [ ] **Step 6: Commit execution behavior**
@@ -584,7 +584,7 @@ def test_run_more_than_ten_minutes_late_is_skipped(self):
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m unittest -v tests.console.test_scheduler_worker`  
+Run: `python -m unittest -v tests.console.test_scheduler_worker`
 Expected: import failure for scheduler and worker symbols.
 
 - [ ] **Step 3: Implement UTC scheduling and transactional claims**
@@ -624,7 +624,7 @@ The process loop sleeps using an interruptible event, handles SIGTERM, releases 
 
 - [ ] **Step 5: Run focused and full tests and verify GREEN**
 
-Run: `python -m unittest -v tests.console.test_scheduler_worker && python -m unittest discover -s tests -v`  
+Run: `python -m unittest -v tests.console.test_scheduler_worker && python -m unittest discover -s tests -v`
 Expected: all tests pass.
 
 - [ ] **Step 6: Commit scheduler and worker**
@@ -668,7 +668,7 @@ def test_delete_requires_recent_password_elevation_and_name_confirmation(self):
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m unittest -v tests.console.test_web_admin`  
+Run: `python -m unittest -v tests.console.test_web_admin`
 Expected: admin routes are missing.
 
 - [ ] **Step 3: Implement admin routes and views**
@@ -690,7 +690,7 @@ Render queue state, next run, last success, failure stage, and actionable redact
 
 - [ ] **Step 4: Run focused and full tests and verify GREEN**
 
-Run: `python -m unittest -v tests.console.test_web_admin && python -m unittest discover -s tests -v`  
+Run: `python -m unittest -v tests.console.test_web_admin && python -m unittest discover -s tests -v`
 Expected: all tests pass.
 
 - [ ] **Step 5: Commit administrator console**
@@ -732,7 +732,7 @@ def test_backup_uses_timestamped_private_file(self):
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m unittest -v tests.console.test_cli`  
+Run: `python -m unittest -v tests.console.test_cli`
 Expected: CLI module or commands are missing.
 
 - [ ] **Step 3: Implement safe operational commands**
@@ -755,7 +755,7 @@ Document secret generation with binary files, loopback-only start, admin creatio
 
 - [ ] **Step 5: Run focused and full tests and verify GREEN**
 
-Run: `python -m unittest -v tests.console.test_cli && python -m unittest discover -s tests -v`  
+Run: `python -m unittest -v tests.console.test_cli && python -m unittest discover -s tests -v`
 Expected: all tests pass.
 
 - [ ] **Step 6: Commit operational tooling**
@@ -799,7 +799,7 @@ def test_worker_is_single_concurrency_and_resource_limited(self):
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m unittest -v tests.console.test_deployment_contract`  
+Run: `python -m unittest -v tests.console.test_deployment_contract`
 Expected: `compose.console.yml` is missing.
 
 - [ ] **Step 3: Implement shared Playwright image**
@@ -842,12 +842,12 @@ Complete both services with the private data volume, private network, read-only 
 
 - [ ] **Step 5: Verify Docker contracts and build locally**
 
-Run: `python -m unittest -v tests.console.test_deployment_contract && docker compose -f compose.console.yml config && docker build -f Dockerfile.console -t douyin-spark-console:test .`  
+Run: `python -m unittest -v tests.console.test_deployment_contract && docker compose -f compose.console.yml config && docker build -f Dockerfile.console -t douyin-spark-console:test .`
 Expected: tests pass, Compose config succeeds without secret values, and image builds successfully.
 
 - [ ] **Step 6: Run the complete test suite in the image**
 
-Run: `docker run --rm douyin-spark-console:test python -m unittest discover -s tests -v`  
+Run: `docker run --rm douyin-spark-console:test python -m unittest discover -s tests -v`
 Expected: all tests pass.
 
 - [ ] **Step 7: Commit deployment artifacts**
@@ -886,7 +886,7 @@ def test_example_files_contain_no_credential_values(self):
 
 - [ ] **Step 2: Run test and verify RED if ignore rules or docs are incomplete**
 
-Run: `python -m unittest -v tests.console.test_secret_regression`  
+Run: `python -m unittest -v tests.console.test_secret_regression`
 Expected: fail until runtime paths and example values are excluded or sanitized.
 
 - [ ] **Step 3: Complete README and ignore rules**
@@ -950,7 +950,7 @@ Expected: remote branch is created without changing `main`.
 
 - [ ] **Step 1: Capture read-only preflight evidence**
 
-Run on server: Docker container IDs/images/health, `curl http://127.0.0.1:8888/`, `free -h`, `df -h /`, Docker disk usage, open ports, current timers, system clock offset, and target path resolution.  
+Run on server: Docker container IDs/images/health, `curl http://127.0.0.1:8888/`, `free -h`, `df -h /`, Docker disk usage, open ports, current timers, system clock offset, and target path resolution.
 Expected: five BPS containers unchanged, MySQL healthy, HTTP response unchanged, at least 5 GiB free, and no existing `/opt/douyin-spark-console` collision.
 
 - [ ] **Step 2: Stop if time or storage gate fails**
@@ -959,7 +959,7 @@ If UTC offset exceeds 5 seconds, report the exact offset and request separate ap
 
 - [ ] **Step 3: Install the private deployment without enabling Worker**
 
-Clone/fetch `feat/multiuser-console` into `/opt/douyin-spark-console`, create root-owned `0600` binary key files, create a sanitized environment file, build the image, and start only `spark-web` bound to `127.0.0.1:8899`.  
+Clone/fetch `feat/multiuser-console` into `/opt/douyin-spark-console`, create root-owned `0600` binary key files, create a sanitized environment file, build the image, and start only `spark-web` bound to `127.0.0.1:8899`.
 Expected: `/health/ready` is 200 over loopback; no public listener and no BPS resource changes.
 
 - [ ] **Step 4: Create administrator and import legacy accounts**
@@ -968,7 +968,7 @@ Use CLI prompts for the initial admin password so it is not placed in command hi
 
 - [ ] **Step 5: Run no-send account validation**
 
-Run `verify-account --no-send` for each imported account.  
+Run `verify-account --no-send` for each imported account.
 Expected: login valid and exact target found for both accounts; no editor interaction, message submission, screenshot with private chat contents, or service start.
 
 - [ ] **Step 6: Present cutover checkpoint and wait for explicit approval**
