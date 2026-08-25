@@ -182,6 +182,14 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn("code_hash", InviteCode.__table__.columns)
         self.assertNotIn("code", InviteCode.__table__.columns)
 
+    def test_invite_plaintext_uses_separate_encrypted_secret_table(self):
+        table = InviteCode.metadata.tables.get("invite_code_secrets")
+
+        self.assertIsNotNone(table)
+        self.assertEqual(
+            {"invite_id", "ciphertext", "nonce"}, set(table.columns.keys())
+        )
+
     def test_invite_persists_creator_and_consumer_foreign_keys(self):
         with session_scope(self.engine) as session:
             creator = User(username="creator", password_hash="hash", role="admin")

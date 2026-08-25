@@ -70,6 +70,47 @@ class UserWebTests(unittest.TestCase):
         )
         self.assertEqual(403, response.status_code)
 
+    def test_logged_in_user_has_change_password_navigation(self):
+        self.login()
+        page = self.client.get("/change-password")
+        marker = 'name="csrf_token" value="'
+        csrf = page.text.split(marker, 1)[1].split('"', 1)[0]
+        self.client.post(
+            "/change-password",
+            data={
+                "csrf_token": csrf,
+                "current_password": "Temporary-123!",
+                "new_password": "Permanent-123!",
+                "new_password_confirmation": "Permanent-123!",
+            },
+        )
+
+        dashboard = self.client.get("/dashboard")
+        change_page = self.client.get("/change-password")
+
+        self.assertIn('href="/change-password"', dashboard.text)
+        self.assertIn("修改密码", change_page.text)
+        self.assertIn('name="new_password_confirmation"', change_page.text)
+
+    def test_change_password_rejects_mismatched_confirmation(self):
+        self.login()
+        page = self.client.get("/change-password")
+        marker = 'name="csrf_token" value="'
+        csrf = page.text.split(marker, 1)[1].split('"', 1)[0]
+
+        response = self.client.post(
+            "/change-password",
+            data={
+                "csrf_token": csrf,
+                "current_password": "Temporary-123!",
+                "new_password": "Permanent-123!",
+                "new_password_confirmation": "Different-123!",
+            },
+        )
+
+        self.assertEqual(400, response.status_code)
+        self.assertIn("两次输入的新密码不一致", response.text)
+
     def test_wrong_password_renders_visible_login_error(self):
         response = self.client.post(
             "/login",
@@ -126,6 +167,7 @@ class UserWebTests(unittest.TestCase):
                 "csrf_token": csrf,
                 "current_password": "Temporary-123!",
                 "new_password": "Permanent-123!",
+                "new_password_confirmation": "Permanent-123!",
             },
         )
         page = self.client.get("/accounts")

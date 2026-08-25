@@ -174,6 +174,22 @@ class DouyinQrScanner:
                         qr = panel.locator(qr_selector).first
                         if await qr.is_visible():
                             return qr
+                for qr in await page.locator("img, canvas").all():
+                    if not await qr.is_visible():
+                        continue
+                    box = await qr.bounding_box()
+                    if box is None:
+                        continue
+                    width, height = box["width"], box["height"]
+                    if not (150 <= width <= 220 and 150 <= height <= 220):
+                        continue
+                    if abs(width - height) > 8:
+                        continue
+                    if await qr.evaluate(
+                        'element => Boolean(element.closest("[class*=feature]"))'
+                    ):
+                        continue
+                    return qr
             except ScanCancelled:
                 raise
             except Exception:

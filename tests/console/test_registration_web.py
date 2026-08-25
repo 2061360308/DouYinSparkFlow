@@ -201,7 +201,7 @@ class RegistrationWebTests(unittest.TestCase):
         self.assertIn("注册并返回登录", response.text)
         self.assertNotIn("注册并登录", response.text)
 
-    def test_invite_generation_is_admin_only_and_displays_code_once(self):
+    def test_invite_generation_is_admin_only_and_remains_visible_encrypted(self):
         self.login("friend", "FriendPass123")
         denied = self.client.post("/admin/invites", data={"csrf_token": "anything"})
         self.assertEqual(404, denied.status_code)
@@ -215,7 +215,7 @@ class RegistrationWebTests(unittest.TestCase):
         self.assertGreaterEqual(len(code), 24)
         self.assertIn(code, generated.text)
         refreshed = self.client.get("/admin")
-        self.assertNotIn(code, refreshed.text)
+        self.assertIn(code, refreshed.text)
         with Session(self.engine) as session:
             self.assertIsNotNone(
                 session.scalar(
@@ -224,6 +224,34 @@ class RegistrationWebTests(unittest.TestCase):
                     )
                 )
             )
+
+    def test_admin_can_delete_an_invite_with_csrf(self):
+        with session_scope(self.engine) as session:
+            invite, _code = InviteService(session, AuditService(session)).create(
+                self.admin.id
+            )
+            invite_id = invite.id
+        self.login()
+
+        response = self.client.post(
+            f"/admin/invites/{invite_id}/delete",
+            data={"csrf_token": self.csrf_for()},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(303, response.status_code)
+        with Session(self.engine) as session:
+            self.assertIsNone(session.get(InviteCode, invite_id))
+
+    def test_admin_invites_offer_manual_and_automatic_status_refresh(self):
+        self.login()
+
+        response = self.client.get("/admin")
+
+        self.assertIn("刷新状态", response.text)
+        self.assertIn("setTimeout", response.text)
+        self.assertIn("/admin/invites/", response.text)
+        self.assertIn("/delete", response.text)
 
     def test_invite_revoke_requires_csrf(self):
         with session_scope(self.engine) as session:

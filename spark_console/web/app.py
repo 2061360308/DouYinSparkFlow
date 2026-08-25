@@ -47,7 +47,9 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         )
 
     app.include_router(
-        build_registration_router(engine, passwords, registration_limiter, auth, page)
+        build_registration_router(
+            engine, passwords, registration_limiter, auth, page, cipher
+        )
     )
     app.include_router(build_account_scan_router(engine, auth, cipher))
 
@@ -124,7 +126,15 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     def change_password_page(request: Request):
         with session_scope(engine) as db:
             user, record = auth.current(request, db, allow_change=True)
-            return page(request, "change_password.html", title="设置新密码", nav=False, user=user, csrf_token=record.csrf_token)
+            return page(
+                request,
+                "change_password.html",
+                title="设置新密码" if user.must_change_password else "修改密码",
+                nav=not user.must_change_password,
+                user=user,
+                csrf_token=record.csrf_token,
+                is_admin=user.role == "admin",
+            )
 
     @app.post("/change-password")
     def change_password(
@@ -132,13 +142,49 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         csrf_token: str = Form(default=""),
         current_password: str = Form(),
         new_password: str = Form(),
+        new_password_confirmation: str = Form(default=""),
     ):
         with session_scope(engine) as db:
             user, record = auth.current(request, db, allow_change=True)
             auth.csrf(record, csrf_token)
             if not passwords.verify(user.password_hash, current_password):
-                raise HTTPException(400, "当前密码错误")
-            user.password_hash = passwords.hash(new_password)
+                return page(
+                    request,
+                    "change_password.html",
+                    400,
+                    title="修改密码",
+                    nav=not user.must_change_password,
+                    user=user,
+                    csrf_token=record.csrf_token,
+                    is_admin=user.role == "admin",
+                    error="当前密码错误",
+                )
+            if new_password != new_password_confirmation:
+                return page(
+                    request,
+                    "change_password.html",
+                    400,
+                    title="修改密码",
+                    nav=not user.must_change_password,
+                    user=user,
+                    csrf_token=record.csrf_token,
+                    is_admin=user.role == "admin",
+                    error="两次输入的新密码不一致",
+                )
+            try:
+                user.password_hash = passwords.hash(new_password)
+            except ValueError:
+                return page(
+                    request,
+                    "change_password.html",
+                    400,
+                    title="修改密码",
+                    nav=not user.must_change_password,
+                    user=user,
+                    csrf_token=record.csrf_token,
+                    is_admin=user.role == "admin",
+                    error="新密码至少需要 12 位",
+                )
             user.must_change_password = False
         return RedirectResponse("/dashboard", status_code=303)
 
@@ -220,7 +266,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             users = db.scalars(select(User).order_by(User.created_at)).all()
             tasks = db.execute(select(SparkTask, User).join(User, SparkTask.owner_user_id == User.id).order_by(SparkTask.send_time)).all()
             runs = db.scalars(select(TaskRun).order_by(TaskRun.scheduled_for.desc()).limit(20)).all()
-            invites = admin_invite_items(db)
+            invites = admin_invite_items(db, cipher)
             return page(request, "admin.html", title="管理后台", users=users, tasks=tasks, runs=runs, invites=invites, **context)
 
     @app.post("/admin/users")
@@ -232,7 +278,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             _user, temporary = service.create(username)
             users = db.scalars(select(User).order_by(User.created_at)).all()
             tasks = db.execute(select(SparkTask, User).join(User, SparkTask.owner_user_id == User.id).order_by(SparkTask.send_time)).all()
-            invites = admin_invite_items(db)
+            invites = admin_invite_items(db, cipher)
             return page(request, "admin.html", title="管理后台", users=users, tasks=tasks, runs=[], invites=invites, one_time_password=temporary, **context)
 
     @app.post("/admin/users/{user_id}/toggle")

@@ -7,7 +7,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from spark_console.models import InviteCode, utc_now
+from spark_console.crypto import CookieCipher
+from spark_console.models import InviteCode, InviteCodeSecret, utc_now
 from spark_console.services import ValidationError
 from spark_console.services.audits import AuditService
 
@@ -17,9 +18,16 @@ def _digest(code: str) -> str:
 
 
 class InviteService:
-    def __init__(self, session: Session, audit: AuditService, now=utc_now):
+    def __init__(
+        self,
+        session: Session,
+        audit: AuditService,
+        cipher: CookieCipher | None = None,
+        now=utc_now,
+    ):
         self.session = session
         self.audit = audit
+        self.cipher = cipher
         self.now = now
 
     def _now(self) -> datetime:
@@ -41,8 +49,32 @@ class InviteService:
         )
         self.session.add(invite)
         self.session.flush()
+        if self.cipher is not None:
+            encrypted = self.cipher.encrypt(plaintext.encode("utf-8"))
+            self.session.add(
+                InviteCodeSecret(
+                    invite_id=invite.id,
+                    ciphertext=encrypted.ciphertext,
+                    nonce=encrypted.nonce,
+                )
+            )
         self.audit.write(actor_id, "invite.created", "invite_code", invite.id)
         return invite, plaintext
+
+    def reveal(self, invite_id: str) -> str | None:
+        if self.cipher is None:
+            return None
+        secret = self.session.get(InviteCodeSecret, invite_id)
+        invite = self.session.get(InviteCode, invite_id)
+        if secret is None or invite is None:
+            return None
+        try:
+            plaintext = self.cipher.decrypt(secret.ciphertext, secret.nonce).decode(
+                "utf-8"
+            )
+        except (ValueError, UnicodeDecodeError):
+            return None
+        return plaintext if _digest(plaintext) == invite.code_hash else None
 
     def consume(self, code: str, user_id: str) -> None:
         invite = self.session.scalar(
@@ -93,3 +125,11 @@ class InviteService:
         if invite is not None:
             self.session.expire(invite)
         self.audit.write(actor_id, "invite.revoked", "invite_code", invite_id)
+
+    def delete(self, actor_id: str, invite_id: str) -> None:
+        invite = self.session.get(InviteCode, invite_id)
+        if invite is None:
+            raise ValidationError("注册信息或邀请码无效")
+        self.session.delete(invite)
+        self.session.flush()
+        self.audit.write(actor_id, "invite.deleted", "invite_code", invite_id)

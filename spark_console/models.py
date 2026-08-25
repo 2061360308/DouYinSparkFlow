@@ -78,6 +78,16 @@ class InviteCode(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class InviteCodeSecret(Base):
+    __tablename__ = "invite_code_secrets"
+
+    invite_id: Mapped[str] = mapped_column(
+        ForeignKey("invite_codes.id", ondelete="CASCADE"), primary_key=True
+    )
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+
+
 class DouyinLoginSession(Base):
     __tablename__ = "douyin_login_sessions"
 

@@ -5,8 +5,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from spark_console.crypto import CookieCipher
 from spark_console.db import create_schema
-from spark_console.models import AuditEvent, InviteCode
+from spark_console.models import AuditEvent, InviteCode, InviteCodeSecret
 from spark_console.rate_limit import FailedAttemptLimiter
 from spark_console.security import PasswordService
 from spark_console.services import ValidationError
@@ -44,6 +45,26 @@ class InviteServiceTests(unittest.TestCase):
             plaintext,
             " ".join(e.detail or "" for e in self.session.scalars(select(AuditEvent))),
         )
+
+    def test_invite_plaintext_is_encrypted_and_can_be_revealed_by_admin_service(self):
+        self.invites.cipher = CookieCipher(b"i" * 32)
+
+        invite, plaintext = self.invites.create(self.admin.id)
+        secret = self.session.get(InviteCodeSecret, invite.id)
+
+        self.assertIsNotNone(secret)
+        self.assertNotIn(plaintext.encode(), secret.ciphertext)
+        self.assertEqual(plaintext, self.invites.reveal(invite.id))
+
+    def test_admin_can_delete_an_invite_without_deleting_the_consuming_user(self):
+        invite, plaintext = self.invites.create(self.admin.id)
+        self.invites.consume(plaintext, self.user.id)
+
+        self.assertTrue(hasattr(self.invites, "delete"))
+        self.invites.delete(self.admin.id, invite.id)
+
+        self.assertIsNone(self.session.get(InviteCode, invite.id))
+        self.assertIsNotNone(self.session.get(type(self.user), self.user.id))
 
     def test_invite_can_be_consumed_only_once(self):
         invite, plaintext = self.invites.create(self.admin.id)

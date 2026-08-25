@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from spark_console.db import session_scope
+from spark_console.crypto import CookieCipher
 from spark_console.rate_limit import FailedAttemptLimiter
 from spark_console.security import PasswordService
 from spark_console.services import Conflict, ValidationError
@@ -29,6 +30,7 @@ class AdminInvite:
     status: str
     used_by_username: str | None
     can_revoke: bool
+    code: str | None
 
 
 def registration_client_key(request: Request) -> str:
@@ -41,7 +43,14 @@ def registration_client_key(request: Request) -> str:
     return request.client.host if request.client is not None else "unknown"
 
 
-def build_registration_router(engine, passwords: PasswordService, limiter: FailedAttemptLimiter, auth: WebAuth, page) -> APIRouter:
+def build_registration_router(
+    engine,
+    passwords: PasswordService,
+    limiter: FailedAttemptLimiter,
+    auth: WebAuth,
+    page,
+    cipher: CookieCipher,
+) -> APIRouter:
     router = APIRouter()
 
     @router.get("/register")
@@ -68,7 +77,9 @@ def build_registration_router(engine, passwords: PasswordService, limiter: Faile
                     username, password, "user"
                 )
                 user.must_change_password = False
-                InviteService(db, AuditService(db)).consume(invite_code, user.id)
+                InviteService(db, AuditService(db), cipher).consume(
+                    invite_code, user.id
+                )
         except (ValidationError, Conflict, IntegrityError, ValueError):
             limiter.record_failure(key)
             return page(request, "register.html", 400, title="注册", nav=False, error=PUBLIC_ERROR)
@@ -80,8 +91,8 @@ def build_registration_router(engine, passwords: PasswordService, limiter: Faile
         with session_scope(engine) as db:
             admin, record, context = auth.admin_context(request, db)
             auth.csrf(record, csrf_token)
-            _invite, plaintext = InviteService(db, AuditService(db)).create(admin.id)
-            invites = admin_invite_items(db)
+            InviteService(db, AuditService(db), cipher).create(admin.id)
+            invites = admin_invite_items(db, cipher)
             users, tasks, runs = _admin_page_data(db)
             return page(
                 request,
@@ -91,7 +102,6 @@ def build_registration_router(engine, passwords: PasswordService, limiter: Faile
                 tasks=tasks,
                 runs=runs,
                 invites=invites,
-                one_time_invite=plaintext,
                 **context,
             )
 
@@ -103,9 +113,26 @@ def build_registration_router(engine, passwords: PasswordService, limiter: Faile
             admin, record, _context = auth.admin_context(request, db)
             auth.csrf(record, csrf_token)
             try:
-                InviteService(db, AuditService(db)).revoke(admin.id, invite_id)
+                InviteService(db, AuditService(db), cipher).revoke(
+                    admin.id, invite_id
+                )
             except ValidationError as error:
                 raise HTTPException(400, str(error)) from error
+        return RedirectResponse("/admin", 303)
+
+    @router.post("/admin/invites/{invite_id}/delete")
+    def delete_invite(
+        request: Request, invite_id: str, csrf_token: str = Form(default="")
+    ):
+        with session_scope(engine) as db:
+            admin, record, _context = auth.admin_context(request, db)
+            auth.csrf(record, csrf_token)
+            try:
+                InviteService(db, AuditService(db), cipher).delete(
+                    admin.id, invite_id
+                )
+            except ValidationError as error:
+                raise HTTPException(404, "邀请码不存在") from error
         return RedirectResponse("/admin", 303)
 
     return router
@@ -122,7 +149,9 @@ def _admin_page_data(db):
     return users, tasks, runs
 
 
-def admin_invite_items(db) -> list[AdminInvite]:
+def admin_invite_items(
+    db, cipher: CookieCipher | None = None
+) -> list[AdminInvite]:
     now = datetime.now(timezone.utc)
     rows = db.execute(
         select(InviteCode, User.username)
@@ -130,6 +159,7 @@ def admin_invite_items(db) -> list[AdminInvite]:
         .order_by(InviteCode.created_at.desc())
     ).all()
     items = []
+    service = InviteService(db, AuditService(db), cipher)
     for invite, username in rows:
         expires_at = invite.expires_at
         if expires_at.tzinfo is None:
@@ -148,6 +178,7 @@ def admin_invite_items(db) -> list[AdminInvite]:
                 status=status,
                 used_by_username=username,
                 can_revoke=status == "有效",
+                code=service.reveal(invite.id),
             )
         )
     return items

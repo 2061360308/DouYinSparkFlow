@@ -24,11 +24,14 @@ PNG = b"\x89PNG\r\n\x1a\nscanner-fixture"
 
 
 class _Locator:
-    def __init__(self, *, visible=False, png=None, text="", children=None):
+    def __init__(self, *, visible=False, png=None, text="", children=None, items=None, box=None, decorative=False):
         self.visible = visible
         self.png = png
         self.text = text
         self.children = children or {}
+        self.items = items or []
+        self.box = box
+        self.decorative = decorative
 
     @property
     def first(self):
@@ -46,9 +49,18 @@ class _Locator:
     async def inner_text(self, **_kwargs):
         return self.text
 
+    async def all(self):
+        return self.items
+
+    async def bounding_box(self):
+        return self.box
+
+    async def evaluate(self, _expression):
+        return self.decorative
+
 
 class _Page:
-    def __init__(self, mode="success", *, qr_visible=True):
+    def __init__(self, mode="success", *, qr_visible=True, semantic_qr=False):
         self.mode = mode
         self.authenticated = asyncio.Event()
         self.never = asyncio.Event()
@@ -56,7 +68,15 @@ class _Page:
         self.qr = _Locator(visible=qr_visible, png=PNG)
         self.panel = _Locator(
             visible=True,
-            children={selector: self.qr for selector in QR_SELECTORS},
+            children={} if semantic_qr else {selector: self.qr for selector in QR_SELECTORS},
+        )
+        self.semantic_candidates = _Locator(
+            items=[
+                _Locator(visible=True, png=PNG, box={"width": 180, "height": 180}, decorative=True),
+                _Locator(visible=True, png=PNG, box={"width": 178, "height": 178}),
+            ]
+            if semantic_qr
+            else []
         )
 
     async def goto(self, *_args, **_kwargs):
@@ -66,6 +86,8 @@ class _Page:
         return None
 
     def locator(self, selector):
+        if selector == "img, canvas":
+            return self.semantic_candidates
         if selector == LOGIN_PANEL_SELECTORS[0]:
             return self.panel
         if selector == DISPLAY_NAME_SELECTOR:
@@ -169,11 +191,12 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         mode="success",
         *,
         qr_visible=True,
+        semantic_qr=False,
         fail_storage_state=False,
         qr_timeout_seconds=0.01,
         login_timeout_seconds=0.2,
     ):
-        page = _Page(mode, qr_visible=qr_visible)
+        page = _Page(mode, qr_visible=qr_visible, semantic_qr=semantic_qr)
         context = _Context(page, fail_storage_state=fail_storage_state)
         browser = _Browser(context)
         scanner = DouyinQrScanner(
@@ -183,6 +206,19 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
             poll_interval_seconds=0,
         )
         return scanner, browser, context
+
+    async def test_randomized_square_qr_is_found_without_qrcode_class(self):
+        scanner, browser, context = self._scanner(semantic_qr=True)
+        qr_images = []
+
+        try:
+            await scanner.run(qr_images.append, lambda _value: None, lambda: False)
+        except QrLoadFailed:
+            self.fail("randomized square QR should be discovered")
+
+        self.assertEqual([PNG], qr_images)
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
 
     async def test_scanner_returns_account_after_qr_and_mobile_confirmation(self):
         scanner, browser, context = self._scanner()
