@@ -11,6 +11,10 @@ from spark_console.executor import DouyinExecutor
 
 
 _PLAYWRIGHT_INVALID_LEGACY_LOCATIONS = {
+    "domain_leading_combining_idna": {
+        "domain": "\u0301a.com",
+        "path": "/",
+    },
     "domain_percent": {"domain": "%", "path": "/"},
     "domain_encoded_colon": {"domain": "foo%3Abar", "path": "/"},
     "domain_at": {"domain": "@", "path": "/"},
@@ -24,6 +28,7 @@ _PLAYWRIGHT_INVALID_LEGACY_LOCATIONS = {
     "url_short_numeric": {"url": "http://999.999.999/"},
     "url_overflow_ipv4": {"url": "http://999.999.999.999/"},
     "url_overflow_ipv4_dot": {"url": "http://256.1.1.1./"},
+    "url_leading_combining_idna": {"url": "http://\u0301a.com/"},
 }
 
 
@@ -168,6 +173,80 @@ class CredentialPayloadTests(unittest.TestCase):
                 raw = json.dumps([cookie], separators=(",", ":")).encode()
                 with self.assertRaises(CredentialError):
                     CredentialPayload.parse(raw, 1)
+
+    def test_both_versions_reject_leading_combining_idna_with_fixed_error(self):
+        invalid_hosts = {
+            "first_label": "\u0301a.com",
+            "later_label": "a.\u0301b",
+        }
+        expected_error_digest = (
+            "76ad6d4bd91704539d13dd7575172491eb024803cd6861f7f68f2b52a3fd4441"
+        )
+
+        for host_case, host in invalid_hosts.items():
+            storage_cookie = {
+                "name": "probe",
+                "value": "x",
+                "domain": host,
+                "path": "/",
+                "expires": -1,
+                "httpOnly": True,
+                "secure": True,
+                "sameSite": "Lax",
+            }
+            fixtures = {
+                "legacy_domain": (
+                    json.dumps(
+                        [
+                            {
+                                "name": "probe",
+                                "value": "x",
+                                "domain": host,
+                                "path": "/",
+                            }
+                        ]
+                    ).encode(),
+                    1,
+                ),
+                "legacy_url": (
+                    json.dumps(
+                        [
+                            {
+                                "name": "probe",
+                                "value": "x",
+                                "url": f"http://{host}/",
+                            }
+                        ]
+                    ).encode(),
+                    1,
+                ),
+                "storage_state": (
+                    json.dumps(
+                        {
+                            "version": 2,
+                            "storage_state": {
+                                "cookies": [storage_cookie],
+                                "origins": [],
+                            },
+                        },
+                        separators=(",", ":"),
+                    ).encode(),
+                    2,
+                ),
+            }
+
+            for path_case, (raw, version) in fixtures.items():
+                with self.subTest(
+                    host_case=host_case,
+                    path_case=path_case,
+                    payload_size=len(raw),
+                ):
+                    with self.assertRaises(CredentialError) as caught:
+                        CredentialPayload.parse(raw, version)
+                    error_digest = hashlib.sha256(
+                        str(caught.exception).encode()
+                    ).hexdigest()
+                    self.assertEqual(expected_error_digest, error_digest)
 
     def test_both_versions_normalize_lone_surrogate_hosts_to_credential_error(self):
         invalid_payloads = (

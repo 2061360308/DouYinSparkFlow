@@ -108,7 +108,10 @@ def _canonical_host(value: str, *, allow_ipv6: bool) -> str | None:
     try:
         ascii_host = host.encode("idna").decode("ascii").lower()
         unicode_host = ascii_host.encode("ascii").decode("idna")
-        if unicode_host.encode("idna").decode("ascii").lower() != ascii_host:
+        if any(
+            label and unicodedata.category(label[0]).startswith("M")
+            for label in unicode_host.split(".")
+        ) or unicode_host.encode("idna").decode("ascii").lower() != ascii_host:
             return None
     except UnicodeError:
         return None

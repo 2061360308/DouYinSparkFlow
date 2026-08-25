@@ -141,6 +141,7 @@ class ServiceTests(unittest.TestCase):
     def test_storage_state_rejects_playwright_invalid_domain_before_encryption(self):
         before = len(self.session.scalars(select(DouyinAccount)).all())
         invalid_domains = (
+            "\u0301a.com",
             "foo%3Abar",
             "@",
             "#",
