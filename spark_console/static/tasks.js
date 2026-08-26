@@ -33,5 +33,5 @@
 
   account.addEventListener("change", loadTargets);
   refresh.addEventListener("click", loadTargets);
-  loadTargets();
+  status.textContent = "点击“读取好友列表”读取最近会话；只在需要时访问抖音";
 })();

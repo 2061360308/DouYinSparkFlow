@@ -7,9 +7,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 
 from spark_console.config import Settings
+from spark_console.conversations import ConversationAuthenticationRequired
 from spark_console.crypto import CookieCipher
 from spark_console.db import create_schema, session_scope
-from spark_console.models import User
+from spark_console.models import DouyinAccount, User
 from spark_console.security import PasswordService
 from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
@@ -226,6 +227,7 @@ class UserWebTests(unittest.TestCase):
         captured = {}
 
         async def discoverer(secret, version):
+            captured["calls"] = captured.get("calls", 0) + 1
             captured["secret"] = secret
             captured["version"] = version
             return ["wzlovegsy", "gsy"]
@@ -233,6 +235,9 @@ class UserWebTests(unittest.TestCase):
         self.client.app.state.conversation_discoverer = discoverer
         tasks_page = self.client.get("/tasks")
         response = self.client.get(f"/accounts/{account_id}/conversations")
+        cached_response = self.client.get(
+            f"/accounts/{account_id}/conversations"
+        )
 
         self.assertEqual(200, response.status_code)
         self.assertEqual(
@@ -240,11 +245,32 @@ class UserWebTests(unittest.TestCase):
             response.json(),
         )
         self.assertIn('list="task-target-options"', tasks_page.text)
-        self.assertIn("刷新列表", tasks_page.text)
+        self.assertIn("读取好友列表", tasks_page.text)
+        self.assertEqual(response.json(), cached_response.json())
+        self.assertEqual(1, captured["calls"])
         self.assertEqual(1, captured["version"])
         self.assertTrue(captured["secret"])
         self.assertEqual({0}, set(captured["secret"]))
         self.assertNotIn("secret-marker", response.text)
+
+        async def expired(_secret, _version):
+            raise ConversationAuthenticationRequired()
+
+        self.client.app.state.conversation_cache.clear()
+        self.client.app.state.conversation_discoverer = expired
+        expired_response = self.client.get(
+            f"/accounts/{account_id}/conversations"
+        )
+        self.assertEqual(401, expired_response.status_code)
+        self.assertEqual(
+            "抖音登录已失效，请重新绑定账号",
+            expired_response.json()["message"],
+        )
+        with session_scope(self.engine) as session:
+            self.assertEqual(
+                "invalid",
+                session.get(DouyinAccount, account_id).validation_state,
+            )
 
 
 if __name__ == "__main__":

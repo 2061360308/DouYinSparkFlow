@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from core.web_chat import WEB_CHAT_URL, list_visible_web_chat_targets
+from spark_console.auth_scanner import ACCOUNT_INFO_URL
 from spark_console.credentials import CredentialPayload
+
+
+class ConversationAuthenticationRequired(RuntimeError):
+    """The saved browser state is no longer authenticated by Douyin."""
 
 
 async def discover_conversations(
@@ -19,6 +24,16 @@ async def discover_conversations(
             legacy_cookies = payload.cookies_to_add()
             if legacy_cookies:
                 await context.add_cookies(legacy_cookies)
+            response = await context.request.get(ACCOUNT_INFO_URL, timeout=10_000)
+            body = await response.json()
+            data = body.get("data") if isinstance(body, dict) else None
+            if not (
+                isinstance(data, dict)
+                and body.get("message") == "success"
+                and data.get("error_code") == 0
+                and data.get("user_id")
+            ):
+                raise ConversationAuthenticationRequired()
             page = await context.new_page()
             await page.goto(
                 WEB_CHAT_URL, wait_until="domcontentloaded", timeout=120_000

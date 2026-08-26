@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 from pathlib import Path
 
 import uvicorn
@@ -12,7 +14,10 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
 from spark_console.config import Settings
-from spark_console.conversations import discover_conversations
+from spark_console.conversations import (
+    ConversationAuthenticationRequired,
+    discover_conversations,
+)
 from spark_console.crypto import CookieCipher
 from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.models import DouyinAccount, SparkTask, TaskRun, User
@@ -36,6 +41,8 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     app.state.settings = settings
     app.state.engine = engine
     app.state.conversation_discoverer = discover_conversations
+    app.state.conversation_cache = {}
+    app.state.conversation_locks = {}
     app.mount("/static", StaticFiles(directory=str(PACKAGE_ROOT / "static")), name="static")
     passwords = PasswordService()
     sessions = SessionService(settings.session_key_file.read_bytes())
@@ -221,11 +228,38 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             user, _record = auth.current(request, db)
             service = AccountService(db, cipher, AuditService(db))
             account = service.get_owned(user.id, account_id)
+            owner_id = user.id
             credential_version = account.cookie_version
-            secret = service.decrypt_for_worker(account.id)
+        cached = app.state.conversation_cache.get(account_id)
+        if cached and time.monotonic() - cached[0] < 1800:
+            return {"items": [{"name": target} for target in cached[1]]}
+
+        lock = app.state.conversation_locks.setdefault(account_id, asyncio.Lock())
         try:
-            targets = await app.state.conversation_discoverer(
-                secret, credential_version
+            async with lock:
+                cached = app.state.conversation_cache.get(account_id)
+                if cached and time.monotonic() - cached[0] < 1800:
+                    targets = cached[1]
+                else:
+                    with session_scope(engine) as db:
+                        secret = AccountService(
+                            db, cipher, AuditService(db)
+                        ).decrypt_for_worker(account_id)
+                    targets = await app.state.conversation_discoverer(
+                        secret, credential_version
+                    )
+                    app.state.conversation_cache[account_id] = (
+                        time.monotonic(), targets
+                    )
+        except ConversationAuthenticationRequired:
+            with session_scope(engine) as db:
+                owned = AccountService(
+                    db, cipher, AuditService(db)
+                ).get_owned(owner_id, account_id)
+                owned.validation_state = "invalid"
+            return JSONResponse(
+                {"error": "authentication_required", "message": "抖音登录已失效，请重新绑定账号"},
+                status_code=401,
             )
         except Exception:
             return JSONResponse(
