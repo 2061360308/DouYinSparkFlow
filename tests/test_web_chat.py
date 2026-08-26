@@ -12,8 +12,9 @@ class FakeTitle:
 
 
 class FakeConversation:
-    def __init__(self, title):
+    def __init__(self, title, visible=True):
         self.title = title
+        self.visible = visible
         self.clicked = False
 
     def locator(self, selector):
@@ -21,6 +22,9 @@ class FakeConversation:
 
     async def click(self):
         self.clicked = True
+
+    async def is_visible(self):
+        return self.visible
 
 
 class FakeConversationList:
@@ -32,8 +36,12 @@ class FakeConversationList:
 
 
 class FakeWebChatPage:
-    def __init__(self, titles):
-        self.items = [FakeConversation(title) for title in titles]
+    def __init__(self, titles, visible=None):
+        visible = visible or [True] * len(titles)
+        self.items = [
+            FakeConversation(title, is_visible)
+            for title, is_visible in zip(titles, visible)
+        ]
         self.waited_for = None
 
     async def wait_for_selector(self, selector, *, timeout):
@@ -74,6 +82,62 @@ class WebChatSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("ʚ繁花ɞ🌸", selected)
         self.assertTrue(page.result.clicked)
         self.assertFalse(page.recent_requested)
+
+    async def test_ignores_hidden_duplicate_and_clicks_visible_conversation(self):
+        page = FakeWebChatPage(
+            ["ʚ繁花ɞ🌸", "ʚ繁花ɞ🌸"],
+            visible=[False, True],
+        )
+
+        selected = await select_web_chat_target(page, "ʚ繁花ɞ🌸")
+
+        self.assertEqual("ʚ繁花ɞ🌸", selected)
+        self.assertFalse(page.items[0].clicked)
+        self.assertTrue(page.items[1].clicked)
+
+    async def test_global_search_ignores_hidden_exact_result(self):
+        class SearchField:
+            def __init__(self): self.first = self
+            async def count(self): return 1
+            async def fill(self, _value): return None
+        class Results:
+            def __init__(self):
+                self.items = [FakeConversation("wzlovegsy", False), FakeConversation("wzlovegsy", True)]
+                self.first = self.items[0]
+            async def count(self): return len(self.items)
+            async def all(self): return self.items
+        class SearchPage:
+            def __init__(self): self.search = SearchField(); self.results = Results()
+            def locator(self, _selector): return self.search
+            def get_by_text(self, _text, exact): return self.results
+        page = SearchPage()
+
+        selected = await select_web_chat_target(page, "wzlovegsy")
+
+        self.assertEqual("wzlovegsy", selected)
+        self.assertFalse(page.results.items[0].clicked)
+        self.assertTrue(page.results.items[1].clicked)
+
+    async def test_clicks_already_visible_exact_target_before_opening_search(self):
+        class Results:
+            def __init__(self):
+                self.items = [FakeConversation("wzlovegsy", True)]
+                self.first = self.items[0]
+            async def count(self): return 1
+            async def all(self): return self.items
+        class Page:
+            def __init__(self): self.results = Results(); self.search_requested = False
+            def get_by_text(self, _text, exact): return self.results
+            def locator(self, _selector):
+                self.search_requested = True
+                raise AssertionError("search should not open when the target is already visible")
+        page = Page()
+
+        selected = await select_web_chat_target(page, "wzlovegsy")
+
+        self.assertEqual("wzlovegsy", selected)
+        self.assertTrue(page.results.items[0].clicked)
+        self.assertFalse(page.search_requested)
 
     async def test_fails_instead_of_sending_to_the_wrong_conversation(self):
         page = FakeWebChatPage(["another friend"])
