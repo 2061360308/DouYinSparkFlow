@@ -3,6 +3,7 @@ import gc
 import unittest
 import warnings
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 from spark_console.auth_scanner import (
     AUTHENTICATED_SELECTOR,
@@ -117,6 +118,7 @@ class _Page:
             on_click=lambda: setattr(self.qr, "visible", bool(qr_visible)),
         )
         self.sms_button = _Locator(visible=mode == "sms_verification")
+        self.verify_button = _Locator(visible=mode == "sms_verification")
         self.viewport_size = {"width": 1280, "height": 720}
         self.keyboard = _Keyboard()
 
@@ -135,6 +137,8 @@ class _Page:
             return _Locator(items=[self.login_button])
         if exact and text == "接收短信验证码":
             return _Locator(items=[self.sms_button])
+        if exact and text == "验证":
+            return _Locator(items=[self.verify_button])
         return _Locator(items=[])
 
     def locator(self, selector):
@@ -448,6 +452,21 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(["123456"], context.page.keyboard.values)
+
+    async def test_verification_code_is_submitted_after_two_seconds(self):
+        scanner, _browser, context = self._scanner(mode="sms_verification")
+
+        with patch(
+            "spark_console.auth_scanner.asyncio.sleep", new=AsyncMock()
+        ) as sleep:
+            submitted = await scanner._type_and_submit_verification_code(
+                context.page, "123456"
+            )
+
+        self.assertTrue(submitted)
+        self.assertEqual(["123456"], context.page.keyboard.values)
+        sleep.assert_awaited_once_with(2)
+        self.assertTrue(context.page.verify_button.clicked)
 
     async def test_cloud_browser_prefers_sms_verification_when_option_appears(self):
         scanner, _browser, context = self._scanner(mode="sms_verification")

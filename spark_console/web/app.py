@@ -5,13 +5,14 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
 from spark_console.config import Settings
+from spark_console.conversations import discover_conversations
 from spark_console.crypto import CookieCipher
 from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.models import DouyinAccount, SparkTask, TaskRun, User
@@ -34,6 +35,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
     app.state.engine = engine
+    app.state.conversation_discoverer = discover_conversations
     app.mount("/static", StaticFiles(directory=str(PACKAGE_ROOT / "static")), name="static")
     passwords = PasswordService()
     sessions = SessionService(settings.session_key_file.read_bytes())
@@ -211,6 +213,30 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             auth.csrf(record, csrf_token)
             AccountService(db, cipher, AuditService(db)).delete_owned(user.id, account_id)
         return RedirectResponse("/accounts", status_code=303)
+
+    @app.get("/accounts/{account_id}/conversations")
+    async def account_conversations(request: Request, account_id: str):
+        secret = None
+        with session_scope(engine) as db:
+            user, _record = auth.current(request, db)
+            service = AccountService(db, cipher, AuditService(db))
+            account = service.get_owned(user.id, account_id)
+            credential_version = account.cookie_version
+            secret = service.decrypt_for_worker(account.id)
+        try:
+            targets = await app.state.conversation_discoverer(
+                secret, credential_version
+            )
+        except Exception:
+            return JSONResponse(
+                {"error": "conversation_sync_failed", "message": "好友列表读取失败，请确认抖音登录仍有效后重试"},
+                status_code=502,
+            )
+        finally:
+            if secret is not None:
+                for index in range(len(secret)):
+                    secret[index] = 0
+        return {"items": [{"name": target} for target in targets]}
 
     @app.get("/tasks")
     def tasks_page(request: Request):

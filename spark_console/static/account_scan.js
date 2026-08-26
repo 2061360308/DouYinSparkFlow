@@ -337,7 +337,7 @@
         body: new URLSearchParams({csrf_token: csrfToken, kind: "text", text: value}),
       });
       await readJson(response);
-      showMessage("验证码已输入云端，请点击云端页面中的“验证”", 0);
+      showMessage("验证码已输入云端，2 秒后将自动验证", 0);
       loadQrOnce(scanId);
     } catch (_error) {
       showMessage("验证码未输入云端，请重新输入", 0);

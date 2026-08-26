@@ -426,7 +426,7 @@ class DouyinQrScanner:
                 elif isinstance(action, dict) and action.get("kind") == "text":
                     value = str(action.get("text", ""))
                     if value.isdigit() and 4 <= len(value) <= 8:
-                        await page.keyboard.type(value)
+                        await self._type_and_submit_verification_code(page, value)
             png = await page.screenshot(type="png")
             if isinstance(png, bytes) and png.startswith(PNG_SIGNATURE):
                 await _invoke(on_view, png)
@@ -438,6 +438,19 @@ class DouyinQrScanner:
             for button in await page.get_by_text(
                 "接收短信验证码", exact=True
             ).all():
+                if await button.is_visible():
+                    await button.click(timeout=10_000)
+                    return True
+        except Exception:
+            return False
+        return False
+
+    @staticmethod
+    async def _type_and_submit_verification_code(page, value: str) -> bool:
+        await page.keyboard.type(value)
+        await asyncio.sleep(2)
+        try:
+            for button in await page.get_by_text("验证", exact=True).all():
                 if await button.is_visible():
                     await button.click(timeout=10_000)
                     return True

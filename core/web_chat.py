@@ -21,6 +21,23 @@ class TargetNotFoundError(RuntimeError):
     """Raised when the requested friend is absent from the web chat list."""
 
 
+async def list_visible_web_chat_targets(page, timeout=30000):
+    """Return unique, visible conversation titles from the signed-in chat list."""
+    await page.wait_for_selector(CONVERSATION_ITEM_SELECTOR, timeout=timeout)
+    targets = []
+    seen = set()
+    for item in await page.locator(CONVERSATION_ITEM_SELECTOR).all():
+        if hasattr(item, "is_visible") and not await item.is_visible():
+            continue
+        title = (
+            await item.locator(CONVERSATION_TITLE_SELECTOR).inner_text()
+        ).strip()
+        if title and title not in seen:
+            seen.add(title)
+            targets.append(title)
+    return targets
+
+
 async def select_web_chat_target(page, target, timeout=30000):
     """Select one exact target, preferring global chat search over recent items."""
     normalized_target = target.strip()

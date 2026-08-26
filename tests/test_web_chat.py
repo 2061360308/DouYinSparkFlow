@@ -1,6 +1,10 @@
 import unittest
 
-from core.web_chat import TargetNotFoundError, select_web_chat_target
+from core.web_chat import (
+    TargetNotFoundError,
+    list_visible_web_chat_targets,
+    select_web_chat_target,
+)
 
 
 class FakeTitle:
@@ -52,6 +56,17 @@ class FakeWebChatPage:
 
 
 class WebChatSelectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_lists_visible_unique_conversations_for_task_picker(self):
+        page = FakeWebChatPage(
+            [" wzlovegsy ", "gsy", "wzlovegsy", "隐藏"],
+            visible=[True, True, True, False],
+        )
+
+        targets = await list_visible_web_chat_targets(page, timeout=3200)
+
+        self.assertEqual(["wzlovegsy", "gsy"], targets)
+        self.assertEqual((".conversationConversationItemwrapper", 3200), page.waited_for)
+
     async def test_selects_only_the_requested_web_chat_conversation(self):
         page = FakeWebChatPage(["another friend", " ʚ繁花ɞ🌸 "])
 
