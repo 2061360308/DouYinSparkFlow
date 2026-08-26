@@ -348,7 +348,9 @@ class AccountScanWebTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertIn("扫码绑定抖音账号", response.text)
         self.assertIn("<dialog", response.text)
-        self.assertIn('src="/static/account_scan.js"', response.text)
+        self.assertIn(
+            'src="/static/account_scan.js?v=20260826-2"', response.text
+        )
         self.assertIn("修改备注", response.text)
         self.assertIn(f'action="/accounts/{self.account_id}/rename"', response.text)
         self.assertNotIn('textarea name="cookies"', response.text)
