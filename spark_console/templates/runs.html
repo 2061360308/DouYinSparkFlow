@@ -19,7 +19,7 @@
           <div><dt>开始时间</dt><dd>{{ run.started_at|shanghai_time }}</dd></div>
           <div><dt>完成时间</dt><dd>{{ run.finished_at|shanghai_time }}</dd></div>
         </dl>
-        {% if run.error_summary %}<p class="run-note">{{ run.error_summary }}</p>{% endif %}
+        {% if run.error_summary %}<p class="run-note{{ ' info' if run.status == 'success' else '' }}">{{ run.error_summary }}</p>{% endif %}
       </div>
     </article>
     {% endfor %}

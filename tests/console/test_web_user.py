@@ -274,7 +274,9 @@ class UserWebTests(unittest.TestCase):
                     task_id=task.id,
                     scheduled_for=datetime(2026, 8, 26, 8, 36, tzinfo=timezone.utc),
                     status="success",
-                    stage="complete",
+                    stage="submitted",
+                    error_code="delivery_confirmation_unavailable",
+                    error_summary="消息已提交，页面未能二次确认",
                     started_at=datetime(2026, 8, 26, 8, 36, 2, tzinfo=timezone.utc),
                     finished_at=datetime(2026, 8, 26, 8, 36, 8, tzinfo=timezone.utc),
                 )
@@ -296,6 +298,9 @@ class UserWebTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertIn("16:36", response.text)
         self.assertIn("成功", response.text)
+        self.assertIn("已提交发送", response.text)
+        self.assertIn("消息已提交，页面未能二次确认", response.text)
+        self.assertIn('class="run-note info"', response.text)
         self.assertIn("失败", response.text)
         self.assertIn("执行异常", response.text)
         self.assertIn("繁花", response.text)

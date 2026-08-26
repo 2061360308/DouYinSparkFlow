@@ -13,6 +13,7 @@ class ExecutionStage(StrEnum):
     SELECTING_TARGET = "selecting_target"
     SENDING = "sending"
     CONFIRMING = "confirming"
+    SUBMITTED = "submitted"
     COMPLETE = "complete"
 
 
@@ -63,7 +64,15 @@ class DouyinExecutor:
                     message_submitted = True
                     await editor.press("Enter")
                     stage = ExecutionStage.CONFIRMING
-                    await confirm_message_sent(page, editor, message, timeout=20000)
+                    try:
+                        await confirm_message_sent(page, editor, message, timeout=20000)
+                    except Exception:
+                        return ExecutionResult(
+                            True,
+                            ExecutionStage.SUBMITTED,
+                            "delivery_confirmation_unavailable",
+                            "消息已提交，页面未能二次确认",
+                        )
                     return ExecutionResult(True, ExecutionStage.COMPLETE)
                 finally:
                     try:

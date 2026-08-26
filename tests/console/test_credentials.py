@@ -422,6 +422,32 @@ class _FakePage:
         return None
 
 
+class _FakeEditor:
+    def __init__(self):
+        self.pressed = []
+
+    @property
+    def first(self):
+        return self
+
+    async def type(self, _value):
+        return None
+
+    async def press(self, key):
+        self.pressed.append(key)
+
+
+class _FakeSendingPage(_FakePage):
+    def __init__(self):
+        self.editor = _FakeEditor()
+
+    async def wait_for_selector(self, *_args, **_kwargs):
+        return None
+
+    def locator(self, _selector):
+        return self.editor
+
+
 class _FakeContext:
     def __init__(self):
         self.cookies_added = []
@@ -549,6 +575,46 @@ class ExecutorCredentialTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("automation_failed", result.error_code)
         self.assertEqual(1, browser.close_count)
+
+    async def test_executor_records_submitted_when_delivery_confirmation_times_out(self):
+        page = _FakeSendingPage()
+        browser = _FakeBrowser()
+        browser.context.new_page = lambda: None
+
+        async def new_page():
+            return page
+
+        browser.context.new_page = new_page
+        async_api = ModuleType("playwright.async_api")
+        async_api.async_playwright = lambda: _FakePlaywrightManager(browser)
+        playwright = ModuleType("playwright")
+        playwright.async_api = async_api
+        core_tasks = ModuleType("core.tasks")
+
+        async def confirmation_timeout(*_args, **_kwargs):
+            raise TimeoutError("message bubble was not observable")
+
+        core_tasks.confirm_message_sent = confirmation_timeout
+
+        async def select_target(*_args, **_kwargs):
+            return "目标"
+
+        raw = b'[{"name":"sid","value":"submitted-marker","domain":".douyin.com","path":"/"}]'
+        with patch.dict(
+            "sys.modules",
+            {
+                "playwright": playwright,
+                "playwright.async_api": async_api,
+                "core.tasks": core_tasks,
+            },
+        ), patch("spark_console.executor.select_web_chat_target", select_target):
+            result = await DouyinExecutor().execute(raw, "目标", "消息")
+
+        self.assertEqual(["Enter"], page.editor.pressed)
+        self.assertTrue(result.success)
+        self.assertEqual("submitted", result.stage)
+        self.assertEqual("delivery_confirmation_unavailable", result.error_code)
+        self.assertFalse(result.retryable)
 
 
 class PlaywrightLocationCompatibilityTests(unittest.IsolatedAsyncioTestCase):

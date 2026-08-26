@@ -50,6 +50,7 @@ RUN_STAGE_LABELS = {
     "worker_error": "执行异常",
     "sending": "发送消息",
     "confirming": "确认送达",
+    "submitted": "已提交发送",
     "claimed": "已领取",
     "complete": "已完成",
     "missed_startup": "执行器离线",
