@@ -372,15 +372,18 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         )
         confirmations = []
 
-        result = await scanner.run(
-            lambda _png: None,
-            confirmations.append,
-            lambda: False,
-        )
+        with self.assertLogs("spark_console.auth_scanner", level="INFO") as logs:
+            result = await scanner.run(
+                lambda _png: None,
+                confirmations.append,
+                lambda: False,
+            )
 
         self.assertEqual("抖音账号", result.display_name)
         self.assertEqual([True], confirmations)
         self.assertTrue(result.storage_state["cookies"])
+        self.assertTrue(any("status=scanned" in line for line in logs.output))
+        self.assertTrue(any("status=confirmed" in line for line in logs.output))
         self.assertNotIn("response", context.page.listeners)
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)

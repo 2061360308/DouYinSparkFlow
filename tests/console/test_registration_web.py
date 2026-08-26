@@ -201,6 +201,12 @@ class RegistrationWebTests(unittest.TestCase):
         self.assertIn("注册并返回登录", response.text)
         self.assertNotIn("注册并登录", response.text)
 
+    def test_register_page_explains_username_and_password_rules(self):
+        response = self.client.get("/register")
+
+        self.assertIn("3–32 位字母、数字、下划线或短横线", response.text)
+        self.assertIn("至少 10 位，并同时包含字母和数字", response.text)
+
     def test_invite_generation_is_admin_only_and_remains_visible_encrypted(self):
         self.login("friend", "FriendPass123")
         denied = self.client.post("/admin/invites", data={"csrf_token": "anything"})
@@ -216,6 +222,8 @@ class RegistrationWebTests(unittest.TestCase):
         self.assertIn(code, generated.text)
         refreshed = self.client.get("/admin")
         self.assertIn(code, refreshed.text)
+        self.assertIn("data-copy-invite=", refreshed.text)
+        self.assertIn("navigator.clipboard.writeText", refreshed.text)
         with Session(self.engine) as session:
             self.assertIsNotNone(
                 session.scalar(

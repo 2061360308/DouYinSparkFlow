@@ -303,6 +303,7 @@ class DouyinQrScanner:
 
     async def _wait_for_qrconnect_status(self, page, on_confirming) -> None:
         responses: asyncio.Queue = asyncio.Queue()
+        last_status = None
 
         def capture(response) -> None:
             if urlparse(response.url).path == QRCONNECT_PATH:
@@ -320,6 +321,15 @@ class DouyinQrScanner:
                 if not isinstance(payload, dict):
                     continue
                 status = str(payload.get("status", "")).lower()
+                public_status = (
+                    status
+                    if status
+                    in {"1", "new", "2", "scanned", "3", "confirmed", "4", "5", "refused", "expired"}
+                    else "unknown"
+                )
+                if public_status != last_status:
+                    logger.info("auth scan qrcode status=%s", public_status)
+                    last_status = public_status
                 if status in {"2", "scanned", "3", "confirmed"}:
                     await on_confirming(True)
                 if status in {"3", "confirmed"}:
