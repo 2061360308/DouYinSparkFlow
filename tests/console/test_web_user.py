@@ -284,9 +284,9 @@ class UserWebTests(unittest.TestCase):
                     task_id=task.id,
                     scheduled_for=datetime(2026, 8, 25, 8, 36, tzinfo=timezone.utc),
                     status="failed",
-                    stage="selecting_target",
-                    error_code="target_not_found",
-                    error_summary="未找到完全匹配的目标好友",
+                    stage="worker_error",
+                    error_code="unexpected_error",
+                    error_summary="任务执行发生意外异常，Worker 已继续运行",
                 )
             )
         self.login()
@@ -297,7 +297,7 @@ class UserWebTests(unittest.TestCase):
         self.assertIn("16:36", response.text)
         self.assertIn("成功", response.text)
         self.assertIn("失败", response.text)
-        self.assertIn("查找好友", response.text)
+        self.assertIn("执行异常", response.text)
         self.assertIn("繁花", response.text)
         self.assertIn('class="run-timeline"', response.text)
 

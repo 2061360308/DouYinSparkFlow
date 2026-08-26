@@ -47,6 +47,7 @@ RUN_STAGE_LABELS = {
     "starting": "准备执行",
     "authenticating": "验证登录",
     "selecting_target": "查找好友",
+    "worker_error": "执行异常",
     "sending": "发送消息",
     "confirming": "确认送达",
     "claimed": "已领取",

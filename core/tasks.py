@@ -11,8 +11,6 @@ from core.browser import get_browser
 
 complates = {}
 
-config = get_config()
-userData = get_userData()
 logger = setup_logger(level=logging.DEBUG)
 
 
@@ -345,6 +343,8 @@ async def do_user_task(browser, username, cookies, targets, semaphore):
 
 
 async def runTasks():
+    config = get_config()
+    user_data = get_userData()
     playwright, browser = await get_browser()
     try:
         # 检查是否启用多任务和任务数量
@@ -353,13 +353,13 @@ async def runTasks():
         logger.info(f"多任务模式: {config['multiTask']}, 任务数量: {config['taskCount']}")
         logger.info(f"消息模板: {config['messageTemplate']}")
         logger.info(f"一言类型: {config['hitokotoTypes']}")
-        for user in userData:
+        for user in user_data:
             logger.info(f"用户: {user.get('username', '未知用户')}, 目标好友: {user['targets']}")
             
         semaphore = asyncio.Semaphore(config["taskCount"] if config["multiTask"] else 1)
 
         tasks = []
-        for user in userData:
+        for user in user_data:
             cookies = user["cookies"]
             targets = user["targets"]
             complates[user["unique_id"]] = []  # 初始化该用户的已完成列表
