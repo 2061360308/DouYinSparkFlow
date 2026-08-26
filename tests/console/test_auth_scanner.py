@@ -24,7 +24,7 @@ PNG = b"\x89PNG\r\n\x1a\nscanner-fixture"
 
 
 class _Locator:
-    def __init__(self, *, visible=False, visible_sequence=None, png=None, text="", children=None, items=None, box=None, decorative=False):
+    def __init__(self, *, visible=False, visible_sequence=None, png=None, text="", children=None, items=None, box=None, decorative=False, on_click=None):
         self.visible = visible
         self.visible_sequence = list(visible_sequence or [])
         self.png = png
@@ -33,6 +33,8 @@ class _Locator:
         self.items = items or []
         self.box = box
         self.decorative = decorative
+        self.on_click = on_click
+        self.clicked = False
 
     @property
     def first(self):
@@ -61,6 +63,11 @@ class _Locator:
     async def evaluate(self, _expression):
         return self.decorative
 
+    async def click(self, **_kwargs):
+        self.clicked = True
+        if self.on_click is not None:
+            self.on_click()
+
 
 class _Response:
     def __init__(self, status):
@@ -79,7 +86,7 @@ class _Page:
         self.never = asyncio.Event()
         self.navigation_started = asyncio.Event()
         self.qr = _Locator(
-            visible=qr_visible,
+            visible=False if mode in {"chat_entry", "delayed_chat_entry"} else qr_visible,
             visible_sequence=[True, True, False]
             if mode == "credential_success"
             else None,
@@ -100,12 +107,26 @@ class _Page:
         self.normal_verification_tab = normal_verification_tab
         self.profile_visible = profile_visible
         self.listeners = {}
+        self.goto_url = None
+        self.login_button = _Locator(
+            visible=True,
+            visible_sequence=[False, False, True]
+            if mode == "delayed_chat_entry"
+            else None,
+            on_click=lambda: setattr(self.qr, "visible", bool(qr_visible)),
+        )
 
     async def goto(self, *_args, **_kwargs):
+        self.goto_url = _args[0]
         self.navigation_started.set()
         if self.mode == "navigation":
             await self.never.wait()
         return None
+
+    def get_by_text(self, text, exact=False):
+        if exact and text == "登录":
+            return _Locator(items=[self.login_button])
+        return _Locator(items=[])
 
     def locator(self, selector):
         if selector == "img, canvas":
@@ -136,7 +157,7 @@ class _Page:
             await self.authenticated.wait()
             return _Locator(visible=True)
         if any(text in selector for text in CONFIRMING_TEXT):
-            if self.mode in {"success", "url_success"}:
+            if self.mode in {"success", "url_success", "chat_entry", "delayed_chat_entry"}:
                 await asyncio.sleep(0)
                 if self.mode == "success":
                     asyncio.get_running_loop().call_soon(self.authenticated.set)
@@ -329,6 +350,37 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(qr_images))
         self.assertTrue(qr_images[0].startswith(b"\x89PNG"))
         self.assertEqual([True], confirmations)
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_chat_login_entry_is_opened_before_qr_capture(self):
+        scanner, browser, context = self._scanner(mode="chat_entry")
+
+        result = await scanner.run(
+            lambda _png: None,
+            lambda _confirmed: None,
+            lambda: False,
+        )
+
+        self.assertEqual("https://www.douyin.com/chat", context.page.goto_url)
+        self.assertTrue(context.page.login_button.clicked)
+        self.assertEqual("测试昵称", result.display_name)
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_chat_login_entry_waits_for_delayed_login_button(self):
+        scanner, browser, context = self._scanner(
+            mode="delayed_chat_entry", qr_timeout_seconds=0.05
+        )
+
+        result = await scanner.run(
+            lambda _png: None,
+            lambda _confirmed: None,
+            lambda: False,
+        )
+
+        self.assertTrue(context.page.login_button.clicked)
+        self.assertEqual("测试昵称", result.display_name)
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 

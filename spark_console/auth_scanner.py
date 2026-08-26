@@ -9,7 +9,7 @@ from typing import Callable
 from urllib.parse import urlparse
 
 
-CREATOR_URL = "https://creator.douyin.com/"
+CHAT_LOGIN_URL = "https://www.douyin.com/chat"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 LOGIN_PANEL_SELECTORS = (
@@ -119,12 +119,15 @@ class DouyinQrScanner:
                 )
                 await self._await_stage(
                     page.goto(
-                        CREATOR_URL,
+                        CHAT_LOGIN_URL,
                         wait_until="domcontentloaded",
                         timeout=120_000,
                     ),
                     cancelled,
                     deadline,
+                )
+                await self._await_stage(
+                    self._open_chat_login(page, cancelled), cancelled, deadline
                 )
                 qr = await self._await_stage(
                     self._find_qr(page, cancelled), cancelled, deadline
@@ -174,6 +177,21 @@ class DouyinQrScanner:
                 finally:
                     if browser is not None:
                         await browser.close()
+
+    async def _open_chat_login(self, page, cancelled) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.qr_timeout_seconds
+        while loop.time() < deadline:
+            if cancelled():
+                raise ScanCancelled()
+            for label in ("登录", "扫码登录"):
+                for button in await page.get_by_text(label, exact=True).all():
+                    if not await button.is_visible():
+                        continue
+                    await button.click(timeout=10_000)
+                    return
+            await asyncio.sleep(self.poll_interval_seconds)
+        raise QrLoadFailed()
 
     async def _find_qr(self, page, cancelled):
         loop = asyncio.get_running_loop()
