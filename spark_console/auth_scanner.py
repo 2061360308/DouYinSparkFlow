@@ -320,13 +320,18 @@ class DouyinQrScanner:
                     await confirm_once()
                 if authenticated in done:
                     authenticated.result()
-                    return
+                    if context is None:
+                        return
+                    await confirm_once()
                 if authenticated_url in done:
                     authenticated_url.result()
-                    return
+                    if context is None:
+                        return
+                    await confirm_once()
                 if qrconnect in done:
                     qrconnect.result()
-                    return
+                    if context is None:
+                        return
                 if credentials is not None and credentials in done:
                     credentials.result()
                     return
@@ -368,8 +373,6 @@ class DouyinQrScanner:
                     last_status = public_status
                 if status in {"2", "scanned", "3", "confirmed"}:
                     await on_confirming(True)
-                if status in {"3", "confirmed"}:
-                    return
         finally:
             page.remove_listener("response", capture)
 
@@ -377,6 +380,7 @@ class DouyinQrScanner:
         self, page, context, qr, baseline, on_confirming, confirmed_event
     ) -> None:
         qr_hidden = False
+        credentials_changed = False
         while True:
             if not qr_hidden:
                 try:
@@ -390,12 +394,12 @@ class DouyinQrScanner:
                     await on_confirming(True)
             if confirmed_event.is_set():
                 current = self._auth_cookie_fingerprint(await context.cookies())
-                if current and current != baseline:
+                if current and current != baseline and not credentials_changed:
+                    credentials_changed = True
                     logger.warning(
                         "auth scan credentials changed path=%s",
                         urlparse(page.url).path,
                     )
-                    return
                 if await self._account_session_is_authenticated(context):
                     logger.warning(
                         "auth scan account session active path=%s",

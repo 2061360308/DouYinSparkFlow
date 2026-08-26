@@ -90,7 +90,7 @@ class _Page:
         self.qr = _Locator(
             visible=False if mode in {"chat_entry", "delayed_chat_entry"} else qr_visible,
             visible_sequence=[True, True, False]
-            if mode == "credential_success"
+            if mode in {"credential_success", "cookie_only"}
             else None,
             png=PNG,
         )
@@ -193,7 +193,17 @@ class _Context:
         self.closed = False
         self.credential_success = credential_success
         self.cookie_reads = 0
-        self.request = _ContextRequest(authenticated=page.mode == "chat_account_success")
+        self.request = _ContextRequest(
+            authenticated=page.mode
+            in {
+                "success",
+                "url_success",
+                "chat_entry",
+                "delayed_chat_entry",
+                "chat_account_success",
+                "credential_success",
+            }
+        )
 
     async def new_page(self):
         return self.page
@@ -334,7 +344,7 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         context = _Context(
             page,
             fail_storage_state=fail_storage_state,
-            credential_success=mode == "credential_success",
+            credential_success=mode in {"credential_success", "cookie_only"},
         )
         browser = _Browser(context)
         scanner = DouyinQrScanner(
@@ -530,22 +540,40 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 
-    async def test_qrconnect_network_status_completes_without_dom_change(self):
+    async def test_cookie_change_alone_does_not_save_unauthenticated_state(self):
         scanner, browser, context = self._scanner(
-            mode="network_success", profile_visible=False
+            mode="cookie_only",
+            profile_visible=False,
+            login_timeout_seconds=0.2,
+        )
+
+        with self.assertRaises(LoginTimedOut):
+            await scanner.run(
+                lambda _png: None,
+                lambda _confirmed: None,
+                lambda: False,
+            )
+
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_qrconnect_confirmation_does_not_save_unauthenticated_state(self):
+        scanner, browser, context = self._scanner(
+            mode="network_success",
+            profile_visible=False,
+            login_timeout_seconds=0.2,
         )
         confirmations = []
 
         with self.assertLogs("spark_console.auth_scanner", level="INFO") as logs:
-            result = await scanner.run(
-                lambda _png: None,
-                confirmations.append,
-                lambda: False,
-            )
+            with self.assertRaises(LoginTimedOut):
+                await scanner.run(
+                    lambda _png: None,
+                    confirmations.append,
+                    lambda: False,
+                )
 
-        self.assertEqual("抖音账号", result.display_name)
         self.assertEqual([True], confirmations)
-        self.assertTrue(result.storage_state["cookies"])
         self.assertTrue(any("status=scanned" in line for line in logs.output))
         self.assertTrue(any("status=confirmed" in line for line in logs.output))
         self.assertNotIn("response", context.page.listeners)
