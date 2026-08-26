@@ -213,20 +213,24 @@ class RegistrationWebTests(unittest.TestCase):
         self.assertIn("3–32 位字母、数字、下划线或短横线", response.text)
         self.assertIn("至少 10 位，并同时包含字母和数字", response.text)
 
-    def test_invite_generation_is_admin_only_and_remains_visible_encrypted(self):
+    def test_invite_generation_redirects_to_get_and_remains_visible_encrypted(self):
         self.login("friend", "FriendPass123")
         denied = self.client.post("/admin/invites", data={"csrf_token": "anything"})
         self.assertEqual(404, denied.status_code)
 
         self.login()
         csrf = self.csrf_for()
-        generated = self.client.post("/admin/invites", data={"csrf_token": csrf})
+        generated = self.client.post(
+            "/admin/invites",
+            data={"csrf_token": csrf},
+            follow_redirects=False,
+        )
 
-        self.assertEqual(200, generated.status_code)
-        code = re.search(r"<code>([^<]+)</code>", generated.text).group(1)
-        self.assertGreaterEqual(len(code), 24)
-        self.assertIn(code, generated.text)
+        self.assertEqual(303, generated.status_code)
+        self.assertEqual("/admin", generated.headers["location"])
         refreshed = self.client.get("/admin")
+        code = re.search(r"<code>([^<]+)</code>", refreshed.text).group(1)
+        self.assertGreaterEqual(len(code), 24)
         self.assertIn(code, refreshed.text)
         self.assertIn("data-copy-invite=", refreshed.text)
         self.assertIn("navigator.clipboard.writeText", refreshed.text)
