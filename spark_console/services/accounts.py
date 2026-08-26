@@ -5,8 +5,9 @@ import json
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from spark_console.credentials import CredentialError, CredentialPayload
 from spark_console.crypto import CookieCipher
-from spark_console.models import DouyinAccount, SparkTask
+from spark_console.models import DouyinAccount, DouyinAccountIdentity, SparkTask, utc_now
 from spark_console.services import NotFound, ValidationError
 from spark_console.services.audits import AuditService
 
@@ -18,9 +19,7 @@ class AccountService:
         self.audit = audit
 
     def create(self, owner_id: str, display_name: str, cookies: bytes | str) -> DouyinAccount:
-        name = display_name.strip()
-        if not name or len(name) > 64:
-            raise ValidationError("账号名称须为 1–64 个字符")
+        name = self._validated_display_name(display_name)
         raw = cookies.encode("utf-8") if isinstance(cookies, str) else cookies
         try:
             parsed = json.loads(raw)
@@ -38,6 +37,59 @@ class AccountService:
         self.session.add(account)
         self.session.flush()
         self.audit.write(owner_id, "account.created", "douyin_account", account.id)
+        return account
+
+    def create_from_storage_state(
+        self,
+        owner_id: str,
+        display_name: str,
+        storage_state: dict,
+        douyin_unique_id: str | None = None,
+    ) -> DouyinAccount:
+        name = self._validated_display_name(display_name)
+        normalized_unique_id = (
+            douyin_unique_id.strip() if douyin_unique_id is not None else None
+        )
+        if normalized_unique_id == "":
+            normalized_unique_id = None
+        if normalized_unique_id is not None and len(normalized_unique_id) > 64:
+            raise ValidationError("抖音号不能超过 64 个字符")
+
+        envelope = {"version": 2, "storage_state": storage_state}
+        try:
+            raw = json.dumps(
+                envelope, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
+            CredentialPayload.parse(raw, 2)
+        except (CredentialError, TypeError, ValueError, UnicodeEncodeError):
+            raise ValidationError("浏览器凭据格式无效") from None
+        sealed = self.cipher.encrypt(raw)
+        account = DouyinAccount(
+            owner_user_id=owner_id,
+            display_name=name,
+            encrypted_cookies=sealed.ciphertext,
+            cookie_nonce=sealed.nonce,
+            cookie_version=2,
+            validation_state="valid",
+            last_verified_at=utc_now(),
+        )
+        self.session.add(account)
+        self.session.flush()
+        self.session.add(
+            DouyinAccountIdentity(
+                account_id=account.id, douyin_unique_id=normalized_unique_id
+            )
+        )
+        self.audit.write(owner_id, "account.created", "douyin_account", account.id)
+        return account
+
+    def rename_owned(
+        self, owner_id: str, account_id: str, display_name: str
+    ) -> DouyinAccount:
+        account = self.get_owned(owner_id, account_id)
+        account.display_name = self._validated_display_name(display_name)
+        self.session.flush()
+        self.audit.write(owner_id, "account.renamed", "douyin_account", account.id)
         return account
 
     def get_owned(self, owner_id: str, account_id: str) -> DouyinAccount:
@@ -80,3 +132,10 @@ class AccountService:
         self.session.flush()
         self.session.delete(account)
         self.audit.write(owner_id, "account.deleted", "douyin_account", account_id)
+
+    @staticmethod
+    def _validated_display_name(display_name: str) -> str:
+        name = display_name.strip()
+        if not name or len(name) > 64:
+            raise ValidationError("账号名称须为 1–64 个字符")
+        return name

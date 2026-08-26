@@ -70,6 +70,56 @@ class UserWebTests(unittest.TestCase):
         )
         self.assertEqual(403, response.status_code)
 
+    def test_logged_in_user_has_change_password_navigation(self):
+        self.login()
+        page = self.client.get("/change-password")
+        marker = 'name="csrf_token" value="'
+        csrf = page.text.split(marker, 1)[1].split('"', 1)[0]
+        self.client.post(
+            "/change-password",
+            data={
+                "csrf_token": csrf,
+                "current_password": "Temporary-123!",
+                "new_password": "Permanent-123!",
+                "new_password_confirmation": "Permanent-123!",
+            },
+        )
+
+        dashboard = self.client.get("/dashboard")
+        change_page = self.client.get("/change-password")
+
+        self.assertIn('href="/change-password"', dashboard.text)
+        self.assertIn("修改密码", change_page.text)
+        self.assertIn('name="new_password_confirmation"', change_page.text)
+
+    def test_change_password_page_uses_centered_security_layout(self):
+        self.login()
+
+        page = self.client.get("/change-password")
+
+        self.assertEqual(200, page.status_code)
+        self.assertIn('class="security-page"', page.text)
+        self.assertIn('class="auth-card security-card"', page.text)
+
+    def test_change_password_rejects_mismatched_confirmation(self):
+        self.login()
+        page = self.client.get("/change-password")
+        marker = 'name="csrf_token" value="'
+        csrf = page.text.split(marker, 1)[1].split('"', 1)[0]
+
+        response = self.client.post(
+            "/change-password",
+            data={
+                "csrf_token": csrf,
+                "current_password": "Temporary-123!",
+                "new_password": "Permanent-123!",
+                "new_password_confirmation": "Different-123!",
+            },
+        )
+
+        self.assertEqual(400, response.status_code)
+        self.assertIn("两次输入的新密码不一致", response.text)
+
     def test_wrong_password_renders_visible_login_error(self):
         response = self.client.post(
             "/login",
@@ -79,6 +129,12 @@ class UserWebTests(unittest.TestCase):
         self.assertEqual(400, response.status_code)
         self.assertIn("用户名或密码错误", response.text)
         self.assertIn('name="password"', response.text)
+
+    def test_login_page_offers_invite_registration(self):
+        response = self.client.get("/login")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn('href="/register"', response.text)
 
     def test_login_stylesheet_uses_same_origin_path_behind_https_proxy(self):
         with TestClient(
@@ -109,7 +165,7 @@ class UserWebTests(unittest.TestCase):
             self.assertNotIn("secure", response.headers["set-cookie"].lower())
             self.assertEqual(200, client.get("/change-password").status_code)
 
-    def test_cookie_value_never_appears_after_account_save(self):
+    def test_account_page_never_accepts_or_renders_manual_credentials(self):
         self.login()
         page = self.client.get("/change-password")
         marker = 'name="csrf_token" value="'
@@ -120,18 +176,22 @@ class UserWebTests(unittest.TestCase):
                 "csrf_token": csrf,
                 "current_password": "Temporary-123!",
                 "new_password": "Permanent-123!",
+                "new_password_confirmation": "Permanent-123!",
             },
         )
         page = self.client.get("/accounts")
-        csrf = page.text.split(marker, 1)[1].split('"', 1)[0]
-        secret = '[{"name":"sessionid","value":"sessionid-secret"}]'
+        self.assertNotIn('name="cookies"', page.text)
+        self.assertNotIn("Cookie JSON", page.text)
         response = self.client.post(
             "/accounts",
-            data={"csrf_token": csrf, "display_name": "主账号", "cookies": secret},
-            follow_redirects=True,
+            data={
+                "csrf_token": page.text.split(marker, 1)[1].split('"', 1)[0],
+                "display_name": "主账号",
+                "cookies": '[{"name":"sessionid","value":"sessionid-secret"}]',
+            },
+            follow_redirects=False,
         )
-        self.assertEqual(200, response.status_code)
-        self.assertNotIn("sessionid-secret", response.text)
+        self.assertEqual(405, response.status_code)
 
 
 if __name__ == "__main__":

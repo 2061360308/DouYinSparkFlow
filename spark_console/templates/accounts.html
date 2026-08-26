@@ -1,5 +1,75 @@
 {% extends "base.html" %}{% block content %}
-<header class="page-head"><div><span class="eyebrow">ACCOUNTS</span><h1>抖音账号</h1><p>Cookie 只在保存时提交一次，之后不会回显。</p></div></header>
-<div class="split"><section class="panel"><h2>已绑定账号</h2>{% if accounts %}{% for account in accounts %}<article class="item"><div><strong>{{ account.display_name }}</strong><p class="muted">验证状态：{{ account.validation_state }}</p></div><form method="post" action="/accounts/{{ account.id }}/delete"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="danger quiet">删除</button></form></article>{% endfor %}{% else %}<div class="empty"><span>◎</span><h3>暂无账号</h3><p>右侧填写账号名称并粘贴 Cookie JSON。</p></div>{% endif %}</section>
-<section class="panel form-panel"><h2>绑定新账号</h2><form method="post" class="stack"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>账号备注<input name="display_name" maxlength="64" placeholder="例如：我的主账号" required></label><label>Cookie JSON<textarea name="cookies" rows="9" placeholder='[{"name":"...","value":"..."}]' required></textarea></label><div class="notice">仅接受 JSON 数组；内容会使用 AES-256-GCM 加密。</div><button>加密保存账号</button></form></section></div>
+<header class="page-head">
+  <div>
+    <span class="eyebrow">ACCOUNTS</span>
+    <h1>抖音账号</h1>
+    <p>使用抖音 App 扫码绑定，账号信息会在手机确认后自动保存。</p>
+  </div>
+</header>
+
+<div class="split accounts-layout">
+  <section class="panel account-list">
+    <h2>已绑定账号</h2>
+    {% if accounts %}
+      {% for account in accounts %}
+      <article class="item account-item">
+        <div class="account-summary">
+          <strong>{{ account.display_name }}</strong>
+          <p class="muted">验证状态：{{ account.validation_state }}</p>
+        </div>
+        <div class="account-controls">
+          <form method="post" action="/accounts/{{ account.id }}/rename" class="account-rename">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label class="sr-only" for="account-name-{{ account.id }}">新账号备注</label>
+            <input id="account-name-{{ account.id }}" name="display_name" value="{{ account.display_name }}" maxlength="64" required>
+            <button class="quiet" type="submit">修改备注</button>
+          </form>
+          <form method="post" action="/accounts/{{ account.id }}/delete">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="danger quiet" type="submit">删除</button>
+          </form>
+        </div>
+      </article>
+      {% endfor %}
+    {% else %}
+      <div class="empty">
+        <span>◎</span>
+        <h3>暂无账号</h3>
+        <p>从右侧开始扫码绑定。</p>
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="panel scan-entry" data-account-scan data-csrf-token="{{ csrf_token }}" data-preload="{{ 'true' if not accounts else 'false' }}">
+    <span class="scan-kicker">DOUYIN APP</span>
+    <h2>绑定新账号</h2>
+    <p class="muted">二维码仅在本次绑定期间有效，全平台同一时间处理一个扫码会话。</p>
+    <ol class="scan-steps">
+      <li><span>1</span>打开抖音 App</li>
+      <li><span>2</span>扫描页面二维码</li>
+      <li><span>3</span>在手机上确认登录</li>
+    </ol>
+    <button id="scan-start" type="button">扫码绑定抖音账号</button>
+
+    <dialog id="scan-dialog" class="scan-dialog" aria-labelledby="scan-dialog-title">
+      <div class="scan-dialog-card">
+        <button id="scan-close" class="scan-close quiet" type="button" aria-label="关闭扫码窗口">×</button>
+        <span class="eyebrow">SECURE BINDING</span>
+        <h2 id="scan-dialog-title">扫码绑定抖音账号</h2>
+        <div id="scan-stage" class="scan-stage" aria-busy="true">
+          <div class="scan-frame">
+            <img id="scan-qr" class="scan-qr" alt="抖音登录二维码" hidden>
+            <div id="scan-placeholder" class="scan-placeholder" aria-hidden="true"><span></span><small>正在准备二维码</small></div>
+          </div>
+          <p id="scan-status" class="scan-status" role="status" aria-live="polite">正在创建扫码会话</p>
+          <p id="scan-countdown" class="scan-countdown"></p>
+        </div>
+        <div class="scan-dialog-actions">
+          <button id="scan-cancel" class="quiet" type="button">取消绑定</button>
+        </div>
+      </div>
+    </dialog>
+  </section>
+</div>
+<script defer src="/static/account_scan.js?v=20260826-2"></script>
 {% endblock %}

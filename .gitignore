@@ -9,6 +9,7 @@ usersData.json
 secrets/
 data/
 backups/
+.worktrees/
 *.db
 *.db-shm
 *.db-wal
