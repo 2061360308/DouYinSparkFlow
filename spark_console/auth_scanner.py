@@ -28,6 +28,7 @@ QR_SELECTORS = (
 AUTHENTICATED_SELECTOR = (
     'xpath=//*[contains(@id,"garfish_app_for_douyin_creator_pc_home")]'
 )
+CHAT_AUTHENTICATED_SELECTOR = ".conversationConversationItemwrapper"
 AUTHENTICATED_PATH_PREFIX = "/creator-micro/"
 QRCONNECT_PATH = "/passport/web/check_qrconnect/"
 DISPLAY_NAME_SELECTOR = (
@@ -264,6 +265,11 @@ class DouyinQrScanner:
                 AUTHENTICATED_SELECTOR, state="visible", timeout=0
             )
         )
+        chat_authenticated = asyncio.create_task(
+            page.wait_for_selector(
+                CHAT_AUTHENTICATED_SELECTOR, state="visible", timeout=0
+            )
+        )
         authenticated_url = asyncio.create_task(
             self._wait_for_authenticated_url(page)
         )
@@ -279,6 +285,7 @@ class DouyinQrScanner:
         )
         pending = {
             authenticated,
+            chat_authenticated,
             authenticated_url,
             confirming,
             verification,
@@ -318,6 +325,11 @@ class DouyinQrScanner:
                 if confirming in done:
                     confirming.result()
                     await confirm_once()
+                if chat_authenticated in done:
+                    chat_authenticated.result()
+                    await confirm_once()
+                    await asyncio.sleep(0.1)
+                    return
                 if authenticated in done:
                     authenticated.result()
                     if context is None:

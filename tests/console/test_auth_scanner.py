@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 from spark_console.auth_scanner import (
     AUTHENTICATED_SELECTOR,
+    CHAT_AUTHENTICATED_SELECTOR,
     CONFIRMING_TEXT,
     DISPLAY_NAME_SELECTOR,
     LOGIN_PANEL_SELECTORS,
@@ -169,6 +170,11 @@ class _Page:
         if selector == AUTHENTICATED_SELECTOR:
             await self.authenticated.wait()
             return _Locator(visible=True)
+        if selector == CHAT_AUTHENTICATED_SELECTOR:
+            if self.mode == "chat_dom_success":
+                await asyncio.sleep(0)
+                return _Locator(visible=True)
+            await self.never.wait()
         if any(text in selector for text in CONFIRMING_TEXT):
             if self.mode in {"success", "url_success", "chat_entry", "delayed_chat_entry", "chat_account_success"}:
                 await asyncio.sleep(0)
@@ -446,6 +452,22 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("https://creator.douyin.com/", context.page.url)
         self.assertEqual("抖音账号", result.display_name)
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_loaded_chat_conversation_list_completes_without_account_api(self):
+        scanner, browser, context = self._scanner(
+            mode="chat_dom_success", profile_visible=False
+        )
+
+        result = await scanner.run(
+            lambda _png: None,
+            lambda _confirmed: None,
+            lambda: False,
+        )
+
+        self.assertEqual("抖音账号", result.display_name)
+        self.assertTrue(result.storage_state["cookies"])
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 
