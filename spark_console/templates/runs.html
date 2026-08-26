@@ -1,1 +1,31 @@
-{% extends "base.html" %}{% block content %}<header class="page-head"><div><span class="eyebrow">RUN HISTORY</span><h1>执行记录</h1><p>错误信息经过脱敏，不显示 Cookie 或聊天内容。</p></div></header><section class="panel"><div class="table-wrap"><table><thead><tr><th>计划时间</th><th>好友</th><th>状态</th><th>阶段</th><th>说明</th></tr></thead><tbody>{% for run, task in runs %}<tr><td>{{ run.scheduled_for }}</td><td>{{ task.target_name }}</td><td><span class="pill {{ 'good' if run.status == 'success' else 'off' }}">{{ run.status }}</span></td><td>{{ run.stage }}</td><td>{{ run.error_summary or '—' }}</td></tr>{% else %}<tr><td colspan="5" class="empty-cell">暂无执行记录</td></tr>{% endfor %}</tbody></table></div></section>{% endblock %}
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head">
+  <div><span class="eyebrow">RUN HISTORY</span><h1>执行记录</h1><p>每次计划执行都会留下结果；错误信息已脱敏。</p></div>
+</header>
+<section class="panel run-panel">
+  {% if runs %}
+  <div class="run-timeline">
+    {% for run, task in runs %}
+    <article class="run-entry run-{{ run.status }}">
+      <span class="run-dot" aria-hidden="true"></span>
+      <div class="run-main">
+        <div class="run-heading">
+          <div><time>{{ run.scheduled_for|shanghai_time }}</time><h2>{{ task.target_name }}</h2></div>
+          <span class="pill {{ 'good' if run.status == 'success' else ('warn' if run.status == 'skipped' else 'off') }}">{{ run.status|run_status }}</span>
+        </div>
+        <dl class="run-meta">
+          <div><dt>执行阶段</dt><dd>{{ run.stage|run_stage }}</dd></div>
+          <div><dt>开始时间</dt><dd>{{ run.started_at|shanghai_time }}</dd></div>
+          <div><dt>完成时间</dt><dd>{{ run.finished_at|shanghai_time }}</dd></div>
+        </dl>
+        {% if run.error_summary %}<p class="run-note">{{ run.error_summary }}</p>{% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty"><span>◷</span><h3>暂无执行记录</h3><p>任务首次到点后，结果会显示在这里。</p></div>
+  {% endif %}
+</section>
+{% endblock %}

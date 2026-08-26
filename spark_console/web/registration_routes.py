@@ -145,7 +145,13 @@ def _admin_page_data(db):
         .join(User, SparkTask.owner_user_id == User.id)
         .order_by(SparkTask.send_time)
     ).all()
-    runs = db.scalars(select(TaskRun).order_by(TaskRun.scheduled_for.desc()).limit(20)).all()
+    runs = db.execute(
+        select(TaskRun, SparkTask, User)
+        .join(SparkTask, TaskRun.task_id == SparkTask.id)
+        .join(User, SparkTask.owner_user_id == User.id)
+        .order_by(TaskRun.scheduled_for.desc())
+        .limit(20)
+    ).all()
     return users, tasks, runs
 
 

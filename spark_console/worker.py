@@ -19,12 +19,20 @@ from spark_console.services.audits import AuditService
 
 
 class Worker:
-    def __init__(self, settings: Settings, engine, executor=None, clock_offset_seconds=0.0):
+    def __init__(
+        self,
+        settings: Settings,
+        engine,
+        executor=None,
+        clock_offset_seconds=0.0,
+        started_at: datetime | None = None,
+    ):
         self.settings = settings
         self.engine = engine
         self.executor = executor or DouyinExecutor()
         self.worker_id = f"{socket.gethostname()}-{os.getpid()}"
         self.clock_offset_seconds = clock_offset_seconds
+        self.started_at = started_at or datetime.now(timezone.utc)
         self.cipher = CookieCipher(settings.cookie_key_file.read_bytes())
 
     async def run_once(self, now: datetime | None = None):
@@ -37,6 +45,15 @@ class Worker:
             if abs(self.clock_offset_seconds) > self.settings.clock_offset_limit_seconds:
                 return finish_run(run, "failed", "clock_check", current_time, "system_time_unhealthy", "服务器时间未同步")
             scheduled = run.scheduled_for if run.scheduled_for.tzinfo else run.scheduled_for.replace(tzinfo=timezone.utc)
+            if scheduled < self.started_at:
+                return finish_run(
+                    run,
+                    "skipped",
+                    "missed_startup",
+                    current_time,
+                    "worker_was_offline",
+                    "执行器离线期间任务已错过，未补发",
+                )
             if current_time - scheduled > timedelta(minutes=10):
                 return finish_run(run, "skipped", "late", current_time, "missed_window", "任务已超过 10 分钟发送窗口")
             account_service = AccountService(db, self.cipher, AuditService(db))

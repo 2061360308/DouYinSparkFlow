@@ -12,7 +12,13 @@ from sqlalchemy.orm import Session
 
 from spark_console.config import Settings
 from spark_console.db import create_schema, session_scope
-from spark_console.models import InviteCode, User
+from spark_console.models import (
+    DouyinAccount,
+    InviteCode,
+    SparkTask,
+    TaskRun,
+    User,
+)
 from spark_console.security import PasswordService
 from spark_console.services.audits import AuditService
 from spark_console.services.invites import InviteService
@@ -260,6 +266,45 @@ class RegistrationWebTests(unittest.TestCase):
         self.assertIn("setTimeout", response.text)
         self.assertIn("/admin/invites/", response.text)
         self.assertIn("/delete", response.text)
+
+    def test_admin_page_shows_recent_task_runs_with_spacious_action_groups(self):
+        with session_scope(self.engine) as session:
+            account = DouyinAccount(
+                owner_user_id=self.friend.id,
+                display_name="朋友账号",
+                encrypted_cookies=b"encrypted",
+                cookie_nonce=b"nonce",
+            )
+            session.add(account)
+            session.flush()
+            task = SparkTask(
+                owner_user_id=self.friend.id,
+                douyin_account_id=account.id,
+                target_name="繁花",
+                send_time="16:36",
+                message_template="今日火花",
+                enabled=True,
+            )
+            session.add(task)
+            session.flush()
+            session.add(
+                TaskRun(
+                    task_id=task.id,
+                    scheduled_for=datetime(2026, 8, 26, 8, 36, tzinfo=timezone.utc),
+                    status="success",
+                    stage="complete",
+                )
+            )
+        self.login()
+
+        response = self.client.get("/admin")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("最近执行", response.text)
+        self.assertIn("繁花", response.text)
+        self.assertIn("friend", response.text)
+        self.assertIn("成功", response.text)
+        self.assertIn('class="actions action-group"', response.text)
 
     def test_invite_revoke_requires_csrf(self):
         with session_scope(self.engine) as session:

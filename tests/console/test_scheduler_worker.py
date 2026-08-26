@@ -5,14 +5,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from spark_console.config import Settings
 from spark_console.crypto import CookieCipher
 from spark_console.db import create_schema
 from spark_console.executor import ExecutionResult, ExecutionStage
-from spark_console.models import DouyinAccount, SparkTask, User
+from spark_console.models import DouyinAccount, SparkTask, TaskRun, User
 from spark_console.scheduler import claim_next_due_task, compute_next_run
 from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
@@ -136,12 +136,72 @@ class WorkerCredentialTests(unittest.IsolatedAsyncioTestCase):
                 with patch.object(
                     AccountService, "decrypt_for_worker", decrypt_for_worker
                 ), patch.object(Session, "get", reject_post_decrypt_lookup):
-                    result = await Worker(settings, engine, executor=executor).run_once(now)
+                    result = await Worker(
+                        settings, engine, executor=executor, started_at=now
+                    ).run_once(now)
             finally:
                 engine.dispose()
             self.assertEqual("success", result.status)
             self.assertEqual(2, executor.credential_version)
             self.assertEqual(0, len(payload))
+
+    async def test_worker_startup_records_but_never_sends_tasks_missed_while_offline(self):
+        scheduled = datetime(2026, 8, 26, 8, 36, tzinfo=timezone.utc)
+        started = scheduled + timedelta(minutes=20)
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            cookie_key = data_dir / "cookie.key"
+            session_key = data_dir / "session.key"
+            cookie_key.write_bytes(b"w" * 32)
+            session_key.write_bytes(b"s" * 32)
+            settings = Settings(
+                data_dir=data_dir,
+                database_url=f"sqlite:///{data_dir / 'worker.db'}",
+                cookie_key_file=cookie_key,
+                session_key_file=session_key,
+            )
+            engine = create_engine(settings.database_url)
+            create_schema(engine)
+            with Session(engine) as session:
+                user = User(username="offline-owner", password_hash="hash")
+                session.add(user)
+                session.flush()
+                account = DouyinAccount(
+                    owner_user_id=user.id,
+                    display_name="main",
+                    encrypted_cookies=b"not-needed",
+                    cookie_nonce=b"not-needed",
+                )
+                session.add(account)
+                session.flush()
+                task = SparkTask(
+                    owner_user_id=user.id,
+                    douyin_account_id=account.id,
+                    target_name="好友",
+                    send_time="16:36",
+                    message_template="今日火花",
+                    enabled=True,
+                    next_run_at=scheduled,
+                )
+                session.add(task)
+                session.commit()
+
+            executor = _RecordingExecutor()
+            result = await Worker(
+                settings,
+                engine,
+                executor=executor,
+                started_at=started,
+            ).run_once(started)
+
+            self.assertEqual("skipped", result.status)
+            self.assertEqual("missed_startup", result.stage)
+            self.assertEqual("worker_was_offline", result.error_code)
+            self.assertIsNone(executor.payload_reference)
+            with Session(engine) as session:
+                persisted = session.scalar(select(TaskRun))
+                self.assertEqual("skipped", persisted.status)
+            engine.dispose()
 
 
 if __name__ == "__main__":
