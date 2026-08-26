@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 
 from spark_console.config import Settings
+from spark_console.crypto import CookieCipher
 from spark_console.db import create_schema, session_scope
 from spark_console.models import DouyinAccount, DouyinLoginSession, User
 from spark_console.security import PasswordService
@@ -307,6 +308,45 @@ class AccountScanWebTests(unittest.TestCase):
                 ScanSessionService(db).claim_interaction(scan_id),
             )
 
+    def test_owner_can_send_verification_code_without_exposing_it_in_response(self):
+        scan_id = self._awaiting_scan()
+
+        response = self.owner_client.post(
+            f"/accounts/scan/{scan_id}/interact",
+            data={
+                "csrf_token": self.owner_csrf,
+                "kind": "text",
+                "text": "123456",
+            },
+        )
+
+        self.assertEqual(202, response.status_code)
+        self.assertEqual({"accepted": True}, response.json())
+        self.assertNotIn("123456", response.text)
+        with session_scope(self.engine) as db:
+            self.assertEqual(
+                {"kind": "text", "text": "123456"},
+                ScanSessionService(db).claim_interaction(
+                    scan_id, CookieCipher(b"c" * 32)
+                ),
+            )
+
+    def test_verification_code_route_rejects_non_numeric_or_wrong_length(self):
+        scan_id = self._awaiting_scan()
+
+        for value in ("123", "123456789", "12a456"):
+            with self.subTest(value=value):
+                response = self.owner_client.post(
+                    f"/accounts/scan/{scan_id}/interact",
+                    data={
+                        "csrf_token": self.owner_csrf,
+                        "kind": "text",
+                        "text": value,
+                    },
+                )
+                self.assertEqual(400, response.status_code)
+                self.assertNotIn(value, response.text)
+
     def test_qr_before_publication_uses_a_stable_unavailable_error(self):
         response = self.owner_client.post(
             "/accounts/scan", data={"csrf_token": self.owner_csrf}
@@ -374,9 +414,10 @@ class AccountScanWebTests(unittest.TestCase):
         self.assertIn("扫码绑定抖音账号", response.text)
         self.assertIn("<dialog", response.text)
         self.assertIn(
-            'src="/static/account_scan.js?v=20260826-3"', response.text
+            'src="/static/account_scan.js?v=20260826-4"', response.text
         )
         self.assertIn("修改备注", response.text)
+        self.assertIn("当前仅支持短信验证码", response.text)
         self.assertIn(f'action="/accounts/{self.account_id}/rename"', response.text)
         self.assertNotIn('textarea name="cookies"', response.text)
         self.assertNotIn('name="cookies"', response.text)

@@ -15,6 +15,8 @@
   const countdownNode = document.querySelector("#scan-countdown");
   const qrNode = document.querySelector("#scan-qr");
   const placeholderNode = document.querySelector("#scan-placeholder");
+  const textNode = document.querySelector("#scan-text");
+  const typeButton = document.querySelector("#scan-type");
 
   let scanId = null;
   let currentStatus = null;
@@ -69,6 +71,8 @@
       loadQrOnce(scanId);
     }
     const terminal = TERMINAL.has(state.status);
+    textNode.disabled = terminal;
+    typeButton.disabled = terminal;
     setBusy(!terminal);
     cancelButton.disabled = terminal;
     if (state.status === "succeeded") {
@@ -315,10 +319,44 @@
     }
   }
 
+  async function sendBrowserText() {
+    if (!scanId || TERMINAL.has(currentStatus)) return;
+    const value = textNode.value.trim();
+    if (!/^\d{4,8}$/.test(value)) {
+      showMessage("请输入 4–8 位数字验证码", 0);
+      textNode.focus();
+      return;
+    }
+    textNode.value = "";
+    typeButton.disabled = true;
+    try {
+      const response = await fetch(`/accounts/scan/${encodeURIComponent(scanId)}/interact`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+        body: new URLSearchParams({csrf_token: csrfToken, kind: "text", text: value}),
+      });
+      await readJson(response);
+      showMessage("验证码已输入云端，请点击云端页面中的“验证”", 0);
+      loadQrOnce(scanId);
+    } catch (_error) {
+      showMessage("验证码未输入云端，请重新输入", 0);
+    } finally {
+      typeButton.disabled = false;
+    }
+  }
+
   startButton.addEventListener("click", startScan);
   closeButton.addEventListener("click", () => requestClose(true));
   cancelButton.addEventListener("click", () => requestClose(false));
   qrNode.addEventListener("click", forwardBrowserClick);
+  typeButton.addEventListener("click", sendBrowserText);
+  textNode.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      sendBrowserText();
+    }
+  });
   dialog.addEventListener("cancel", (event) => {
     event.preventDefault();
     requestClose(true);

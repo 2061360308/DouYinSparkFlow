@@ -118,6 +118,19 @@ class DouyinLoginAction(Base):
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class DouyinLoginInput(Base):
+    __tablename__ = "douyin_login_inputs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scan_id: Mapped[str] = mapped_column(
+        ForeignKey("douyin_login_sessions.id", ondelete="CASCADE"), index=True
+    )
+    ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
+    nonce: Mapped[bytes | None] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class DouyinAccountIdentity(Base):
     __tablename__ = "douyin_account_identities"
 

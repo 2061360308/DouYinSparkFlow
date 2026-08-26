@@ -146,6 +146,8 @@ def build_account_scan_router(
         request: Request,
         scan_id: str,
         csrf_token: str = Form(default=""),
+        kind: str = Form(default="click"),
+        text: str = Form(default=""),
         x: float = Form(default=-1),
         y: float = Form(default=-1),
     ):
@@ -155,11 +157,17 @@ def build_account_scan_router(
             if response := limited(user.id, "interact", INTERACT_LIMIT):
                 return response
             try:
-                ScanSessionService(db).queue_click(user.id, scan_id, x, y)
+                service = ScanSessionService(db)
+                if kind == "text":
+                    service.queue_text(user.id, scan_id, text, cipher)
+                elif kind == "click":
+                    service.queue_click(user.id, scan_id, x, y)
+                else:
+                    raise ValidationError("invalid_interaction")
             except NotFound:
                 return _error(404, "not_found", "未找到扫码会话")
             except ValidationError:
-                return _error(400, "invalid_interaction", "点击位置无效")
+                return _error(400, "invalid_interaction", "请输入 4–8 位数字验证码")
             except Conflict:
                 return _error(409, "scan_not_active", "扫码会话已结束")
         return JSONResponse({"accepted": True}, status_code=202, headers=NO_STORE)

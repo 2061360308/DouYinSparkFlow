@@ -349,6 +349,21 @@ class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("login_timeout", persisted["error_code"])
         self.assertIsNone(persisted["slot"])
 
+    async def test_startup_releases_nonexpired_scan_whose_browser_was_lost(self):
+        scan_id = self._start_scan()
+        with session_scope(self.engine) as session:
+            service = ScanSessionService(session)
+            service.claim_next()
+            service.publish_qr(scan_id, PNG_SIGNATURE + b"active-browser")
+
+        AuthWorker(self.settings, self.engine, scanner=_RaisingScanner(QrLoadFailed()))
+
+        persisted = self._persisted(scan_id)
+        self.assertEqual(ScanStatus.FAILED, persisted["status"])
+        self.assertEqual("automation_failed", persisted["error_code"])
+        self.assertIsNone(persisted["slot"])
+        self.assertIsNone(persisted["qr_png"])
+
     async def test_run_once_returns_false_when_no_scan_is_queued(self):
         worker = AuthWorker(
             self.settings, self.engine, scanner=_RaisingScanner(QrLoadFailed())

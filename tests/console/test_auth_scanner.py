@@ -116,7 +116,9 @@ class _Page:
             else None,
             on_click=lambda: setattr(self.qr, "visible", bool(qr_visible)),
         )
+        self.sms_button = _Locator(visible=mode == "sms_verification")
         self.viewport_size = {"width": 1280, "height": 720}
+        self.keyboard = _Keyboard()
 
     async def screenshot(self, **_kwargs):
         return PAGE_PNG
@@ -131,6 +133,8 @@ class _Page:
     def get_by_text(self, text, exact=False):
         if exact and text == "登录":
             return _Locator(items=[self.login_button])
+        if exact and text == "接收短信验证码":
+            return _Locator(items=[self.sms_button])
         return _Locator(items=[])
 
     def locator(self, selector):
@@ -254,6 +258,14 @@ class _ContextRequest:
 
     async def get(self, _url, **_kwargs):
         return _ContextResponse(self.authenticated)
+
+
+class _Keyboard:
+    def __init__(self):
+        self.values = []
+
+    async def type(self, value):
+        self.values.append(value)
 
 
 class _Browser:
@@ -422,6 +434,32 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("抖音账号", result.display_name)
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
+
+    async def test_cloud_browser_stream_types_claimed_verification_code(self):
+        scanner, _browser, context = self._scanner(mode="timeout")
+        actions = iter(({"kind": "text", "text": "123456"}, None))
+
+        async def stop_after_view(_png):
+            raise RuntimeError("view captured")
+
+        with self.assertRaisesRegex(RuntimeError, "view captured"):
+            await scanner._stream_browser_view(
+                context.page, stop_after_view, lambda: next(actions)
+            )
+
+        self.assertEqual(["123456"], context.page.keyboard.values)
+
+    async def test_cloud_browser_prefers_sms_verification_when_option_appears(self):
+        scanner, _browser, context = self._scanner(mode="sms_verification")
+
+        self.assertTrue(
+            hasattr(scanner, "_select_sms_verification"),
+            "scanner must support selecting SMS verification",
+        )
+        selected = await scanner._select_sms_verification(context.page)
+
+        self.assertTrue(selected)
+        self.assertTrue(context.page.sms_button.clicked)
 
     async def test_chat_login_entry_waits_for_delayed_login_button(self):
         scanner, browser, context = self._scanner(

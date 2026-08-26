@@ -86,6 +86,8 @@ function createEnvironment(fetchImpl, {preload = false} = {}) {
     "#scan-countdown",
     "#scan-qr",
     "#scan-placeholder",
+    "#scan-text",
+    "#scan-type",
   ];
   const elements = Object.fromEntries(selectors.map((selector) => [selector, new Element()]));
   elements["[data-account-scan]"].dataset.csrfToken = "csrf-fixture";
@@ -338,6 +340,33 @@ async function browserClick() {
   assert(body.includes("csrf_token=csrf-fixture"), "browser click omitted CSRF");
 }
 
+async function browserText() {
+  const calls = [];
+  const {elements} = createEnvironment(async (url, options = {}) => {
+    calls.push({url, options});
+    if (url === "/accounts/scan") return response(201, {
+      id: "scan-text",
+      status: "awaiting_scan",
+      remaining_seconds: 300,
+      error: null,
+      message: "请使用抖音 App 扫码并在手机确认",
+      account_id: null,
+    });
+    return response(202, {accepted: true});
+  });
+  elements["#scan-text"].value = "123456";
+
+  await elements["#scan-start"].emit("click");
+  await elements["#scan-type"].emit("click");
+
+  const interaction = calls.find((call) => call.url.includes("/interact"));
+  assert(interaction, "verification code was not sent to the interaction endpoint");
+  const body = String(interaction.options.body);
+  assert(body.includes("kind=text"), "verification input omitted the text action kind");
+  assert(body.includes("text=123456"), "verification input omitted the code");
+  assert(elements["#scan-text"].value === "", "verification code remained in the page after sending");
+}
+
 async function main() {
   const scenario = process.argv[2];
   if (scenario === "pending-close") await pendingIntent("#scan-close");
@@ -348,6 +377,7 @@ async function main() {
   else if (scenario === "pagehide-cancel") await pagehideCancel();
   else if (scenario === "success-close") await successClose();
   else if (scenario === "browser-click") await browserClick();
+  else if (scenario === "browser-text") await browserText();
   else throw new Error(`unknown scenario: ${scenario}`);
   process.stdout.write(JSON.stringify({scenario, ok: true}));
 }

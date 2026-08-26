@@ -61,6 +61,12 @@
             <img id="scan-qr" class="scan-qr" alt="云端抖音登录页面" hidden>
             <div id="scan-placeholder" class="scan-placeholder" aria-hidden="true"><span></span><small>正在启动云端登录页</small></div>
           </div>
+          <p class="scan-sms-hint">当前仅支持短信验证码：扫码后会优先选择“接收短信验证码”。请先点击云端验证码框，再在下方输入。</p>
+          <div class="scan-input-row">
+            <label class="sr-only" for="scan-text">短信验证码</label>
+            <input id="scan-text" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" pattern="[0-9]{4,8}" placeholder="输入 4–8 位短信验证码">
+            <button id="scan-type" type="button">输入到云端</button>
+          </div>
           <p id="scan-status" class="scan-status" role="status" aria-live="polite">正在创建扫码会话</p>
           <p id="scan-countdown" class="scan-countdown"></p>
         </div>
@@ -71,5 +77,5 @@
     </dialog>
   </section>
 </div>
-<script defer src="/static/account_scan.js?v=20260826-3"></script>
+<script defer src="/static/account_scan.js?v=20260826-4"></script>
 {% endblock %}

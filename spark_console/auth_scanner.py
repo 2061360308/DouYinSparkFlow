@@ -407,7 +407,10 @@ class DouyinQrScanner:
     async def _stream_browser_view(
         self, page, on_view, next_interaction
     ) -> None:
+        sms_selected = False
         while True:
+            if not sms_selected:
+                sms_selected = await self._select_sms_verification(page)
             if next_interaction is not None:
                 action = next_interaction()
                 if inspect.isawaitable(action):
@@ -420,10 +423,27 @@ class DouyinQrScanner:
                         await page.mouse.click(
                             x * viewport["width"], y * viewport["height"]
                         )
+                elif isinstance(action, dict) and action.get("kind") == "text":
+                    value = str(action.get("text", ""))
+                    if value.isdigit() and 4 <= len(value) <= 8:
+                        await page.keyboard.type(value)
             png = await page.screenshot(type="png")
             if isinstance(png, bytes) and png.startswith(PNG_SIGNATURE):
                 await _invoke(on_view, png)
             await asyncio.sleep(max(0.75, self.poll_interval_seconds))
+
+    @staticmethod
+    async def _select_sms_verification(page) -> bool:
+        try:
+            for button in await page.get_by_text(
+                "接收短信验证码", exact=True
+            ).all():
+                if await button.is_visible():
+                    await button.click(timeout=10_000)
+                    return True
+        except Exception:
+            return False
+        return False
 
     @staticmethod
     async def _account_session_is_authenticated(context) -> bool:

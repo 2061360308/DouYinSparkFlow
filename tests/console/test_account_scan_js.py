@@ -46,6 +46,9 @@ class AccountScanJavaScriptTests(unittest.TestCase):
     def test_cloud_browser_click_is_forwarded_with_normalized_coordinates(self):
         self.run_scenario("browser-click")
 
+    def test_verification_code_is_sent_to_cloud_browser_and_cleared_locally(self):
+        self.run_scenario("browser-text")
+
 
 if __name__ == "__main__":
     unittest.main()
