@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from typing import Callable
 from urllib.parse import urlparse
 
+from core.web_chat import CONVERSATION_ITEM_SELECTOR, CONVERSATION_TITLE_SELECTOR
+
 
 CHAT_LOGIN_URL = "https://www.douyin.com/chat"
 ACCOUNT_INFO_URL = "https://www.douyin.com/passport/account/info/v2/?aid=6383"
@@ -66,6 +68,7 @@ class ScannedAccount:
     display_name: str
     unique_id: str | None
     storage_state: dict[str, object]
+    conversation_names: tuple[str, ...] = ()
 
 
 def _default_playwright_factory():
@@ -175,7 +178,15 @@ class DouyinQrScanner:
                 storage_state = await self._await_stage(
                     context.storage_state(), cancelled, deadline
                 )
-                return ScannedAccount(display_name, unique_id, storage_state)
+                conversation_names = await self._await_stage(
+                    self._visible_conversation_names(page), cancelled, deadline
+                )
+                return ScannedAccount(
+                    display_name,
+                    unique_id,
+                    storage_state,
+                    conversation_names,
+                )
             finally:
                 try:
                     if context is not None:
@@ -594,6 +605,25 @@ class DouyinQrScanner:
             for task in watchers:
                 task.cancel()
             await asyncio.gather(operation, *watchers, return_exceptions=True)
+
+    @staticmethod
+    async def _visible_conversation_names(page) -> tuple[str, ...]:
+        names = []
+        seen = set()
+        try:
+            items = await page.locator(CONVERSATION_ITEM_SELECTOR).all()
+            for item in items:
+                if hasattr(item, "is_visible") and not await item.is_visible():
+                    continue
+                name = (
+                    await item.locator(CONVERSATION_TITLE_SELECTOR).inner_text()
+                ).strip()
+                if name and name not in seen:
+                    seen.add(name)
+                    names.append(name)
+        except Exception:
+            logger.warning("auth scan could not snapshot visible conversations")
+        return tuple(names)
 
     @staticmethod
     async def _required_text(page, selector: str) -> str:

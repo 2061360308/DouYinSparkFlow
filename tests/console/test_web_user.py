@@ -7,10 +7,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 
 from spark_console.config import Settings
-from spark_console.conversations import ConversationAuthenticationRequired
 from spark_console.crypto import CookieCipher
 from spark_console.db import create_schema, session_scope
-from spark_console.models import DouyinAccount, User
+from spark_console.models import DouyinAccount, DouyinConversation, User
 from spark_console.security import PasswordService
 from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
@@ -197,7 +196,7 @@ class UserWebTests(unittest.TestCase):
         )
         self.assertEqual(405, response.status_code)
 
-    def test_task_page_loads_owned_account_conversations_without_exposing_credentials(self):
+    def test_task_page_loads_saved_account_conversations_without_browser_access(self):
         self.login()
         page = self.client.get("/change-password")
         marker = 'name="csrf_token" value="'
@@ -223,54 +222,23 @@ class UserWebTests(unittest.TestCase):
                 b'[{"name":"sessionid","value":"secret-marker","url":"https://www.douyin.com"}]',
             )
             account_id = account.id
-
-        captured = {}
-
-        async def discoverer(secret, version):
-            captured["calls"] = captured.get("calls", 0) + 1
-            captured["secret"] = secret
-            captured["version"] = version
-            return ["wzlovegsy", "gsy"]
-
-        self.client.app.state.conversation_discoverer = discoverer
+            session.add_all(
+                [
+                    DouyinConversation(account_id=account_id, display_name="wzlovegsy"),
+                    DouyinConversation(account_id=account_id, display_name="gsy"),
+                ]
+            )
         tasks_page = self.client.get("/tasks")
         response = self.client.get(f"/accounts/{account_id}/conversations")
-        cached_response = self.client.get(
-            f"/accounts/{account_id}/conversations"
-        )
 
         self.assertEqual(200, response.status_code)
         self.assertEqual(
-            {"items": [{"name": "wzlovegsy"}, {"name": "gsy"}]},
+            {"items": [{"name": "gsy"}, {"name": "wzlovegsy"}]},
             response.json(),
         )
         self.assertIn('list="task-target-options"', tasks_page.text)
         self.assertIn("读取好友列表", tasks_page.text)
-        self.assertEqual(response.json(), cached_response.json())
-        self.assertEqual(1, captured["calls"])
-        self.assertEqual(1, captured["version"])
-        self.assertTrue(captured["secret"])
-        self.assertEqual({0}, set(captured["secret"]))
         self.assertNotIn("secret-marker", response.text)
-
-        async def expired(_secret, _version):
-            raise ConversationAuthenticationRequired()
-
-        self.client.app.state.conversation_cache.clear()
-        self.client.app.state.conversation_discoverer = expired
-        expired_response = self.client.get(
-            f"/accounts/{account_id}/conversations"
-        )
-        self.assertEqual(401, expired_response.status_code)
-        self.assertEqual(
-            "抖音登录已失效，请重新绑定账号",
-            expired_response.json()["message"],
-        )
-        with session_scope(self.engine) as session:
-            self.assertEqual(
-                "invalid",
-                session.get(DouyinAccount, account_id).validation_state,
-            )
 
 
 if __name__ == "__main__":

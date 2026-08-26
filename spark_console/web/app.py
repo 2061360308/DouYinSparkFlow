@@ -1,26 +1,26 @@
 from __future__ import annotations
 
-import asyncio
 import os
-import time
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
 from spark_console.config import Settings
-from spark_console.conversations import (
-    ConversationAuthenticationRequired,
-    discover_conversations,
-)
 from spark_console.crypto import CookieCipher
 from spark_console.db import create_engine_for, create_schema, session_scope
-from spark_console.models import DouyinAccount, SparkTask, TaskRun, User
+from spark_console.models import (
+    DouyinAccount,
+    DouyinConversation,
+    SparkTask,
+    TaskRun,
+    User,
+)
 from spark_console.rate_limit import FailedAttemptLimiter
 from spark_console.security import PasswordService, SessionService
 from spark_console.services.accounts import AccountService
@@ -40,9 +40,6 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
     app.state.engine = engine
-    app.state.conversation_discoverer = discover_conversations
-    app.state.conversation_cache = {}
-    app.state.conversation_locks = {}
     app.mount("/static", StaticFiles(directory=str(PACKAGE_ROOT / "static")), name="static")
     passwords = PasswordService()
     sessions = SessionService(settings.session_key_file.read_bytes())
@@ -222,55 +219,17 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         return RedirectResponse("/accounts", status_code=303)
 
     @app.get("/accounts/{account_id}/conversations")
-    async def account_conversations(request: Request, account_id: str):
-        secret = None
+    def account_conversations(request: Request, account_id: str):
         with session_scope(engine) as db:
             user, _record = auth.current(request, db)
             service = AccountService(db, cipher, AuditService(db))
-            account = service.get_owned(user.id, account_id)
-            owner_id = user.id
-            credential_version = account.cookie_version
-        cached = app.state.conversation_cache.get(account_id)
-        if cached and time.monotonic() - cached[0] < 1800:
-            return {"items": [{"name": target} for target in cached[1]]}
-
-        lock = app.state.conversation_locks.setdefault(account_id, asyncio.Lock())
-        try:
-            async with lock:
-                cached = app.state.conversation_cache.get(account_id)
-                if cached and time.monotonic() - cached[0] < 1800:
-                    targets = cached[1]
-                else:
-                    with session_scope(engine) as db:
-                        secret = AccountService(
-                            db, cipher, AuditService(db)
-                        ).decrypt_for_worker(account_id)
-                    targets = await app.state.conversation_discoverer(
-                        secret, credential_version
-                    )
-                    app.state.conversation_cache[account_id] = (
-                        time.monotonic(), targets
-                    )
-        except ConversationAuthenticationRequired:
-            with session_scope(engine) as db:
-                owned = AccountService(
-                    db, cipher, AuditService(db)
-                ).get_owned(owner_id, account_id)
-                owned.validation_state = "invalid"
-            return JSONResponse(
-                {"error": "authentication_required", "message": "抖音登录已失效，请重新绑定账号"},
-                status_code=401,
-            )
-        except Exception:
-            return JSONResponse(
-                {"error": "conversation_sync_failed", "message": "好友列表读取失败，请确认抖音登录仍有效后重试"},
-                status_code=502,
-            )
-        finally:
-            if secret is not None:
-                for index in range(len(secret)):
-                    secret[index] = 0
-        return {"items": [{"name": target} for target in targets]}
+            service.get_owned(user.id, account_id)
+            targets = db.scalars(
+                select(DouyinConversation.display_name)
+                .where(DouyinConversation.account_id == account_id)
+                .order_by(DouyinConversation.display_name)
+            ).all()
+            return {"items": [{"name": target} for target in targets]}
 
     @app.get("/tasks")
     def tasks_page(request: Request):

@@ -50,6 +50,18 @@ class DouyinAccount(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
+class DouyinConversation(Base):
+    __tablename__ = "douyin_conversations"
+
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("douyin_accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    display_name: Mapped[str] = mapped_column(String(256), primary_key=True)
+    discovered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+
+
 class ScanStatus(StrEnum):
     QUEUED = "queued"
     LOADING_QR = "loading_qr"

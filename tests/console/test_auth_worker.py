@@ -20,6 +20,7 @@ from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.models import (
     AuditEvent,
     DouyinAccount,
+    DouyinConversation,
     DouyinLoginSession,
     ScanStatus,
     User,
@@ -96,7 +97,12 @@ class _LifecycleScanner:
             with session_scope(self.engine) as session:
                 scan = session.get(DouyinLoginSession, self.scan_id)
                 scan.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-        return ScannedAccount(" 测试昵称 ", " douyin-123 ", self.state)
+        return ScannedAccount(
+            " 测试昵称 ",
+            " douyin-123 ",
+            self.state,
+            ("wzlovegsy", "gsy", "wzlovegsy"),
+        )
 
 
 class _RaisingScanner:
@@ -225,6 +231,11 @@ class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(persisted["account_id"])
         with Session(self.engine) as session:
             account = session.get(DouyinAccount, persisted["account_id"])
+            conversations = session.scalars(
+                select(DouyinConversation.display_name)
+                .where(DouyinConversation.account_id == account.id)
+                .order_by(DouyinConversation.display_name)
+            ).all()
             audits = session.scalars(select(AuditEvent)).all()
             self.assertEqual(2, account.cookie_version)
             self.assertEqual("valid", account.validation_state)
@@ -237,6 +248,7 @@ class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
                     for marker in (COOKIE_MARKER, STORAGE_MARKER)
                 )
             )
+            self.assertEqual(["gsy", "wzlovegsy"], conversations)
         self.assertEqual(0, len(scanner.state))
 
     async def test_typed_scanner_errors_map_to_fixed_public_codes(self):

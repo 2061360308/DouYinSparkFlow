@@ -20,6 +20,7 @@ from spark_console.auth_scanner import (
     ScanCancelled,
     VerificationRequired,
 )
+from core.web_chat import CONVERSATION_ITEM_SELECTOR, CONVERSATION_TITLE_SELECTOR
 
 
 PNG = b"\x89PNG\r\n\x1a\nscanner-fixture"
@@ -151,6 +152,19 @@ class _Page:
             return _Locator(visible=self.profile_visible, text=" 测试昵称 " if self.profile_visible else "")
         if selector == UNIQUE_ID_SELECTOR:
             return _Locator(visible=True, text=" 抖音号：douyin-123 ")
+        if selector == CONVERSATION_ITEM_SELECTOR and self.mode == "chat_dom_success":
+            return _Locator(
+                items=[
+                    _Locator(
+                        visible=True,
+                        children={CONVERSATION_TITLE_SELECTOR: _Locator(text=" wzlovegsy ")},
+                    ),
+                    _Locator(
+                        visible=True,
+                        children={CONVERSATION_TITLE_SELECTOR: _Locator(text="gsy")},
+                    ),
+                ]
+            )
         return _Locator()
 
     def on(self, event, listener):
@@ -468,6 +482,7 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("抖音账号", result.display_name)
         self.assertTrue(result.storage_state["cookies"])
+        self.assertEqual(("wzlovegsy", "gsy"), result.conversation_names)
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 

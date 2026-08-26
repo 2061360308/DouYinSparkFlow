@@ -119,6 +119,7 @@ class AuthWorker:
                     scanned.display_name,
                     storage_state,
                     scanned.unique_id,
+                    scanned.conversation_names,
                 )
                 completed = ScanSessionService(db).complete(scan_id, account.id)
                 if ScanStatus(completed.status) == ScanStatus.EXPIRED:
