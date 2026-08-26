@@ -13,6 +13,7 @@ class ExecutionStage(StrEnum):
     SELECTING_TARGET = "selecting_target"
     SENDING = "sending"
     CONFIRMING = "confirming"
+    SUBMITTED = "submitted"
     COMPLETE = "complete"
 
 
@@ -22,6 +23,7 @@ class ExecutionResult:
     stage: str
     error_code: str | None = None
     error_summary: str | None = None
+    retryable: bool = False
 
 
 class DouyinExecutor:
@@ -35,6 +37,8 @@ class DouyinExecutor:
         from playwright.async_api import async_playwright
         from core.tasks import confirm_message_sent
 
+        stage = ExecutionStage.AUTHENTICATING
+        message_submitted = False
         try:
             payload = CredentialPayload.parse(bytes(cookie_payload), credential_version)
             async with async_playwright() as playwright:
@@ -47,7 +51,9 @@ class DouyinExecutor:
                         await context.add_cookies(legacy_cookies)
                     page = await context.new_page()
                     await page.goto(WEB_CHAT_URL, wait_until="domcontentloaded", timeout=120000)
+                    stage = ExecutionStage.SELECTING_TARGET
                     await select_web_chat_target(page, target, timeout=45000)
+                    stage = ExecutionStage.SENDING
                     await page.wait_for_selector(CHAT_EDITOR_SELECTOR, timeout=30000)
                     editor = page.locator(CHAT_EDITOR_SELECTOR).first
                     lines = message.splitlines() or [message]
@@ -55,8 +61,18 @@ class DouyinExecutor:
                         await editor.type(line)
                         if index < len(lines) - 1:
                             await editor.press("Shift+Enter")
+                    message_submitted = True
                     await editor.press("Enter")
-                    await confirm_message_sent(page, editor, message, timeout=20000)
+                    stage = ExecutionStage.CONFIRMING
+                    try:
+                        await confirm_message_sent(page, editor, message, timeout=20000)
+                    except Exception:
+                        return ExecutionResult(
+                            True,
+                            ExecutionStage.SUBMITTED,
+                            "delivery_confirmation_unavailable",
+                            "消息已提交，页面未能二次确认",
+                        )
                     return ExecutionResult(True, ExecutionStage.COMPLETE)
                 finally:
                     try:
@@ -69,4 +85,10 @@ class DouyinExecutor:
         except CredentialError:
             return ExecutionResult(False, ExecutionStage.AUTHENTICATING, "cookie_invalid", "账号凭据格式无效")
         except Exception:
-            return ExecutionResult(False, ExecutionStage.CONFIRMING, "automation_failed", "页面操作或发送确认失败")
+            return ExecutionResult(
+                False,
+                stage,
+                "automation_failed",
+                "页面操作或发送确认失败",
+                retryable=not message_submitted,
+            )

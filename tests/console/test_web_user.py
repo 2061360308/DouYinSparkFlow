@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -9,7 +10,13 @@ from sqlalchemy import create_engine, select
 from spark_console.config import Settings
 from spark_console.crypto import CookieCipher
 from spark_console.db import create_schema, session_scope
-from spark_console.models import DouyinAccount, DouyinConversation, User
+from spark_console.models import (
+    DouyinAccount,
+    DouyinConversation,
+    SparkTask,
+    TaskRun,
+    User,
+)
 from spark_console.security import PasswordService
 from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
@@ -239,6 +246,65 @@ class UserWebTests(unittest.TestCase):
         self.assertIn('list="task-target-options"', tasks_page.text)
         self.assertIn("读取好友列表", tasks_page.text)
         self.assertNotIn("secret-marker", response.text)
+
+    def test_run_history_uses_chinese_status_and_shanghai_time(self):
+        with session_scope(self.engine) as session:
+            user = session.scalar(select(User).where(User.username == "friend"))
+            user.must_change_password = False
+            account = DouyinAccount(
+                owner_user_id=user.id,
+                display_name="我的抖音",
+                encrypted_cookies=b"encrypted",
+                cookie_nonce=b"nonce",
+            )
+            session.add(account)
+            session.flush()
+            task = SparkTask(
+                owner_user_id=user.id,
+                douyin_account_id=account.id,
+                target_name="繁花",
+                send_time="16:36",
+                message_template="今日火花",
+                enabled=True,
+            )
+            session.add(task)
+            session.flush()
+            session.add(
+                TaskRun(
+                    task_id=task.id,
+                    scheduled_for=datetime(2026, 8, 26, 8, 36, tzinfo=timezone.utc),
+                    status="success",
+                    stage="submitted",
+                    error_code="delivery_confirmation_unavailable",
+                    error_summary="消息已提交，页面未能二次确认",
+                    started_at=datetime(2026, 8, 26, 8, 36, 2, tzinfo=timezone.utc),
+                    finished_at=datetime(2026, 8, 26, 8, 36, 8, tzinfo=timezone.utc),
+                )
+            )
+            session.add(
+                TaskRun(
+                    task_id=task.id,
+                    scheduled_for=datetime(2026, 8, 25, 8, 36, tzinfo=timezone.utc),
+                    status="failed",
+                    stage="worker_error",
+                    error_code="unexpected_error",
+                    error_summary="任务执行发生意外异常，Worker 已继续运行",
+                )
+            )
+        self.login()
+
+        response = self.client.get("/runs")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("16:36", response.text)
+        self.assertIn("成功", response.text)
+        self.assertIn("已提交发送", response.text)
+        self.assertIn("消息已提交，页面未能二次确认", response.text)
+        self.assertIn('class="run-note info"', response.text)
+        self.assertIn("失败", response.text)
+        self.assertIn("执行异常", response.text)
+        self.assertIn("繁花", response.text)
+        self.assertIn('class="run-timeline"', response.text)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+from datetime import timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -34,6 +36,43 @@ from spark_console.web.registration_routes import admin_invite_items, build_regi
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 templates = Jinja2Templates(directory=str(PACKAGE_ROOT / "templates"))
+
+RUN_STATUS_LABELS = {
+    "running": "执行中",
+    "success": "成功",
+    "failed": "失败",
+    "skipped": "已跳过",
+}
+RUN_STAGE_LABELS = {
+    "starting": "准备执行",
+    "authenticating": "验证登录",
+    "selecting_target": "查找好友",
+    "worker_error": "执行异常",
+    "sending": "发送消息",
+    "confirming": "确认送达",
+    "submitted": "已提交发送",
+    "claimed": "已领取",
+    "complete": "已完成",
+    "missed_startup": "执行器离线",
+    "late": "超过发送窗口",
+    "clock_check": "时间校验",
+    "navigation": "打开聊天页",
+    "target_search": "查找好友",
+    "message_input": "填写消息",
+    "delivery_confirmation": "确认送达",
+}
+
+
+def shanghai_time(value) -> str:
+    if value is None:
+        return "—"
+    aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return aware.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+
+
+templates.env.filters["shanghai_time"] = shanghai_time
+templates.env.filters["run_status"] = lambda value: RUN_STATUS_LABELS.get(value, value)
+templates.env.filters["run_stage"] = lambda value: RUN_STAGE_LABELS.get(value, value)
 
 
 def create_app(settings: Settings, engine: Engine) -> FastAPI:
@@ -284,7 +323,13 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             _admin, _record, context = auth.admin_context(request, db)
             users = db.scalars(select(User).order_by(User.created_at)).all()
             tasks = db.execute(select(SparkTask, User).join(User, SparkTask.owner_user_id == User.id).order_by(SparkTask.send_time)).all()
-            runs = db.scalars(select(TaskRun).order_by(TaskRun.scheduled_for.desc()).limit(20)).all()
+            runs = db.execute(
+                select(TaskRun, SparkTask, User)
+                .join(SparkTask, TaskRun.task_id == SparkTask.id)
+                .join(User, SparkTask.owner_user_id == User.id)
+                .order_by(TaskRun.scheduled_for.desc())
+                .limit(20)
+            ).all()
             invites = admin_invite_items(db, cipher)
             return page(request, "admin.html", title="管理后台", users=users, tasks=tasks, runs=runs, invites=invites, **context)
 
