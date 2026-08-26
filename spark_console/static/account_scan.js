@@ -24,6 +24,7 @@
   let cancelPending = false;
   let preparedState = null;
   let preloadPromise = null;
+  let qrLoadedFor = null;
 
   function clearTimer() {
     if (timer !== null) window.clearTimeout(timer);
@@ -33,7 +34,16 @@
   function setQrVisible(visible) {
     qrNode.hidden = !visible;
     placeholderNode.hidden = visible;
-    if (!visible) qrNode.removeAttribute("src");
+    if (!visible) {
+      qrNode.removeAttribute("src");
+      qrLoadedFor = null;
+    }
+  }
+
+  function loadQrOnce(id) {
+    if (!id || qrLoadedFor === id) return;
+    qrNode.src = `/accounts/scan/${encodeURIComponent(id)}/qr`;
+    qrLoadedFor = id;
   }
 
   function setBusy(busy) {
@@ -56,7 +66,7 @@
     const awaitingScan = state.status === "awaiting_scan";
     setQrVisible(awaitingScan);
     if (awaitingScan) {
-      qrNode.src = `/accounts/scan/${encodeURIComponent(scanId)}/qr?t=${Date.now()}`;
+      loadQrOnce(scanId);
     }
     const terminal = TERMINAL.has(state.status);
     setBusy(!terminal);
@@ -84,7 +94,7 @@
       preparedState = state;
       currentStatus = state.status;
       if (state.status === "awaiting_scan") {
-        qrNode.src = `/accounts/scan/${encodeURIComponent(scanId)}/qr?t=${Date.now()}`;
+        loadQrOnce(scanId);
         setQrVisible(true);
         setBusy(false);
         return;
@@ -120,7 +130,7 @@
       startPending = false;
       setBusy(false);
       if (state.status === "awaiting_scan") {
-        qrNode.src = `/accounts/scan/${encodeURIComponent(scanId)}/qr?t=${Date.now()}`;
+        loadQrOnce(scanId);
         setQrVisible(true);
       } else if (!TERMINAL.has(state.status)) {
         timer = window.setTimeout(pollPrepared, 1000);

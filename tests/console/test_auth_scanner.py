@@ -62,6 +62,15 @@ class _Locator:
         return self.decorative
 
 
+class _Response:
+    def __init__(self, status):
+        self.url = "https://creator.douyin.com/passport/web/check_qrconnect/"
+        self._status = status
+
+    async def json(self):
+        return {"data": {"status": self._status, "error_code": 0}}
+
+
 class _Page:
     def __init__(self, mode="success", *, qr_visible=True, semantic_qr=False, normal_verification_tab=False, profile_visible=True):
         self.mode = mode
@@ -90,6 +99,7 @@ class _Page:
         )
         self.normal_verification_tab = normal_verification_tab
         self.profile_visible = profile_visible
+        self.listeners = {}
 
     async def goto(self, *_args, **_kwargs):
         self.navigation_started.set()
@@ -107,6 +117,17 @@ class _Page:
         if selector == UNIQUE_ID_SELECTOR:
             return _Locator(visible=True, text=" 抖音号：douyin-123 ")
         return _Locator()
+
+    def on(self, event, listener):
+        self.listeners[event] = listener
+        if event == "response" and self.mode == "network_success":
+            loop = asyncio.get_running_loop()
+            loop.call_soon(listener, _Response("scanned"))
+            loop.call_soon(listener, _Response("confirmed"))
+
+    def remove_listener(self, event, listener):
+        if self.listeners.get(event) is listener:
+            self.listeners.pop(event)
 
     async def wait_for_selector(self, selector, **_kwargs):
         if selector == "text=验证码" and self.normal_verification_tab:
@@ -342,6 +363,25 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("抖音账号", result.display_name)
         self.assertEqual([True], confirmations)
         self.assertEqual(2, len(result.storage_state["cookies"]))
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_qrconnect_network_status_completes_without_dom_change(self):
+        scanner, browser, context = self._scanner(
+            mode="network_success", profile_visible=False
+        )
+        confirmations = []
+
+        result = await scanner.run(
+            lambda _png: None,
+            confirmations.append,
+            lambda: False,
+        )
+
+        self.assertEqual("抖音账号", result.display_name)
+        self.assertEqual([True], confirmations)
+        self.assertTrue(result.storage_state["cookies"])
+        self.assertNotIn("response", context.page.listeners)
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 

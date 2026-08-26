@@ -30,6 +30,17 @@ class Element {
     this.disabled = false;
     this.open = false;
     this.closeCount = 0;
+    this.srcSetCount = 0;
+    this._src = "";
+  }
+
+  set src(value) {
+    this._src = value;
+    this.srcSetCount += 1;
+  }
+
+  get src() {
+    return this._src;
   }
 
   addEventListener(name, listener) {
@@ -220,10 +231,40 @@ async function preloadClick() {
 
   await flush();
   assert(calls.length === 1 && calls[0] === "/accounts/scan", "scan was not preloaded before the click");
+  const preloadedQr = elements["#scan-qr"].src;
+  assert(preloadedQr.includes("/accounts/scan/scan-preloaded/qr"), "QR image was not loaded during preload");
   await elements["#scan-start"].emit("click");
   assert(calls.length === 1, "click created a second scan instead of reusing preload");
   assert(elements["#scan-dialog"].open, "preloaded scan dialog did not open");
   assert(!elements["#scan-qr"].hidden, "preloaded QR was not shown immediately");
+  assert(elements["#scan-qr"].src === preloadedQr, "click reloaded the already prepared QR image");
+  assert(elements["#scan-qr"].srcSetCount === 1, "prepared QR src was assigned more than once");
+}
+
+async function qrStaysCachedWhilePolling() {
+  const calls = [];
+  const {elements, timers} = createEnvironment(async (url) => {
+    calls.push(url);
+    return response(200, {
+      id: "scan-cached",
+      status: "awaiting_scan",
+      remaining_seconds: 250,
+      error: null,
+      message: "请使用抖音 App 扫码并在手机确认",
+      account_id: null,
+    });
+  }, {preload: true});
+
+  await flush();
+  const preloadedQr = elements["#scan-qr"].src;
+  await elements["#scan-start"].emit("click");
+  const scheduled = [...timers.values()];
+  assert(scheduled.length === 1, "active scan poll was not scheduled");
+  scheduled[0].callback();
+  await flush();
+  assert(calls.length === 2, "status polling did not run exactly once");
+  assert(elements["#scan-qr"].src === preloadedQr, "status polling reloaded the QR image");
+  assert(elements["#scan-qr"].srcSetCount === 1, "status polling assigned the QR src again");
 }
 
 async function pagehideCancel() {
@@ -270,6 +311,7 @@ async function main() {
   else if (scenario === "pending-cancel") await pendingIntent("#scan-cancel");
   else if (scenario === "active-cancel-failure") await activeCancelFailure();
   else if (scenario === "preload-click") await preloadClick();
+  else if (scenario === "qr-stays-cached") await qrStaysCachedWhilePolling();
   else if (scenario === "pagehide-cancel") await pagehideCancel();
   else if (scenario === "success-close") await successClose();
   else throw new Error(`unknown scenario: ${scenario}`);

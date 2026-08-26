@@ -28,6 +28,7 @@ AUTHENTICATED_SELECTOR = (
     'xpath=//*[contains(@id,"garfish_app_for_douyin_creator_pc_home")]'
 )
 AUTHENTICATED_PATH_PREFIX = "/creator-micro/"
+QRCONNECT_PATH = "/passport/web/check_qrconnect/"
 DISPLAY_NAME_SELECTOR = (
     'xpath=//*[contains(@id,"garfish_app_for_douyin_creator_pc_home")]'
     "/div/div[2]/div/div[2]/div[1]/div[2]/div[1]/div[1]/div[1]"
@@ -246,12 +247,16 @@ class DouyinQrScanner:
             self._wait_for_any_text(page, VERIFICATION_TEXT)
         )
         cancellation = asyncio.create_task(self._wait_until_cancelled(cancelled))
+        qrconnect = asyncio.create_task(
+            self._wait_for_qrconnect_status(page, confirm_once)
+        )
         pending = {
             authenticated,
             authenticated_url,
             confirming,
             verification,
             cancellation,
+            qrconnect,
         }
         credentials = None
         if context is not None and qr is not None:
@@ -285,6 +290,9 @@ class DouyinQrScanner:
                 if authenticated_url in done:
                     authenticated_url.result()
                     return
+                if qrconnect in done:
+                    qrconnect.result()
+                    return
                 if credentials is not None and credentials in done:
                     credentials.result()
                     return
@@ -292,6 +300,32 @@ class DouyinQrScanner:
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _wait_for_qrconnect_status(self, page, on_confirming) -> None:
+        responses: asyncio.Queue = asyncio.Queue()
+
+        def capture(response) -> None:
+            if urlparse(response.url).path == QRCONNECT_PATH:
+                responses.put_nowait(response)
+
+        page.on("response", capture)
+        try:
+            while True:
+                response = await responses.get()
+                try:
+                    body = await response.json()
+                except Exception:
+                    continue
+                payload = body.get("data", body) if isinstance(body, dict) else {}
+                if not isinstance(payload, dict):
+                    continue
+                status = str(payload.get("status", "")).lower()
+                if status in {"2", "scanned", "3", "confirmed"}:
+                    await on_confirming(True)
+                if status in {"3", "confirmed"}:
+                    return
+        finally:
+            page.remove_listener("response", capture)
 
     async def _wait_for_authenticated_credentials(
         self, page, context, qr, baseline, on_confirming

@@ -34,6 +34,9 @@ class AccountScanJavaScriptTests(unittest.TestCase):
     def test_preloaded_scan_is_reused_when_binding_button_is_clicked(self):
         self.run_scenario("preload-click")
 
+    def test_status_polling_does_not_reload_prepared_qr_image(self):
+        self.run_scenario("qr-stays-cached")
+
     def test_leaving_page_sends_background_cancellation(self):
         self.run_scenario("pagehide-cancel")
 
