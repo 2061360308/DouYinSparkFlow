@@ -43,7 +43,7 @@
   <section class="panel scan-entry" data-account-scan data-csrf-token="{{ csrf_token }}" data-preload="{{ 'true' if not accounts else 'false' }}">
     <span class="scan-kicker">DOUYIN APP</span>
     <h2>绑定新账号</h2>
-    <p class="muted">二维码仅在本次绑定期间有效，全平台同一时间处理一个扫码会话。</p>
+    <p class="muted">这里会显示云服务器中的抖音登录页，全平台同一时间处理一个绑定会话。</p>
     <ol class="scan-steps">
       <li><span>1</span>打开抖音 App</li>
       <li><span>2</span>扫描页面二维码</li>
@@ -55,11 +55,17 @@
       <div class="scan-dialog-card">
         <button id="scan-close" class="scan-close quiet" type="button" aria-label="关闭扫码窗口">×</button>
         <span class="eyebrow">SECURE BINDING</span>
-        <h2 id="scan-dialog-title">扫码绑定抖音账号</h2>
+        <h2 id="scan-dialog-title">云端抖音登录</h2>
         <div id="scan-stage" class="scan-stage" aria-busy="true">
           <div class="scan-frame">
-            <img id="scan-qr" class="scan-qr" alt="抖音登录二维码" hidden>
-            <div id="scan-placeholder" class="scan-placeholder" aria-hidden="true"><span></span><small>正在准备二维码</small></div>
+            <img id="scan-qr" class="scan-qr" alt="云端抖音登录页面" hidden>
+            <div id="scan-placeholder" class="scan-placeholder" aria-hidden="true"><span></span><small>正在启动云端登录页</small></div>
+          </div>
+          <p class="scan-sms-hint">当前仅支持短信验证码：扫码后会优先选择“接收短信验证码”。请先点击云端验证码框，再在下方输入。</p>
+          <div class="scan-input-row">
+            <label class="sr-only" for="scan-text">短信验证码</label>
+            <input id="scan-text" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" pattern="[0-9]{4,8}" placeholder="输入 4–8 位短信验证码">
+            <button id="scan-type" type="button">输入到云端</button>
           </div>
           <p id="scan-status" class="scan-status" role="status" aria-live="polite">正在创建扫码会话</p>
           <p id="scan-countdown" class="scan-countdown"></p>
@@ -71,5 +77,5 @@
     </dialog>
   </section>
 </div>
-<script defer src="/static/account_scan.js?v=20260826-2"></script>
+<script defer src="/static/account_scan.js?v=20260826-4"></script>
 {% endblock %}

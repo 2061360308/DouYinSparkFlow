@@ -7,7 +7,13 @@ from sqlalchemy.orm import Session
 
 from spark_console.credentials import CredentialError, CredentialPayload
 from spark_console.crypto import CookieCipher
-from spark_console.models import DouyinAccount, DouyinAccountIdentity, SparkTask, utc_now
+from spark_console.models import (
+    DouyinAccount,
+    DouyinAccountIdentity,
+    DouyinConversation,
+    SparkTask,
+    utc_now,
+)
 from spark_console.services import NotFound, ValidationError
 from spark_console.services.audits import AuditService
 
@@ -45,6 +51,7 @@ class AccountService:
         display_name: str,
         storage_state: dict,
         douyin_unique_id: str | None = None,
+        conversation_names=(),
     ) -> DouyinAccount:
         name = self._validated_display_name(display_name)
         normalized_unique_id = (
@@ -80,6 +87,18 @@ class AccountService:
                 account_id=account.id, douyin_unique_id=normalized_unique_id
             )
         )
+        seen = set()
+        for display_name in conversation_names:
+            normalized_name = str(display_name).strip()
+            if not normalized_name or normalized_name in seen:
+                continue
+            seen.add(normalized_name)
+            self.session.add(
+                DouyinConversation(
+                    account_id=account.id,
+                    display_name=normalized_name[:256],
+                )
+            )
         self.audit.write(owner_id, "account.created", "douyin_account", account.id)
         return account
 

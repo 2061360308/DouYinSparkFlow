@@ -3,9 +3,11 @@ import gc
 import unittest
 import warnings
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 from spark_console.auth_scanner import (
     AUTHENTICATED_SELECTOR,
+    CHAT_AUTHENTICATED_SELECTOR,
     CONFIRMING_TEXT,
     DISPLAY_NAME_SELECTOR,
     LOGIN_PANEL_SELECTORS,
@@ -18,13 +20,15 @@ from spark_console.auth_scanner import (
     ScanCancelled,
     VerificationRequired,
 )
+from core.web_chat import CONVERSATION_ITEM_SELECTOR, CONVERSATION_TITLE_SELECTOR
 
 
 PNG = b"\x89PNG\r\n\x1a\nscanner-fixture"
+PAGE_PNG = b"\x89PNG\r\n\x1a\nfull-browser-view"
 
 
 class _Locator:
-    def __init__(self, *, visible=False, visible_sequence=None, png=None, text="", children=None, items=None, box=None, decorative=False):
+    def __init__(self, *, visible=False, visible_sequence=None, png=None, text="", children=None, items=None, box=None, decorative=False, on_click=None):
         self.visible = visible
         self.visible_sequence = list(visible_sequence or [])
         self.png = png
@@ -33,6 +37,8 @@ class _Locator:
         self.items = items or []
         self.box = box
         self.decorative = decorative
+        self.on_click = on_click
+        self.clicked = False
 
     @property
     def first(self):
@@ -61,6 +67,11 @@ class _Locator:
     async def evaluate(self, _expression):
         return self.decorative
 
+    async def click(self, **_kwargs):
+        self.clicked = True
+        if self.on_click is not None:
+            self.on_click()
+
 
 class _Response:
     def __init__(self, status):
@@ -79,9 +90,9 @@ class _Page:
         self.never = asyncio.Event()
         self.navigation_started = asyncio.Event()
         self.qr = _Locator(
-            visible=qr_visible,
+            visible=False if mode in {"chat_entry", "delayed_chat_entry"} else qr_visible,
             visible_sequence=[True, True, False]
-            if mode == "credential_success"
+            if mode in {"credential_success", "cookie_only"}
             else None,
             png=PNG,
         )
@@ -100,12 +111,37 @@ class _Page:
         self.normal_verification_tab = normal_verification_tab
         self.profile_visible = profile_visible
         self.listeners = {}
+        self.goto_url = None
+        self.login_button = _Locator(
+            visible=True,
+            visible_sequence=[False, False, True]
+            if mode == "delayed_chat_entry"
+            else None,
+            on_click=lambda: setattr(self.qr, "visible", bool(qr_visible)),
+        )
+        self.sms_button = _Locator(visible=mode == "sms_verification")
+        self.verify_button = _Locator(visible=mode == "sms_verification")
+        self.viewport_size = {"width": 1280, "height": 720}
+        self.keyboard = _Keyboard()
+
+    async def screenshot(self, **_kwargs):
+        return PAGE_PNG
 
     async def goto(self, *_args, **_kwargs):
+        self.goto_url = _args[0]
         self.navigation_started.set()
         if self.mode == "navigation":
             await self.never.wait()
         return None
+
+    def get_by_text(self, text, exact=False):
+        if exact and text == "登录":
+            return _Locator(items=[self.login_button])
+        if exact and text == "接收短信验证码":
+            return _Locator(items=[self.sms_button])
+        if exact and text == "验证":
+            return _Locator(items=[self.verify_button])
+        return _Locator(items=[])
 
     def locator(self, selector):
         if selector == "img, canvas":
@@ -116,6 +152,19 @@ class _Page:
             return _Locator(visible=self.profile_visible, text=" 测试昵称 " if self.profile_visible else "")
         if selector == UNIQUE_ID_SELECTOR:
             return _Locator(visible=True, text=" 抖音号：douyin-123 ")
+        if selector == CONVERSATION_ITEM_SELECTOR and self.mode == "chat_dom_success":
+            return _Locator(
+                items=[
+                    _Locator(
+                        visible=True,
+                        children={CONVERSATION_TITLE_SELECTOR: _Locator(text=" wzlovegsy ")},
+                    ),
+                    _Locator(
+                        visible=True,
+                        children={CONVERSATION_TITLE_SELECTOR: _Locator(text="gsy")},
+                    ),
+                ]
+            )
         return _Locator()
 
     def on(self, event, listener):
@@ -135,12 +184,17 @@ class _Page:
         if selector == AUTHENTICATED_SELECTOR:
             await self.authenticated.wait()
             return _Locator(visible=True)
+        if selector == CHAT_AUTHENTICATED_SELECTOR:
+            if self.mode == "chat_dom_success":
+                await asyncio.sleep(0)
+                return _Locator(visible=True)
+            await self.never.wait()
         if any(text in selector for text in CONFIRMING_TEXT):
-            if self.mode in {"success", "url_success"}:
+            if self.mode in {"success", "url_success", "chat_entry", "delayed_chat_entry", "chat_account_success"}:
                 await asyncio.sleep(0)
                 if self.mode == "success":
                     asyncio.get_running_loop().call_soon(self.authenticated.set)
-                else:
+                elif self.mode != "chat_account_success":
                     self.url = "https://creator.douyin.com/creator-micro/home"
                 return _Locator(visible=True)
             await self.never.wait()
@@ -159,6 +213,17 @@ class _Context:
         self.closed = False
         self.credential_success = credential_success
         self.cookie_reads = 0
+        self.request = _ContextRequest(
+            authenticated=page.mode
+            in {
+                "success",
+                "url_success",
+                "chat_entry",
+                "delayed_chat_entry",
+                "chat_account_success",
+                "credential_success",
+            }
+        )
 
     async def new_page(self):
         return self.page
@@ -205,6 +270,36 @@ class _Context:
 
     async def close(self):
         self.closed = True
+
+
+class _ContextResponse:
+    def __init__(self, authenticated):
+        self.authenticated = authenticated
+
+    async def json(self):
+        return {
+            "message": "success" if self.authenticated else "error",
+            "data": {
+                "error_code": 0 if self.authenticated else 13,
+                "user_id": "user-fixture" if self.authenticated else "",
+            },
+        }
+
+
+class _ContextRequest:
+    def __init__(self, authenticated=False):
+        self.authenticated = authenticated
+
+    async def get(self, _url, **_kwargs):
+        return _ContextResponse(self.authenticated)
+
+
+class _Keyboard:
+    def __init__(self):
+        self.values = []
+
+    async def type(self, value):
+        self.values.append(value)
 
 
 class _Browser:
@@ -269,7 +364,7 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         context = _Context(
             page,
             fail_storage_state=fail_storage_state,
-            credential_success=mode == "credential_success",
+            credential_success=mode in {"credential_success", "cookie_only"},
         )
         browser = _Browser(context)
         scanner = DouyinQrScanner(
@@ -289,7 +384,8 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         except QrLoadFailed:
             self.fail("randomized square QR should be discovered")
 
-        self.assertEqual([PNG], qr_images)
+        self.assertGreaterEqual(len(qr_images), 1)
+        self.assertTrue(all(image == PAGE_PNG for image in qr_images))
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 
@@ -326,9 +422,124 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("测试昵称", result.display_name)
         self.assertEqual("douyin-123", result.unique_id)
         self.assertEqual(1, len(result.storage_state["cookies"]))
-        self.assertEqual(1, len(qr_images))
-        self.assertTrue(qr_images[0].startswith(b"\x89PNG"))
+        self.assertGreaterEqual(len(qr_images), 1)
+        self.assertTrue(all(image == PAGE_PNG for image in qr_images))
         self.assertEqual([True], confirmations)
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_chat_login_entry_is_opened_before_qr_capture(self):
+        scanner, browser, context = self._scanner(mode="chat_entry")
+
+        result = await scanner.run(
+            lambda _png: None,
+            lambda _confirmed: None,
+            lambda: False,
+        )
+
+        self.assertEqual("https://www.douyin.com/chat", context.page.goto_url)
+        self.assertTrue(context.page.login_button.clicked)
+        self.assertEqual("测试昵称", result.display_name)
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_initial_image_contains_the_complete_cloud_browser_view(self):
+        scanner, browser, context = self._scanner(mode="chat_entry")
+        views = []
+
+        await scanner.run(views.append, lambda _confirmed: None, lambda: False)
+
+        self.assertEqual(PAGE_PNG, views[0])
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_confirmed_chat_login_completes_from_account_api_without_url_change(self):
+        scanner, browser, context = self._scanner(
+            mode="chat_account_success", profile_visible=False
+        )
+
+        result = await scanner.run(
+            lambda _png: None,
+            lambda _confirmed: None,
+            lambda: False,
+        )
+
+        self.assertEqual("https://creator.douyin.com/", context.page.url)
+        self.assertEqual("抖音账号", result.display_name)
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_loaded_chat_conversation_list_completes_without_account_api(self):
+        scanner, browser, context = self._scanner(
+            mode="chat_dom_success", profile_visible=False
+        )
+
+        result = await scanner.run(
+            lambda _png: None,
+            lambda _confirmed: None,
+            lambda: False,
+        )
+
+        self.assertEqual("抖音账号", result.display_name)
+        self.assertTrue(result.storage_state["cookies"])
+        self.assertEqual(("wzlovegsy", "gsy"), result.conversation_names)
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_cloud_browser_stream_types_claimed_verification_code(self):
+        scanner, _browser, context = self._scanner(mode="timeout")
+        actions = iter(({"kind": "text", "text": "123456"}, None))
+
+        async def stop_after_view(_png):
+            raise RuntimeError("view captured")
+
+        with self.assertRaisesRegex(RuntimeError, "view captured"):
+            await scanner._stream_browser_view(
+                context.page, stop_after_view, lambda: next(actions)
+            )
+
+        self.assertEqual(["123456"], context.page.keyboard.values)
+
+    async def test_verification_code_is_submitted_after_two_seconds(self):
+        scanner, _browser, context = self._scanner(mode="sms_verification")
+
+        with patch(
+            "spark_console.auth_scanner.asyncio.sleep", new=AsyncMock()
+        ) as sleep:
+            submitted = await scanner._type_and_submit_verification_code(
+                context.page, "123456"
+            )
+
+        self.assertTrue(submitted)
+        self.assertEqual(["123456"], context.page.keyboard.values)
+        sleep.assert_awaited_once_with(2)
+        self.assertTrue(context.page.verify_button.clicked)
+
+    async def test_cloud_browser_prefers_sms_verification_when_option_appears(self):
+        scanner, _browser, context = self._scanner(mode="sms_verification")
+
+        self.assertTrue(
+            hasattr(scanner, "_select_sms_verification"),
+            "scanner must support selecting SMS verification",
+        )
+        selected = await scanner._select_sms_verification(context.page)
+
+        self.assertTrue(selected)
+        self.assertTrue(context.page.sms_button.clicked)
+
+    async def test_chat_login_entry_waits_for_delayed_login_button(self):
+        scanner, browser, context = self._scanner(
+            mode="delayed_chat_entry", qr_timeout_seconds=0.05
+        )
+
+        result = await scanner.run(
+            lambda _png: None,
+            lambda _confirmed: None,
+            lambda: False,
+        )
+
+        self.assertTrue(context.page.login_button.clicked)
+        self.assertEqual("测试昵称", result.display_name)
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 
@@ -366,22 +577,40 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 
-    async def test_qrconnect_network_status_completes_without_dom_change(self):
+    async def test_cookie_change_alone_does_not_save_unauthenticated_state(self):
         scanner, browser, context = self._scanner(
-            mode="network_success", profile_visible=False
+            mode="cookie_only",
+            profile_visible=False,
+            login_timeout_seconds=0.2,
+        )
+
+        with self.assertRaises(LoginTimedOut):
+            await scanner.run(
+                lambda _png: None,
+                lambda _confirmed: None,
+                lambda: False,
+            )
+
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_qrconnect_confirmation_does_not_save_unauthenticated_state(self):
+        scanner, browser, context = self._scanner(
+            mode="network_success",
+            profile_visible=False,
+            login_timeout_seconds=0.2,
         )
         confirmations = []
 
         with self.assertLogs("spark_console.auth_scanner", level="INFO") as logs:
-            result = await scanner.run(
-                lambda _png: None,
-                confirmations.append,
-                lambda: False,
-            )
+            with self.assertRaises(LoginTimedOut):
+                await scanner.run(
+                    lambda _png: None,
+                    confirmations.append,
+                    lambda: False,
+                )
 
-        self.assertEqual("抖音账号", result.display_name)
         self.assertEqual([True], confirmations)
-        self.assertTrue(result.storage_state["cookies"])
         self.assertTrue(any("status=scanned" in line for line in logs.output))
         self.assertTrue(any("status=confirmed" in line for line in logs.output))
         self.assertNotIn("response", context.page.listeners)

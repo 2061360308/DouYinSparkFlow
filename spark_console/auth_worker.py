@@ -50,7 +50,9 @@ class AuthWorker:
             key[:] = b"\0" * len(key)
             key.clear()
         with session_scope(self.engine) as db:
-            ScanSessionService(db).expire_stale()
+            service = ScanSessionService(db)
+            service.expire_stale()
+            service.fail_abandoned_browser_sessions()
 
     async def run_once(self, stopping: asyncio.Event | None = None) -> bool:
         with session_scope(self.engine) as db:
@@ -68,6 +70,14 @@ class AuthWorker:
         def on_confirming(_confirmed: bool) -> None:
             with session_scope(self.engine) as db:
                 ScanSessionService(db).mark_confirming(scan_id)
+
+        def on_view(png: bytes) -> None:
+            with session_scope(self.engine) as db:
+                ScanSessionService(db).publish_view(scan_id, png)
+
+        def next_interaction():
+            with session_scope(self.engine) as db:
+                return ScanSessionService(db).claim_interaction(scan_id, self.cipher)
 
         def cancelled() -> bool:
             if stopping is not None and stopping.is_set():
@@ -88,6 +98,8 @@ class AuthWorker:
                 on_confirming,
                 cancelled,
                 expires_at=expires_at,
+                on_view=on_view,
+                next_interaction=next_interaction,
             )
             if stopping is not None and stopping.is_set():
                 raise ScanCancelled()
@@ -107,6 +119,7 @@ class AuthWorker:
                     scanned.display_name,
                     storage_state,
                     scanned.unique_id,
+                    scanned.conversation_names,
                 )
                 completed = ScanSessionService(db).complete(scan_id, account.id)
                 if ScanStatus(completed.status) == ScanStatus.EXPIRED:

@@ -14,7 +14,13 @@ from sqlalchemy.engine import Engine
 from spark_console.config import Settings
 from spark_console.crypto import CookieCipher
 from spark_console.db import create_engine_for, create_schema, session_scope
-from spark_console.models import DouyinAccount, SparkTask, TaskRun, User
+from spark_console.models import (
+    DouyinAccount,
+    DouyinConversation,
+    SparkTask,
+    TaskRun,
+    User,
+)
 from spark_console.rate_limit import FailedAttemptLimiter
 from spark_console.security import PasswordService, SessionService
 from spark_console.services.accounts import AccountService
@@ -211,6 +217,19 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             auth.csrf(record, csrf_token)
             AccountService(db, cipher, AuditService(db)).delete_owned(user.id, account_id)
         return RedirectResponse("/accounts", status_code=303)
+
+    @app.get("/accounts/{account_id}/conversations")
+    def account_conversations(request: Request, account_id: str):
+        with session_scope(engine) as db:
+            user, _record = auth.current(request, db)
+            service = AccountService(db, cipher, AuditService(db))
+            service.get_owned(user.id, account_id)
+            targets = db.scalars(
+                select(DouyinConversation.display_name)
+                .where(DouyinConversation.account_id == account_id)
+                .order_by(DouyinConversation.display_name)
+            ).all()
+            return {"items": [{"name": target} for target in targets]}
 
     @app.get("/tasks")
     def tasks_page(request: Request):

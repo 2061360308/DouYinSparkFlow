@@ -47,9 +47,13 @@ class Element {
     this.listeners.set(name, listener);
   }
 
-  emit(name) {
-    const event = {preventDefault() { this.defaultPrevented = true; }};
+  emit(name, supplied = {}) {
+    const event = {preventDefault() { this.defaultPrevented = true; }, ...supplied};
     return this.listeners.get(name)(event);
+  }
+
+  getBoundingClientRect() {
+    return {left: 10, top: 20, width: 800, height: 450};
   }
 
   setAttribute(name, value) {
@@ -82,6 +86,8 @@ function createEnvironment(fetchImpl, {preload = false} = {}) {
     "#scan-countdown",
     "#scan-qr",
     "#scan-placeholder",
+    "#scan-text",
+    "#scan-type",
   ];
   const elements = Object.fromEntries(selectors.map((selector) => [selector, new Element()]));
   elements["[data-account-scan]"].dataset.csrfToken = "csrf-fixture";
@@ -237,8 +243,8 @@ async function preloadClick() {
   assert(calls.length === 1, "click created a second scan instead of reusing preload");
   assert(elements["#scan-dialog"].open, "preloaded scan dialog did not open");
   assert(!elements["#scan-qr"].hidden, "preloaded QR was not shown immediately");
-  assert(elements["#scan-qr"].src === preloadedQr, "click reloaded the already prepared QR image");
-  assert(elements["#scan-qr"].srcSetCount === 1, "prepared QR src was assigned more than once");
+  assert(elements["#scan-qr"].src.includes("/accounts/scan/scan-preloaded/qr"), "click lost the prepared browser view");
+  assert(elements["#scan-qr"].srcSetCount >= 1, "prepared browser view was not assigned");
 }
 
 async function qrStaysCachedWhilePolling() {
@@ -263,8 +269,8 @@ async function qrStaysCachedWhilePolling() {
   scheduled[0].callback();
   await flush();
   assert(calls.length === 2, "status polling did not run exactly once");
-  assert(elements["#scan-qr"].src === preloadedQr, "status polling reloaded the QR image");
-  assert(elements["#scan-qr"].srcSetCount === 1, "status polling assigned the QR src again");
+  assert(elements["#scan-qr"].src.includes("/accounts/scan/scan-cached/qr"), "status polling lost the browser view");
+  assert(elements["#scan-qr"].srcSetCount > 1, "status polling did not refresh the live browser view");
 }
 
 async function pagehideCancel() {
@@ -305,6 +311,62 @@ async function successClose() {
   assert(reloadCount() === 1, "success did not refresh the account list");
 }
 
+async function browserClick() {
+  const calls = [];
+  const {elements} = createEnvironment(async (url, options = {}) => {
+    calls.push({url, options});
+    if (url === "/accounts/scan") return response(201, {
+      id: "scan-browser",
+      status: "awaiting_scan",
+      remaining_seconds: 300,
+      error: null,
+      message: "请使用抖音 App 扫码并在手机确认",
+      account_id: null,
+    });
+    return response(202, {accepted: true});
+  });
+
+  await elements["#scan-start"].emit("click");
+  assert(
+    elements["#scan-qr"].listeners.has("click"),
+    "cloud browser view did not register click forwarding",
+  );
+  await elements["#scan-qr"].emit("click", {clientX: 210, clientY: 245});
+  const interaction = calls.find((call) => call.url.includes("/interact"));
+  assert(interaction, "browser click was not sent to the scan interaction endpoint");
+  const body = String(interaction.options.body);
+  assert(body.includes("x=0.25"), "browser click x coordinate was not normalized");
+  assert(body.includes("y=0.5"), "browser click y coordinate was not normalized");
+  assert(body.includes("csrf_token=csrf-fixture"), "browser click omitted CSRF");
+}
+
+async function browserText() {
+  const calls = [];
+  const {elements} = createEnvironment(async (url, options = {}) => {
+    calls.push({url, options});
+    if (url === "/accounts/scan") return response(201, {
+      id: "scan-text",
+      status: "awaiting_scan",
+      remaining_seconds: 300,
+      error: null,
+      message: "请使用抖音 App 扫码并在手机确认",
+      account_id: null,
+    });
+    return response(202, {accepted: true});
+  });
+  elements["#scan-text"].value = "123456";
+
+  await elements["#scan-start"].emit("click");
+  await elements["#scan-type"].emit("click");
+
+  const interaction = calls.find((call) => call.url.includes("/interact"));
+  assert(interaction, "verification code was not sent to the interaction endpoint");
+  const body = String(interaction.options.body);
+  assert(body.includes("kind=text"), "verification input omitted the text action kind");
+  assert(body.includes("text=123456"), "verification input omitted the code");
+  assert(elements["#scan-text"].value === "", "verification code remained in the page after sending");
+}
+
 async function main() {
   const scenario = process.argv[2];
   if (scenario === "pending-close") await pendingIntent("#scan-close");
@@ -314,6 +376,8 @@ async function main() {
   else if (scenario === "qr-stays-cached") await qrStaysCachedWhilePolling();
   else if (scenario === "pagehide-cancel") await pagehideCancel();
   else if (scenario === "success-close") await successClose();
+  else if (scenario === "browser-click") await browserClick();
+  else if (scenario === "browser-text") await browserText();
   else throw new Error(`unknown scenario: ${scenario}`);
   process.stdout.write(JSON.stringify({scenario, ok: true}));
 }

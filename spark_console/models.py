@@ -50,6 +50,18 @@ class DouyinAccount(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
+class DouyinConversation(Base):
+    __tablename__ = "douyin_conversations"
+
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("douyin_accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    display_name: Mapped[str] = mapped_column(String(256), primary_key=True)
+    discovered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+
+
 class ScanStatus(StrEnum):
     QUEUED = "queued"
     LOADING_QR = "loading_qr"
@@ -102,6 +114,33 @@ class DouyinLoginSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DouyinLoginAction(Base):
+    __tablename__ = "douyin_login_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scan_id: Mapped[str] = mapped_column(
+        ForeignKey("douyin_login_sessions.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    x_million: Mapped[int] = mapped_column(Integer, nullable=False)
+    y_million: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DouyinLoginInput(Base):
+    __tablename__ = "douyin_login_inputs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scan_id: Mapped[str] = mapped_column(
+        ForeignKey("douyin_login_sessions.id", ondelete="CASCADE"), index=True
+    )
+    ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
+    nonce: Mapped[bytes | None] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class DouyinAccountIdentity(Base):

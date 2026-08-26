@@ -5,6 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from spark_console.db import create_schema
+from spark_console.crypto import CookieCipher
 from spark_console.models import DouyinAccount, DouyinLoginSession, ScanStatus, User
 from spark_console.services import Conflict, NotFound, ValidationError
 from spark_console.services.scan_sessions import (
@@ -101,6 +102,68 @@ class ScanSessionServiceTests(unittest.TestCase):
         self.assertIsNone(completed.slot)
         self.assertIsNone(completed.error_code)
         self.assertEqual(self.clock.value, completed.finished_at)
+
+    def test_owner_can_queue_one_normalized_browser_click_for_worker(self):
+        scan = self._claim_and_publish()
+
+        self.assertTrue(
+            hasattr(self.service, "queue_click"),
+            "scan service must expose browser interaction queueing",
+        )
+        self.service.queue_click(self.owner.id, scan.id, 0.25, 0.75)
+
+        self.assertEqual(
+            {"kind": "click", "x": 0.25, "y": 0.75},
+            self.service.claim_interaction(scan.id),
+        )
+        self.assertIsNone(self.service.claim_interaction(scan.id))
+        with self.assertRaises(NotFound):
+            self.service.queue_click(self.other.id, scan.id, 0.5, 0.5)
+
+    def test_browser_click_rejects_coordinates_outside_the_viewport(self):
+        scan = self._claim_and_publish()
+
+        self.assertTrue(
+            hasattr(self.service, "queue_click"),
+            "scan service must expose browser interaction queueing",
+        )
+        for x, y in ((-0.01, 0.5), (1.01, 0.5), (0.5, -0.01), (0.5, 1.01)):
+            with self.subTest(x=x, y=y):
+                with self.assertRaises(ValidationError):
+                    self.service.queue_click(self.owner.id, scan.id, x, y)
+
+    def test_verification_code_is_encrypted_until_worker_claims_and_clears_it(self):
+        scan = self._claim_and_publish()
+        cipher = CookieCipher(b"i" * 32)
+
+        self.assertTrue(
+            hasattr(self.service, "queue_text"),
+            "scan service must expose encrypted browser text queueing",
+        )
+        queued = self.service.queue_text(
+            self.owner.id, scan.id, "123456", cipher
+        )
+
+        self.assertNotIn(b"123456", queued.ciphertext)
+        self.assertEqual(
+            {"kind": "text", "text": "123456"},
+            self.service.claim_interaction(scan.id, cipher),
+        )
+        self.assertIsNone(queued.ciphertext)
+        self.assertIsNone(queued.nonce)
+
+    def test_verification_code_accepts_only_four_to_eight_digits(self):
+        scan = self._claim_and_publish()
+        cipher = CookieCipher(b"i" * 32)
+
+        self.assertTrue(
+            hasattr(self.service, "queue_text"),
+            "scan service must expose encrypted browser text queueing",
+        )
+        for value in ("", "123", "123456789", "12a456", "1234\n"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValidationError):
+                    self.service.queue_text(self.owner.id, scan.id, value, cipher)
 
     def test_claim_next_returns_none_when_no_queued_session_exists(self):
         self.assertIsNone(self.service.claim_next())

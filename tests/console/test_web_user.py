@@ -4,12 +4,15 @@ from dataclasses import replace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 
 from spark_console.config import Settings
+from spark_console.crypto import CookieCipher
 from spark_console.db import create_schema, session_scope
-from spark_console.models import User
+from spark_console.models import DouyinAccount, DouyinConversation, User
 from spark_console.security import PasswordService
+from spark_console.services.accounts import AccountService
+from spark_console.services.audits import AuditService
 from spark_console.web.app import create_app
 
 
@@ -192,6 +195,50 @@ class UserWebTests(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(405, response.status_code)
+
+    def test_task_page_loads_saved_account_conversations_without_browser_access(self):
+        self.login()
+        page = self.client.get("/change-password")
+        marker = 'name="csrf_token" value="'
+        csrf = page.text.split(marker, 1)[1].split('"', 1)[0]
+        self.client.post(
+            "/change-password",
+            data={
+                "csrf_token": csrf,
+                "current_password": "Temporary-123!",
+                "new_password": "Permanent-123!",
+                "new_password_confirmation": "Permanent-123!",
+            },
+        )
+        with session_scope(self.engine) as session:
+            user = session.scalar(select(User).where(User.username == "friend"))
+            account = AccountService(
+                session,
+                CookieCipher(self.settings.cookie_key_file.read_bytes()),
+                AuditService(session),
+            ).create(
+                user.id,
+                "我的抖音",
+                b'[{"name":"sessionid","value":"secret-marker","url":"https://www.douyin.com"}]',
+            )
+            account_id = account.id
+            session.add_all(
+                [
+                    DouyinConversation(account_id=account_id, display_name="wzlovegsy"),
+                    DouyinConversation(account_id=account_id, display_name="gsy"),
+                ]
+            )
+        tasks_page = self.client.get("/tasks")
+        response = self.client.get(f"/accounts/{account_id}/conversations")
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(
+            {"items": [{"name": "gsy"}, {"name": "wzlovegsy"}]},
+            response.json(),
+        )
+        self.assertIn('list="task-target-options"', tasks_page.text)
+        self.assertIn("读取好友列表", tasks_page.text)
+        self.assertNotIn("secret-marker", response.text)
 
 
 if __name__ == "__main__":

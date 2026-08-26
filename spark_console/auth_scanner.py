@@ -8,8 +8,11 @@ from datetime import datetime, timezone
 from typing import Callable
 from urllib.parse import urlparse
 
+from core.web_chat import CONVERSATION_ITEM_SELECTOR, CONVERSATION_TITLE_SELECTOR
 
-CREATOR_URL = "https://creator.douyin.com/"
+
+CHAT_LOGIN_URL = "https://www.douyin.com/chat"
+ACCOUNT_INFO_URL = "https://www.douyin.com/passport/account/info/v2/?aid=6383"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 LOGIN_PANEL_SELECTORS = (
@@ -27,6 +30,7 @@ QR_SELECTORS = (
 AUTHENTICATED_SELECTOR = (
     'xpath=//*[contains(@id,"garfish_app_for_douyin_creator_pc_home")]'
 )
+CHAT_AUTHENTICATED_SELECTOR = ".conversationConversationItemwrapper"
 AUTHENTICATED_PATH_PREFIX = "/creator-micro/"
 QRCONNECT_PATH = "/passport/web/check_qrconnect/"
 DISPLAY_NAME_SELECTOR = (
@@ -64,6 +68,7 @@ class ScannedAccount:
     display_name: str
     unique_id: str | None
     storage_state: dict[str, object]
+    conversation_names: tuple[str, ...] = ()
 
 
 def _default_playwright_factory():
@@ -99,6 +104,8 @@ class DouyinQrScanner:
         cancelled,
         *,
         expires_at: datetime | None = None,
+        on_view=None,
+        next_interaction=None,
     ) -> ScannedAccount:
         deadline = self._deadline(expires_at)
         self._checkpoint(cancelled, deadline)
@@ -119,18 +126,21 @@ class DouyinQrScanner:
                 )
                 await self._await_stage(
                     page.goto(
-                        CREATOR_URL,
+                        CHAT_LOGIN_URL,
                         wait_until="domcontentloaded",
                         timeout=120_000,
                     ),
                     cancelled,
                     deadline,
                 )
+                await self._await_stage(
+                    self._open_chat_login(page, cancelled), cancelled, deadline
+                )
                 qr = await self._await_stage(
                     self._find_qr(page, cancelled), cancelled, deadline
                 )
                 png = await self._await_stage(
-                    qr.screenshot(type="png"), cancelled, deadline
+                    page.screenshot(type="png"), cancelled, deadline
                 )
                 if not isinstance(png, bytes) or not png.startswith(PNG_SIGNATURE):
                     raise QrLoadFailed()
@@ -149,6 +159,8 @@ class DouyinQrScanner:
                         context=context,
                         qr=qr,
                         baseline_auth_cookies=baseline_auth_cookies,
+                        on_view=on_view or on_qr,
+                        next_interaction=next_interaction,
                     ),
                     cancelled,
                     deadline,
@@ -166,7 +178,15 @@ class DouyinQrScanner:
                 storage_state = await self._await_stage(
                     context.storage_state(), cancelled, deadline
                 )
-                return ScannedAccount(display_name, unique_id, storage_state)
+                conversation_names = await self._await_stage(
+                    self._visible_conversation_names(page), cancelled, deadline
+                )
+                return ScannedAccount(
+                    display_name,
+                    unique_id,
+                    storage_state,
+                    conversation_names,
+                )
             finally:
                 try:
                     if context is not None:
@@ -174,6 +194,21 @@ class DouyinQrScanner:
                 finally:
                     if browser is not None:
                         await browser.close()
+
+    async def _open_chat_login(self, page, cancelled) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.qr_timeout_seconds
+        while loop.time() < deadline:
+            if cancelled():
+                raise ScanCancelled()
+            for label in ("登录", "扫码登录"):
+                for button in await page.get_by_text(label, exact=True).all():
+                    if not await button.is_visible():
+                        continue
+                    await button.click(timeout=10_000)
+                    return
+            await asyncio.sleep(self.poll_interval_seconds)
+        raise QrLoadFailed()
 
     async def _find_qr(self, page, cancelled):
         loop = asyncio.get_running_loop()
@@ -222,19 +257,28 @@ class DouyinQrScanner:
         context=None,
         qr=None,
         baseline_auth_cookies=frozenset(),
+        on_view=None,
+        next_interaction=None,
     ) -> None:
         confirmed = False
+        confirmed_event = asyncio.Event()
 
         async def confirm_once(_value=True):
             nonlocal confirmed
             if confirmed:
                 return
             confirmed = True
+            confirmed_event.set()
             await _invoke(on_confirming, True)
 
         authenticated = asyncio.create_task(
             page.wait_for_selector(
                 AUTHENTICATED_SELECTOR, state="visible", timeout=0
+            )
+        )
+        chat_authenticated = asyncio.create_task(
+            page.wait_for_selector(
+                CHAT_AUTHENTICATED_SELECTOR, state="visible", timeout=0
             )
         )
         authenticated_url = asyncio.create_task(
@@ -252,6 +296,7 @@ class DouyinQrScanner:
         )
         pending = {
             authenticated,
+            chat_authenticated,
             authenticated_url,
             confirming,
             verification,
@@ -267,9 +312,16 @@ class DouyinQrScanner:
                     qr,
                     baseline_auth_cookies,
                     confirm_once,
+                    confirmed_event,
                 )
             )
             pending.add(credentials)
+        live_view = None
+        if on_view is not None:
+            live_view = asyncio.create_task(
+                self._stream_browser_view(page, on_view, next_interaction)
+            )
+            pending.add(live_view)
         try:
             while pending:
                 done, pending = await asyncio.wait(
@@ -284,18 +336,30 @@ class DouyinQrScanner:
                 if confirming in done:
                     confirming.result()
                     await confirm_once()
+                if chat_authenticated in done:
+                    chat_authenticated.result()
+                    await confirm_once()
+                    await asyncio.sleep(0.1)
+                    return
                 if authenticated in done:
                     authenticated.result()
-                    return
+                    if context is None:
+                        return
+                    await confirm_once()
                 if authenticated_url in done:
                     authenticated_url.result()
-                    return
+                    if context is None:
+                        return
+                    await confirm_once()
                 if qrconnect in done:
                     qrconnect.result()
-                    return
+                    if context is None:
+                        return
                 if credentials is not None and credentials in done:
                     credentials.result()
                     return
+                if live_view is not None and live_view in done:
+                    live_view.result()
         finally:
             for task in pending:
                 task.cancel()
@@ -332,15 +396,14 @@ class DouyinQrScanner:
                     last_status = public_status
                 if status in {"2", "scanned", "3", "confirmed"}:
                     await on_confirming(True)
-                if status in {"3", "confirmed"}:
-                    return
         finally:
             page.remove_listener("response", capture)
 
     async def _wait_for_authenticated_credentials(
-        self, page, context, qr, baseline, on_confirming
+        self, page, context, qr, baseline, on_confirming, confirmed_event
     ) -> None:
         qr_hidden = False
+        credentials_changed = False
         while True:
             if not qr_hidden:
                 try:
@@ -352,15 +415,90 @@ class DouyinQrScanner:
                         "auth scan qr consumed path=%s", urlparse(page.url).path
                     )
                     await on_confirming(True)
-            if qr_hidden:
+            if confirmed_event.is_set():
                 current = self._auth_cookie_fingerprint(await context.cookies())
-                if current and current != baseline:
+                if current and current != baseline and not credentials_changed:
+                    credentials_changed = True
                     logger.warning(
                         "auth scan credentials changed path=%s",
                         urlparse(page.url).path,
                     )
+                if await self._account_session_is_authenticated(context):
+                    logger.warning(
+                        "auth scan account session active path=%s",
+                        urlparse(page.url).path,
+                    )
                     return
             await asyncio.sleep(self.poll_interval_seconds)
+
+    async def _stream_browser_view(
+        self, page, on_view, next_interaction
+    ) -> None:
+        sms_selected = False
+        while True:
+            if not sms_selected:
+                sms_selected = await self._select_sms_verification(page)
+            if next_interaction is not None:
+                action = next_interaction()
+                if inspect.isawaitable(action):
+                    action = await action
+                if isinstance(action, dict) and action.get("kind") == "click":
+                    x = float(action.get("x", -1))
+                    y = float(action.get("y", -1))
+                    if 0 <= x <= 1 and 0 <= y <= 1:
+                        viewport = page.viewport_size or {"width": 1280, "height": 720}
+                        await page.mouse.click(
+                            x * viewport["width"], y * viewport["height"]
+                        )
+                elif isinstance(action, dict) and action.get("kind") == "text":
+                    value = str(action.get("text", ""))
+                    if value.isdigit() and 4 <= len(value) <= 8:
+                        await self._type_and_submit_verification_code(page, value)
+            png = await page.screenshot(type="png")
+            if isinstance(png, bytes) and png.startswith(PNG_SIGNATURE):
+                await _invoke(on_view, png)
+            await asyncio.sleep(max(0.75, self.poll_interval_seconds))
+
+    @staticmethod
+    async def _select_sms_verification(page) -> bool:
+        try:
+            for button in await page.get_by_text(
+                "接收短信验证码", exact=True
+            ).all():
+                if await button.is_visible():
+                    await button.click(timeout=10_000)
+                    return True
+        except Exception:
+            return False
+        return False
+
+    @staticmethod
+    async def _type_and_submit_verification_code(page, value: str) -> bool:
+        await page.keyboard.type(value)
+        await asyncio.sleep(2)
+        try:
+            for button in await page.get_by_text("验证", exact=True).all():
+                if await button.is_visible():
+                    await button.click(timeout=10_000)
+                    return True
+        except Exception:
+            return False
+        return False
+
+    @staticmethod
+    async def _account_session_is_authenticated(context) -> bool:
+        try:
+            response = await context.request.get(ACCOUNT_INFO_URL, timeout=10_000)
+            body = await response.json()
+        except Exception:
+            return False
+        data = body.get("data") if isinstance(body, dict) else None
+        return bool(
+            isinstance(data, dict)
+            and body.get("message") == "success"
+            and data.get("error_code") == 0
+            and data.get("user_id")
+        )
 
     @staticmethod
     def _auth_cookie_fingerprint(cookies) -> frozenset[tuple[str, str, str, str]]:
@@ -467,6 +605,25 @@ class DouyinQrScanner:
             for task in watchers:
                 task.cancel()
             await asyncio.gather(operation, *watchers, return_exceptions=True)
+
+    @staticmethod
+    async def _visible_conversation_names(page) -> tuple[str, ...]:
+        names = []
+        seen = set()
+        try:
+            items = await page.locator(CONVERSATION_ITEM_SELECTOR).all()
+            for item in items:
+                if hasattr(item, "is_visible") and not await item.is_visible():
+                    continue
+                name = (
+                    await item.locator(CONVERSATION_TITLE_SELECTOR).inner_text()
+                ).strip()
+                if name and name not in seen:
+                    seen.add(name)
+                    names.append(name)
+        except Exception:
+            logger.warning("auth scan could not snapshot visible conversations")
+        return tuple(names)
 
     @staticmethod
     async def _required_text(page, selector: str) -> str:

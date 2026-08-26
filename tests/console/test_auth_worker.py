@@ -20,6 +20,7 @@ from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.models import (
     AuditEvent,
     DouyinAccount,
+    DouyinConversation,
     DouyinLoginSession,
     ScanStatus,
     User,
@@ -76,7 +77,7 @@ class _LifecycleScanner:
         self.expire_before_return = expire_before_return
         self.observed_statuses = []
 
-    async def run(self, on_qr, on_confirming, cancelled, *, expires_at=None):
+    async def run(self, on_qr, on_confirming, cancelled, *, expires_at=None, **_kwargs):
         on_qr(PNG_SIGNATURE + b"worker-qr-fixture")
         with Session(self.engine) as session:
             self.observed_statuses.append(
@@ -96,7 +97,12 @@ class _LifecycleScanner:
             with session_scope(self.engine) as session:
                 scan = session.get(DouyinLoginSession, self.scan_id)
                 scan.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-        return ScannedAccount(" 测试昵称 ", " douyin-123 ", self.state)
+        return ScannedAccount(
+            " 测试昵称 ",
+            " douyin-123 ",
+            self.state,
+            ("wzlovegsy", "gsy", "wzlovegsy"),
+        )
 
 
 class _RaisingScanner:
@@ -104,14 +110,14 @@ class _RaisingScanner:
         self.error = error
 
     async def run(
-        self, _on_qr, _on_confirming, _cancelled, *, expires_at=None
+        self, _on_qr, _on_confirming, _cancelled, *, expires_at=None, **_kwargs
     ):
         raise self.error
 
 
 class _SensitiveFailureScanner:
     async def run(
-        self, on_qr, _on_confirming, _cancelled, *, expires_at=None
+        self, on_qr, _on_confirming, _cancelled, *, expires_at=None, **_kwargs
     ):
         on_qr(PNG_SIGNATURE + QR_MARKER.encode())
         raise RuntimeError(
@@ -126,7 +132,7 @@ class _DeadlineScanner:
         self.expires_at = None
 
     async def run(
-        self, on_qr, _on_confirming, _cancelled, *, expires_at=None
+        self, on_qr, _on_confirming, _cancelled, *, expires_at=None, **_kwargs
     ):
         self.expires_at = expires_at
         on_qr(PNG_SIGNATURE + b"deadline-qr-fixture")
@@ -148,7 +154,7 @@ class _StopAwareScanner:
         self.expires_at = None
 
     async def run(
-        self, _on_qr, _on_confirming, cancelled, *, expires_at=None
+        self, _on_qr, _on_confirming, cancelled, *, expires_at=None, **_kwargs
     ):
         self.expires_at = expires_at
         self.started.set()
@@ -225,6 +231,11 @@ class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(persisted["account_id"])
         with Session(self.engine) as session:
             account = session.get(DouyinAccount, persisted["account_id"])
+            conversations = session.scalars(
+                select(DouyinConversation.display_name)
+                .where(DouyinConversation.account_id == account.id)
+                .order_by(DouyinConversation.display_name)
+            ).all()
             audits = session.scalars(select(AuditEvent)).all()
             self.assertEqual(2, account.cookie_version)
             self.assertEqual("valid", account.validation_state)
@@ -237,6 +248,7 @@ class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
                     for marker in (COOKIE_MARKER, STORAGE_MARKER)
                 )
             )
+            self.assertEqual(["gsy", "wzlovegsy"], conversations)
         self.assertEqual(0, len(scanner.state))
 
     async def test_typed_scanner_errors_map_to_fixed_public_codes(self):
@@ -348,6 +360,21 @@ class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ScanStatus.EXPIRED, persisted["status"])
         self.assertEqual("login_timeout", persisted["error_code"])
         self.assertIsNone(persisted["slot"])
+
+    async def test_startup_releases_nonexpired_scan_whose_browser_was_lost(self):
+        scan_id = self._start_scan()
+        with session_scope(self.engine) as session:
+            service = ScanSessionService(session)
+            service.claim_next()
+            service.publish_qr(scan_id, PNG_SIGNATURE + b"active-browser")
+
+        AuthWorker(self.settings, self.engine, scanner=_RaisingScanner(QrLoadFailed()))
+
+        persisted = self._persisted(scan_id)
+        self.assertEqual(ScanStatus.FAILED, persisted["status"])
+        self.assertEqual("automation_failed", persisted["error_code"])
+        self.assertIsNone(persisted["slot"])
+        self.assertIsNone(persisted["qr_png"])
 
     async def test_run_once_returns_false_when_no_scan_is_queued(self):
         worker = AuthWorker(
