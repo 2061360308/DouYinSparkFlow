@@ -76,7 +76,7 @@ class _LifecycleScanner:
         self.expire_before_return = expire_before_return
         self.observed_statuses = []
 
-    async def run(self, on_qr, on_confirming, cancelled, *, expires_at=None):
+    async def run(self, on_qr, on_confirming, cancelled, *, expires_at=None, **_kwargs):
         on_qr(PNG_SIGNATURE + b"worker-qr-fixture")
         with Session(self.engine) as session:
             self.observed_statuses.append(
@@ -104,14 +104,14 @@ class _RaisingScanner:
         self.error = error
 
     async def run(
-        self, _on_qr, _on_confirming, _cancelled, *, expires_at=None
+        self, _on_qr, _on_confirming, _cancelled, *, expires_at=None, **_kwargs
     ):
         raise self.error
 
 
 class _SensitiveFailureScanner:
     async def run(
-        self, on_qr, _on_confirming, _cancelled, *, expires_at=None
+        self, on_qr, _on_confirming, _cancelled, *, expires_at=None, **_kwargs
     ):
         on_qr(PNG_SIGNATURE + QR_MARKER.encode())
         raise RuntimeError(
@@ -126,7 +126,7 @@ class _DeadlineScanner:
         self.expires_at = None
 
     async def run(
-        self, on_qr, _on_confirming, _cancelled, *, expires_at=None
+        self, on_qr, _on_confirming, _cancelled, *, expires_at=None, **_kwargs
     ):
         self.expires_at = expires_at
         on_qr(PNG_SIGNATURE + b"deadline-qr-fixture")
@@ -148,7 +148,7 @@ class _StopAwareScanner:
         self.expires_at = None
 
     async def run(
-        self, _on_qr, _on_confirming, cancelled, *, expires_at=None
+        self, _on_qr, _on_confirming, cancelled, *, expires_at=None, **_kwargs
     ):
         self.expires_at = expires_at
         self.started.set()

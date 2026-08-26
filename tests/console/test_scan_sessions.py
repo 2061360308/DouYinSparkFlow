@@ -102,6 +102,35 @@ class ScanSessionServiceTests(unittest.TestCase):
         self.assertIsNone(completed.error_code)
         self.assertEqual(self.clock.value, completed.finished_at)
 
+    def test_owner_can_queue_one_normalized_browser_click_for_worker(self):
+        scan = self._claim_and_publish()
+
+        self.assertTrue(
+            hasattr(self.service, "queue_click"),
+            "scan service must expose browser interaction queueing",
+        )
+        self.service.queue_click(self.owner.id, scan.id, 0.25, 0.75)
+
+        self.assertEqual(
+            {"kind": "click", "x": 0.25, "y": 0.75},
+            self.service.claim_interaction(scan.id),
+        )
+        self.assertIsNone(self.service.claim_interaction(scan.id))
+        with self.assertRaises(NotFound):
+            self.service.queue_click(self.other.id, scan.id, 0.5, 0.5)
+
+    def test_browser_click_rejects_coordinates_outside_the_viewport(self):
+        scan = self._claim_and_publish()
+
+        self.assertTrue(
+            hasattr(self.service, "queue_click"),
+            "scan service must expose browser interaction queueing",
+        )
+        for x, y in ((-0.01, 0.5), (1.01, 0.5), (0.5, -0.01), (0.5, 1.01)):
+            with self.subTest(x=x, y=y):
+                with self.assertRaises(ValidationError):
+                    self.service.queue_click(self.owner.id, scan.id, x, y)
+
     def test_claim_next_returns_none_when_no_queued_session_exists(self):
         self.assertIsNone(self.service.claim_next())
         scan = self.service.start(self.owner.id)

@@ -41,8 +41,8 @@
   }
 
   function loadQrOnce(id) {
-    if (!id || qrLoadedFor === id) return;
-    qrNode.src = `/accounts/scan/${encodeURIComponent(id)}/qr`;
+    if (!id) return;
+    qrNode.src = `/accounts/scan/${encodeURIComponent(id)}/qr?v=${Date.now()}`;
     qrLoadedFor = id;
   }
 
@@ -63,9 +63,9 @@
     currentStatus = state.status;
     dialog.dataset.status = state.status;
     showMessage(state.message, state.remaining_seconds);
-    const awaitingScan = state.status === "awaiting_scan";
-    setQrVisible(awaitingScan);
-    if (awaitingScan) {
+    const browserActive = state.status === "awaiting_scan" || state.status === "confirming";
+    setQrVisible(browserActive);
+    if (browserActive) {
       loadQrOnce(scanId);
     }
     const terminal = TERMINAL.has(state.status);
@@ -296,9 +296,29 @@
     }
   }
 
+  async function forwardBrowserClick(event) {
+    if (!scanId || TERMINAL.has(currentStatus)) return;
+    const bounds = qrNode.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return;
+    const x = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
+    const y = Math.min(1, Math.max(0, (event.clientY - bounds.top) / bounds.height));
+    try {
+      await fetch(`/accounts/scan/${encodeURIComponent(scanId)}/interact`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+        body: new URLSearchParams({csrf_token: csrfToken, x: String(x), y: String(y)}),
+      });
+      loadQrOnce(scanId);
+    } catch (_error) {
+      showMessage("云端页面点击未送达，请重试", 0);
+    }
+  }
+
   startButton.addEventListener("click", startScan);
   closeButton.addEventListener("click", () => requestClose(true));
   cancelButton.addEventListener("click", () => requestClose(false));
+  qrNode.addEventListener("click", forwardBrowserClick);
   dialog.addEventListener("cancel", (event) => {
     event.preventDefault();
     requestClose(true);

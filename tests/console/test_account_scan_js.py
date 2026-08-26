@@ -34,7 +34,7 @@ class AccountScanJavaScriptTests(unittest.TestCase):
     def test_preloaded_scan_is_reused_when_binding_button_is_clicked(self):
         self.run_scenario("preload-click")
 
-    def test_status_polling_does_not_reload_prepared_qr_image(self):
+    def test_status_polling_refreshes_the_live_cloud_browser_view(self):
         self.run_scenario("qr-stays-cached")
 
     def test_leaving_page_sends_background_cancellation(self):
@@ -42,6 +42,9 @@ class AccountScanJavaScriptTests(unittest.TestCase):
 
     def test_success_message_closes_dialog_before_refresh(self):
         self.run_scenario("success-close")
+
+    def test_cloud_browser_click_is_forwarded_with_normalized_coordinates(self):
+        self.run_scenario("browser-click")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 
 CHAT_LOGIN_URL = "https://www.douyin.com/chat"
+ACCOUNT_INFO_URL = "https://www.douyin.com/passport/account/info/v2/?aid=6383"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 LOGIN_PANEL_SELECTORS = (
@@ -99,6 +100,8 @@ class DouyinQrScanner:
         cancelled,
         *,
         expires_at: datetime | None = None,
+        on_view=None,
+        next_interaction=None,
     ) -> ScannedAccount:
         deadline = self._deadline(expires_at)
         self._checkpoint(cancelled, deadline)
@@ -133,7 +136,7 @@ class DouyinQrScanner:
                     self._find_qr(page, cancelled), cancelled, deadline
                 )
                 png = await self._await_stage(
-                    qr.screenshot(type="png"), cancelled, deadline
+                    page.screenshot(type="png"), cancelled, deadline
                 )
                 if not isinstance(png, bytes) or not png.startswith(PNG_SIGNATURE):
                     raise QrLoadFailed()
@@ -152,6 +155,8 @@ class DouyinQrScanner:
                         context=context,
                         qr=qr,
                         baseline_auth_cookies=baseline_auth_cookies,
+                        on_view=on_view or on_qr,
+                        next_interaction=next_interaction,
                     ),
                     cancelled,
                     deadline,
@@ -240,14 +245,18 @@ class DouyinQrScanner:
         context=None,
         qr=None,
         baseline_auth_cookies=frozenset(),
+        on_view=None,
+        next_interaction=None,
     ) -> None:
         confirmed = False
+        confirmed_event = asyncio.Event()
 
         async def confirm_once(_value=True):
             nonlocal confirmed
             if confirmed:
                 return
             confirmed = True
+            confirmed_event.set()
             await _invoke(on_confirming, True)
 
         authenticated = asyncio.create_task(
@@ -285,9 +294,16 @@ class DouyinQrScanner:
                     qr,
                     baseline_auth_cookies,
                     confirm_once,
+                    confirmed_event,
                 )
             )
             pending.add(credentials)
+        live_view = None
+        if on_view is not None:
+            live_view = asyncio.create_task(
+                self._stream_browser_view(page, on_view, next_interaction)
+            )
+            pending.add(live_view)
         try:
             while pending:
                 done, pending = await asyncio.wait(
@@ -314,6 +330,8 @@ class DouyinQrScanner:
                 if credentials is not None and credentials in done:
                     credentials.result()
                     return
+                if live_view is not None and live_view in done:
+                    live_view.result()
         finally:
             for task in pending:
                 task.cancel()
@@ -356,7 +374,7 @@ class DouyinQrScanner:
             page.remove_listener("response", capture)
 
     async def _wait_for_authenticated_credentials(
-        self, page, context, qr, baseline, on_confirming
+        self, page, context, qr, baseline, on_confirming, confirmed_event
     ) -> None:
         qr_hidden = False
         while True:
@@ -370,7 +388,7 @@ class DouyinQrScanner:
                         "auth scan qr consumed path=%s", urlparse(page.url).path
                     )
                     await on_confirming(True)
-            if qr_hidden:
+            if confirmed_event.is_set():
                 current = self._auth_cookie_fingerprint(await context.cookies())
                 if current and current != baseline:
                     logger.warning(
@@ -378,7 +396,49 @@ class DouyinQrScanner:
                         urlparse(page.url).path,
                     )
                     return
+                if await self._account_session_is_authenticated(context):
+                    logger.warning(
+                        "auth scan account session active path=%s",
+                        urlparse(page.url).path,
+                    )
+                    return
             await asyncio.sleep(self.poll_interval_seconds)
+
+    async def _stream_browser_view(
+        self, page, on_view, next_interaction
+    ) -> None:
+        while True:
+            if next_interaction is not None:
+                action = next_interaction()
+                if inspect.isawaitable(action):
+                    action = await action
+                if isinstance(action, dict) and action.get("kind") == "click":
+                    x = float(action.get("x", -1))
+                    y = float(action.get("y", -1))
+                    if 0 <= x <= 1 and 0 <= y <= 1:
+                        viewport = page.viewport_size or {"width": 1280, "height": 720}
+                        await page.mouse.click(
+                            x * viewport["width"], y * viewport["height"]
+                        )
+            png = await page.screenshot(type="png")
+            if isinstance(png, bytes) and png.startswith(PNG_SIGNATURE):
+                await _invoke(on_view, png)
+            await asyncio.sleep(max(0.75, self.poll_interval_seconds))
+
+    @staticmethod
+    async def _account_session_is_authenticated(context) -> bool:
+        try:
+            response = await context.request.get(ACCOUNT_INFO_URL, timeout=10_000)
+            body = await response.json()
+        except Exception:
+            return False
+        data = body.get("data") if isinstance(body, dict) else None
+        return bool(
+            isinstance(data, dict)
+            and body.get("message") == "success"
+            and data.get("error_code") == 0
+            and data.get("user_id")
+        )
 
     @staticmethod
     def _auth_cookie_fingerprint(cookies) -> frozenset[tuple[str, str, str, str]]:

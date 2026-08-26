@@ -282,6 +282,31 @@ class AccountScanWebTests(unittest.TestCase):
             404, self.admin_client.get(f"/accounts/scan/{scan_id}/qr").status_code
         )
 
+    def test_owner_can_send_normalized_browser_click_with_csrf(self):
+        scan_id = self._awaiting_scan()
+
+        missing_csrf = self.owner_client.post(
+            f"/accounts/scan/{scan_id}/interact", data={"x": "0.25", "y": "0.75"}
+        )
+        hidden = self.other_client.post(
+            f"/accounts/scan/{scan_id}/interact",
+            data={"csrf_token": self.other_csrf, "x": "0.25", "y": "0.75"},
+        )
+        accepted = self.owner_client.post(
+            f"/accounts/scan/{scan_id}/interact",
+            data={"csrf_token": self.owner_csrf, "x": "0.25", "y": "0.75"},
+        )
+
+        self.assertEqual(403, missing_csrf.status_code)
+        self.assertEqual(404, hidden.status_code)
+        self.assertEqual(202, accepted.status_code)
+        self.assertEqual({"accepted": True}, accepted.json())
+        with session_scope(self.engine) as db:
+            self.assertEqual(
+                {"kind": "click", "x": 0.25, "y": 0.75},
+                ScanSessionService(db).claim_interaction(scan_id),
+            )
+
     def test_qr_before_publication_uses_a_stable_unavailable_error(self):
         response = self.owner_client.post(
             "/accounts/scan", data={"csrf_token": self.owner_csrf}
@@ -349,7 +374,7 @@ class AccountScanWebTests(unittest.TestCase):
         self.assertIn("扫码绑定抖音账号", response.text)
         self.assertIn("<dialog", response.text)
         self.assertIn(
-            'src="/static/account_scan.js?v=20260826-2"', response.text
+            'src="/static/account_scan.js?v=20260826-3"', response.text
         )
         self.assertIn("修改备注", response.text)
         self.assertIn(f'action="/accounts/{self.account_id}/rename"', response.text)

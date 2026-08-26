@@ -21,6 +21,7 @@ from spark_console.auth_scanner import (
 
 
 PNG = b"\x89PNG\r\n\x1a\nscanner-fixture"
+PAGE_PNG = b"\x89PNG\r\n\x1a\nfull-browser-view"
 
 
 class _Locator:
@@ -115,6 +116,10 @@ class _Page:
             else None,
             on_click=lambda: setattr(self.qr, "visible", bool(qr_visible)),
         )
+        self.viewport_size = {"width": 1280, "height": 720}
+
+    async def screenshot(self, **_kwargs):
+        return PAGE_PNG
 
     async def goto(self, *_args, **_kwargs):
         self.goto_url = _args[0]
@@ -157,11 +162,11 @@ class _Page:
             await self.authenticated.wait()
             return _Locator(visible=True)
         if any(text in selector for text in CONFIRMING_TEXT):
-            if self.mode in {"success", "url_success", "chat_entry", "delayed_chat_entry"}:
+            if self.mode in {"success", "url_success", "chat_entry", "delayed_chat_entry", "chat_account_success"}:
                 await asyncio.sleep(0)
                 if self.mode == "success":
                     asyncio.get_running_loop().call_soon(self.authenticated.set)
-                else:
+                elif self.mode != "chat_account_success":
                     self.url = "https://creator.douyin.com/creator-micro/home"
                 return _Locator(visible=True)
             await self.never.wait()
@@ -180,6 +185,7 @@ class _Context:
         self.closed = False
         self.credential_success = credential_success
         self.cookie_reads = 0
+        self.request = _ContextRequest(authenticated=page.mode == "chat_account_success")
 
     async def new_page(self):
         return self.page
@@ -226,6 +232,28 @@ class _Context:
 
     async def close(self):
         self.closed = True
+
+
+class _ContextResponse:
+    def __init__(self, authenticated):
+        self.authenticated = authenticated
+
+    async def json(self):
+        return {
+            "message": "success" if self.authenticated else "error",
+            "data": {
+                "error_code": 0 if self.authenticated else 13,
+                "user_id": "user-fixture" if self.authenticated else "",
+            },
+        }
+
+
+class _ContextRequest:
+    def __init__(self, authenticated=False):
+        self.authenticated = authenticated
+
+    async def get(self, _url, **_kwargs):
+        return _ContextResponse(self.authenticated)
 
 
 class _Browser:
@@ -310,7 +338,8 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         except QrLoadFailed:
             self.fail("randomized square QR should be discovered")
 
-        self.assertEqual([PNG], qr_images)
+        self.assertGreaterEqual(len(qr_images), 1)
+        self.assertTrue(all(image == PAGE_PNG for image in qr_images))
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 
@@ -347,8 +376,8 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("测试昵称", result.display_name)
         self.assertEqual("douyin-123", result.unique_id)
         self.assertEqual(1, len(result.storage_state["cookies"]))
-        self.assertEqual(1, len(qr_images))
-        self.assertTrue(qr_images[0].startswith(b"\x89PNG"))
+        self.assertGreaterEqual(len(qr_images), 1)
+        self.assertTrue(all(image == PAGE_PNG for image in qr_images))
         self.assertEqual([True], confirmations)
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
@@ -365,6 +394,32 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("https://www.douyin.com/chat", context.page.goto_url)
         self.assertTrue(context.page.login_button.clicked)
         self.assertEqual("测试昵称", result.display_name)
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_initial_image_contains_the_complete_cloud_browser_view(self):
+        scanner, browser, context = self._scanner(mode="chat_entry")
+        views = []
+
+        await scanner.run(views.append, lambda _confirmed: None, lambda: False)
+
+        self.assertEqual(PAGE_PNG, views[0])
+        self.assertTrue(context.closed)
+        self.assertTrue(browser.closed)
+
+    async def test_confirmed_chat_login_completes_from_account_api_without_url_change(self):
+        scanner, browser, context = self._scanner(
+            mode="chat_account_success", profile_visible=False
+        )
+
+        result = await scanner.run(
+            lambda _png: None,
+            lambda _confirmed: None,
+            lambda: False,
+        )
+
+        self.assertEqual("https://creator.douyin.com/", context.page.url)
+        self.assertEqual("抖音账号", result.display_name)
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 

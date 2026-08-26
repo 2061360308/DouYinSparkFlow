@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import set_committed_value
 
-from spark_console.models import DouyinLoginSession, ScanStatus, utc_now
+from spark_console.models import DouyinLoginAction, DouyinLoginSession, ScanStatus, utc_now
 from spark_console.services import Conflict, NotFound, ValidationError
 
 
@@ -74,7 +74,7 @@ STATUS_MESSAGES = {
     ScanStatus.QUEUED: "等待开始扫码",
     ScanStatus.LOADING_QR: "正在加载二维码",
     ScanStatus.AWAITING_SCAN: "请使用抖音 App 扫码并在手机确认",
-    ScanStatus.CONFIRMING: "已扫码，请在手机确认",
+    ScanStatus.CONFIRMING: "已扫码；确认后正在抓取并加密保存登录凭证",
     ScanStatus.SUCCEEDED: "绑定成功",
     ScanStatus.FAILED: "绑定失败，请重试",
     ScanStatus.EXPIRED: "扫码已超时，请重试",
@@ -180,6 +180,66 @@ class ScanSessionService:
             qr_png=png,
         )
 
+    def publish_view(self, scan_id: str, png: bytes) -> DouyinLoginSession:
+        self._validate_png(png)
+        scan = self._get(scan_id)
+        current = self._now()
+        result = self.session.execute(
+            update(DouyinLoginSession)
+            .where(
+                DouyinLoginSession.id == scan.id,
+                DouyinLoginSession.slot == "global",
+                DouyinLoginSession.status.in_(ACTIVE_STATUSES),
+                DouyinLoginSession.expires_at > current,
+            )
+            .values(qr_png=png)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise Conflict("transition_conflict")
+        return self._reload(scan.id)
+
+    def queue_click(
+        self, owner_id: str, scan_id: str, x: float, y: float
+    ) -> DouyinLoginAction:
+        if not all(isinstance(value, (int, float)) for value in (x, y)):
+            raise ValidationError("invalid_interaction")
+        if not (0 <= x <= 1 and 0 <= y <= 1):
+            raise ValidationError("invalid_interaction")
+        scan = self.get_owned(owner_id, scan_id)
+        if scan.slot != "global" or self._status(scan) not in ACTIVE_STATUSES:
+            raise Conflict("scan_not_active")
+        action = DouyinLoginAction(
+            scan_id=scan.id,
+            kind="click",
+            x_million=round(x * 1_000_000),
+            y_million=round(y * 1_000_000),
+            created_at=self._now(),
+        )
+        self.session.add(action)
+        self.session.flush()
+        return action
+
+    def claim_interaction(self, scan_id: str) -> dict[str, object] | None:
+        action = self.session.scalar(
+            select(DouyinLoginAction)
+            .where(
+                DouyinLoginAction.scan_id == scan_id,
+                DouyinLoginAction.consumed_at.is_(None),
+            )
+            .order_by(DouyinLoginAction.id)
+            .limit(1)
+        )
+        if action is None:
+            return None
+        action.consumed_at = self._now()
+        self.session.flush()
+        return {
+            "kind": action.kind,
+            "x": action.x_million / 1_000_000,
+            "y": action.y_million / 1_000_000,
+        }
+
     def mark_confirming(self, scan_id: str) -> DouyinLoginSession:
         scan = self._get(scan_id)
         return self._cas_transition(scan, ScanStatus.CONFIRMING)
@@ -272,6 +332,15 @@ class ScanSessionService:
         if scan is None:
             raise NotFound("scan session not found")
         return scan
+
+    @staticmethod
+    def _validate_png(png: bytes) -> None:
+        if (
+            not isinstance(png, bytes)
+            or not png.startswith(PNG_SIGNATURE)
+            or len(png) > MAX_QR_PNG_BYTES
+        ):
+            raise ValidationError("invalid_qr_png")
 
     def _cas_transition(
         self,

@@ -22,6 +22,7 @@ START_LIMIT = 5
 STATUS_LIMIT = 40
 QR_LIMIT = 40
 CANCEL_LIMIT = 10
+INTERACT_LIMIT = 120
 
 
 class ScanRequestLimiter:
@@ -139,6 +140,29 @@ def build_account_scan_router(
                 return _error(409, "scan_not_active", "扫码会话已结束")
             projection = service.public_status(scan)
         return JSONResponse(projection, headers=NO_STORE)
+
+    @router.post("/accounts/scan/{scan_id}/interact")
+    def interact_scan(
+        request: Request,
+        scan_id: str,
+        csrf_token: str = Form(default=""),
+        x: float = Form(default=-1),
+        y: float = Form(default=-1),
+    ):
+        with session_scope(engine) as db:
+            user, record = auth.current(request, db)
+            auth.csrf(record, csrf_token)
+            if response := limited(user.id, "interact", INTERACT_LIMIT):
+                return response
+            try:
+                ScanSessionService(db).queue_click(user.id, scan_id, x, y)
+            except NotFound:
+                return _error(404, "not_found", "未找到扫码会话")
+            except ValidationError:
+                return _error(400, "invalid_interaction", "点击位置无效")
+            except Conflict:
+                return _error(409, "scan_not_active", "扫码会话已结束")
+        return JSONResponse({"accepted": True}, status_code=202, headers=NO_STORE)
 
     @router.post("/accounts/{account_id}/rename")
     def rename_account(

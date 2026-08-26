@@ -104,6 +104,20 @@ class DouyinLoginSession(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class DouyinLoginAction(Base):
+    __tablename__ = "douyin_login_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scan_id: Mapped[str] = mapped_column(
+        ForeignKey("douyin_login_sessions.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    x_million: Mapped[int] = mapped_column(Integer, nullable=False)
+    y_million: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class DouyinAccountIdentity(Base):
     __tablename__ = "douyin_account_identities"
 

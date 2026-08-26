@@ -69,6 +69,14 @@ class AuthWorker:
             with session_scope(self.engine) as db:
                 ScanSessionService(db).mark_confirming(scan_id)
 
+        def on_view(png: bytes) -> None:
+            with session_scope(self.engine) as db:
+                ScanSessionService(db).publish_view(scan_id, png)
+
+        def next_interaction():
+            with session_scope(self.engine) as db:
+                return ScanSessionService(db).claim_interaction(scan_id)
+
         def cancelled() -> bool:
             if stopping is not None and stopping.is_set():
                 return True
@@ -88,6 +96,8 @@ class AuthWorker:
                 on_confirming,
                 cancelled,
                 expires_at=expires_at,
+                on_view=on_view,
+                next_interaction=next_interaction,
             )
             if stopping is not None and stopping.is_set():
                 raise ScanCancelled()
