@@ -1,3 +1,4 @@
+import os
 import traceback
 from utils.logger import setup_logger
 from utils.config import get_config, get_userData
@@ -16,6 +17,8 @@ CONVERSATION_ITEM_SELECTOR = ".conversationConversationItemwrapper"
 CONVERSATION_TITLE_SELECTOR = ".conversationConversationItemtitle"
 CONVERSATION_LIST_SELECTOR = ".conversationConversationListwrapper"
 CHAT_EDITOR_SELECTOR = ".messageEditorimChatEditorContainer"
+# 单目标发送失败后的最大重试次数
+MESSAGE_SEND_MAX_ATTEMPTS = int(os.getenv("MESSAGE_SEND_MAX_ATTEMPTS", "3"))
 
 
 def handle_response(response: Response):
@@ -66,6 +69,67 @@ def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
             else:
                 logger.error(f"{name} 失败，已达到最大重试次数，错误：{e}")
                 raise
+
+def _is_message_sent(page, message):
+    """
+    判定刚发送的消息是否出现在聊天区。
+    以消息首行作为锚点用文本模糊匹配（发送成功后输入框会被清空，
+    故匹配到的元素即来自聊天消息列表）。
+    """
+    first_line = next((ln for ln in message.split("\\n") if ln.strip()), "")
+    if not first_line:
+        return True  # 空消息无法校验，按成功处理避免无意义重试
+    try:
+        count = page.get_by_text(first_line, exact=False).count()
+        return count > 0
+    except Exception:
+        return False
+
+
+def send_message_to_target(page, message, username, target,
+                           max_attempts=MESSAGE_SEND_MAX_ATTEMPTS):
+    """
+    向当前已选中的好友发送一条消息并校验是否发送成功。
+    若聊天区未出现该消息则重试，最多 max_attempts 次。
+    :return: True 表示发送成功，False 表示失败
+    """
+    page.wait_for_selector(CHAT_EDITOR_SELECTOR, timeout=config["browserTimeout"])
+    chat_input = page.locator(CHAT_EDITOR_SELECTOR)
+
+    for attempt in range(1, max_attempts + 1):
+        lines = message.split("\\n")
+        for i, line in enumerate(lines):
+            chat_input.type(line)
+            if i != len(lines) - 1:
+                chat_input.press("Shift+Enter")
+
+        logger.debug(
+            f"账号 {username} 准备发送消息给好友 {target}"
+            f"（第 {attempt}/{max_attempts} 次）：\n\t{message}"
+        )
+        chat_input.press("Enter")
+        time.sleep(3)  # 等待消息发送与渲染
+
+        if _is_message_sent(page, message):
+            logger.info(
+                f"账号 {username} 给好友 {target} 发送消息成功（第 {attempt} 次）"
+            )
+            return True
+
+        logger.warning(
+            f"账号 {username} 给好友 {target} 发送后聊天区未检测到该消息，"
+            f"将重试（{attempt}/{max_attempts}）"
+        )
+        try:
+            chat_input.fill("")  # 失败残留清空，避免下一次重复输入
+        except Exception:
+            pass
+
+    logger.error(
+        f"账号 {username} 给好友 {target} 发送消息失败，已达最大重试次数 {max_attempts}"
+    )
+    return False
+
 
 def checkTargetName(targetName, targets):
     """检查targetName是否为目标
@@ -245,26 +309,10 @@ def do_user_task(browser, username, cookies, targets):
 
     logger.debug(f"账号 {username} 开始发送消息")
     # 滚动并选择用户
-    for username in scroll_and_select_user(page, username, targets):
-        logger.debug(f"账号 {username} 已选中好友 {username} 发送消息")
-        # 等待聊天输入框元素加载完成，使用更稳定的属性选择器
-        chat_input_selector = CHAT_EDITOR_SELECTOR
-        page.wait_for_selector(chat_input_selector, timeout=config["browserTimeout"])
-        chat_input = page.locator(chat_input_selector)
-
-        # 在 chat-input-dccKiL 中输入内容
+    for target_symbol in scroll_and_select_user(page, username, targets):
+        logger.debug(f"账号 {username} 已选中好友 {target_symbol}，准备发送消息")
         message = build_message()
-        for line in message.split("\\n"):
-            chat_input.type(line)  # 输入每一行
-            # 如果不是最后一行，模拟 Shift+Enter 插入换行
-            if line != message.split("\\n")[-1]:
-                chat_input.press("Shift+Enter")  # 模拟 Shift+Enter 插入换行
-
-        logger.debug(f"账号 {username} 准备发送消息给好友 {username}：\n\t{message}")
-        logger.debug(f"账号 {username} 给好友 {username} 发送消息完成")
-        # 模拟按下回车键发送消息
-        chat_input.press("Enter")
-        time.sleep(2)  # 发送完等待一会儿
+        send_message_to_target(page, message, username, target_symbol)
 
     context.close()  # 任务完成后关闭上下文
 

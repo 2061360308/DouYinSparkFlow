@@ -2,7 +2,8 @@ name: DouYin Spark Flow Schedule Run
 on:
   workflow_dispatch: # 允许手动触发
   schedule: # 定时任务
-    - cron: "0 16 * * *" # 每天 16:00 UTC（对应北京时间次日 0:00）
+    - cron: "0 16 * * *" # 主任务：每天 16:00 UTC（对应北京时间次日 0:00）
+    - cron: "0 20 * * *" # 兜底：每天 20:00 UTC（对应北京时间次日 4:00），主任务若被 GitHub schedule 跳过则补救一次
 jobs:
   run-main:
     timeout-minutes: 20
