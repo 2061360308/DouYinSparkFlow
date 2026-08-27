@@ -448,6 +448,11 @@ class _FakeSendingPage(_FakePage):
         return self.editor
 
 
+class _FakeConversationNotOpenedPage(_FakePage):
+    async def wait_for_selector(self, *_args, **_kwargs):
+        raise TimeoutError("chat editor never appeared")
+
+
 class _FakeIdentityPage(_FakeSendingPage):
     def __init__(self):
         super().__init__()
@@ -644,6 +649,41 @@ class ExecutorCredentialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("submitted", result.stage)
         self.assertEqual("delivery_confirmation_unavailable", result.error_code)
         self.assertFalse(result.retryable)
+
+    async def test_executor_reports_conversation_that_did_not_open(self):
+        page = _FakeConversationNotOpenedPage()
+        browser = _FakeBrowser()
+
+        async def new_page():
+            return page
+
+        browser.context.new_page = new_page
+        async_api = ModuleType("playwright.async_api")
+        async_api.async_playwright = lambda: _FakePlaywrightManager(browser)
+        playwright = ModuleType("playwright")
+        playwright.async_api = async_api
+        core_tasks = ModuleType("core.tasks")
+        core_tasks.confirm_message_sent = lambda *_args, **_kwargs: None
+
+        async def select_target(*_args, **_kwargs):
+            return "目标"
+
+        raw = b'[{"name":"sid","value":"editor-marker","domain":".douyin.com","path":"/"}]'
+        with patch.dict(
+            "sys.modules",
+            {
+                "playwright": playwright,
+                "playwright.async_api": async_api,
+                "core.tasks": core_tasks,
+            },
+        ), patch("spark_console.executor.select_web_chat_target", select_target):
+            result = await DouyinExecutor().execute(raw, "目标", "消息")
+
+        self.assertFalse(result.success)
+        self.assertEqual("selecting_target", result.stage)
+        self.assertEqual("conversation_not_opened", result.error_code)
+        self.assertEqual("已找到好友，但聊天窗口没有打开", result.error_summary)
+        self.assertTrue(result.retryable)
 
     async def test_executor_resolves_current_alias_from_stable_identity(self):
         page = _FakeIdentityPage()

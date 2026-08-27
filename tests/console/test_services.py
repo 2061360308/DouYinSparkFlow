@@ -1,6 +1,8 @@
 import hashlib
 import unittest
+from datetime import timezone
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
@@ -200,6 +202,72 @@ class ServiceTests(unittest.TestCase):
                 "今日火花",
                 target_sec_uid="other-account-contact",
             )
+
+    def test_owner_can_update_task_schedule_message_and_stable_target(self):
+        self.session.add(
+            DouyinContactIdentity(
+                account_id=self.account.id,
+                sec_uid="updated-stable-id",
+                nickname="更新后的好友",
+            )
+        )
+        self.session.flush()
+        task = self.tasks.create(
+            self.owner.id, self.account.id, "旧好友", "09:00", "旧消息"
+        )
+        task.enabled = False
+
+        updated = self.tasks.update_owned(
+            self.owner.id,
+            task.id,
+            self.account.id,
+            "更新后的好友",
+            "21:30",
+            "更新后的消息",
+            target_sec_uid="updated-stable-id",
+        )
+        self.session.flush()
+
+        binding = self.session.get(SparkTaskTargetIdentity, task.id)
+        self.assertEqual("更新后的好友", updated.target_name)
+        self.assertEqual("21:30", updated.send_time)
+        self.assertEqual("更新后的消息", updated.message_template)
+        self.assertFalse(updated.enabled)
+        self.assertEqual("updated-stable-id", binding.sec_uid)
+        local_next = updated.next_run_at.replace(tzinfo=timezone.utc).astimezone(
+            ZoneInfo("Asia/Shanghai")
+        )
+        self.assertEqual((21, 30), (local_next.hour, local_next.minute))
+
+    def test_updating_to_manual_target_removes_stale_identity_binding(self):
+        self.session.add(
+            DouyinContactIdentity(
+                account_id=self.account.id,
+                sec_uid="old-stable-id",
+                nickname="旧好友",
+            )
+        )
+        self.session.flush()
+        task = self.tasks.create(
+            self.owner.id,
+            self.account.id,
+            "旧好友",
+            "09:00",
+            "旧消息",
+            target_sec_uid="old-stable-id",
+        )
+
+        self.tasks.update_owned(
+            self.owner.id,
+            task.id,
+            self.account.id,
+            "手动输入好友",
+            "10:15",
+            "新消息",
+        )
+        self.session.flush()
+
+        self.assertIsNone(self.session.get(SparkTaskTargetIdentity, task.id))
 
     def test_storage_state_rejects_empty_cookies_before_creating_account(self):
         before = len(self.session.scalars(select(DouyinAccount)).all())

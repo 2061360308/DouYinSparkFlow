@@ -138,7 +138,7 @@ class WebChatSelectionTests(unittest.IsolatedAsyncioTestCase):
         selected = await select_web_chat_target(page, "ʚ繁花ɞ🌸")
         self.assertEqual("ʚ繁花ɞ🌸", selected)
         self.assertTrue(page.result.clicked)
-        self.assertFalse(page.recent_requested)
+        self.assertTrue(page.recent_requested)
 
     async def test_ignores_hidden_duplicate_and_clicks_visible_conversation(self):
         page = FakeWebChatPage(
@@ -165,7 +165,10 @@ class WebChatSelectionTests(unittest.IsolatedAsyncioTestCase):
             async def all(self): return self.items
         class SearchPage:
             def __init__(self): self.search = SearchField(); self.results = Results()
-            def locator(self, _selector): return self.search
+            def locator(self, selector):
+                if selector == ".conversationConversationItemwrapper":
+                    return FakeConversationList([])
+                return self.search
             def get_by_text(self, _text, exact): return self.results
         page = SearchPage()
 
@@ -175,17 +178,15 @@ class WebChatSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(page.results.items[0].clicked)
         self.assertTrue(page.results.items[1].clicked)
 
-    async def test_clicks_already_visible_exact_target_before_opening_search(self):
-        class Results:
-            def __init__(self):
-                self.items = [FakeConversation("wzlovegsy", True)]
-                self.first = self.items[0]
-            async def count(self): return 1
-            async def all(self): return self.items
+    async def test_clicks_already_visible_conversation_before_opening_search(self):
         class Page:
-            def __init__(self): self.results = Results(); self.search_requested = False
-            def get_by_text(self, _text, exact): return self.results
-            def locator(self, _selector):
+            def __init__(self):
+                self.item = FakeConversation("wzlovegsy", True)
+                self.search_requested = False
+
+            def locator(self, selector):
+                if selector == ".conversationConversationItemwrapper":
+                    return FakeConversationList([self.item])
                 self.search_requested = True
                 raise AssertionError("search should not open when the target is already visible")
         page = Page()
@@ -193,8 +194,36 @@ class WebChatSelectionTests(unittest.IsolatedAsyncioTestCase):
         selected = await select_web_chat_target(page, "wzlovegsy")
 
         self.assertEqual("wzlovegsy", selected)
-        self.assertTrue(page.results.items[0].clicked)
+        self.assertTrue(page.item.clicked)
         self.assertFalse(page.search_requested)
+
+    async def test_ignores_same_name_text_outside_conversation_list(self):
+        class Results:
+            def __init__(self, item):
+                self.items = [item]
+                self.first = item
+
+            async def count(self):
+                return len(self.items)
+
+            async def all(self):
+                return self.items
+
+        class Page(FakeWebChatPage):
+            def __init__(self):
+                super().__init__(["wzlovegsy"])
+                self.decoy = FakeConversation("wzlovegsy")
+
+            def get_by_text(self, _text, exact):
+                return Results(self.decoy)
+
+        page = Page()
+
+        selected = await select_web_chat_target(page, "wzlovegsy")
+
+        self.assertEqual("wzlovegsy", selected)
+        self.assertTrue(page.items[0].clicked)
+        self.assertFalse(page.decoy.clicked)
 
     async def test_fails_instead_of_sending_to_the_wrong_conversation(self):
         page = FakeWebChatPage(["another friend"])

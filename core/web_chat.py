@@ -127,7 +127,7 @@ async def list_visible_web_chat_targets(page, timeout=30000):
 
 
 async def select_web_chat_target(page, target, timeout=30000, aliases=()):
-    """Select one exact target, preferring global chat search over recent items."""
+    """Select one exact target, preferring real conversation rows over page text."""
     normalized_target = target.strip()
     candidates = tuple(
         dict.fromkeys(
@@ -135,15 +135,15 @@ async def select_web_chat_target(page, target, timeout=30000, aliases=()):
         )
     )
 
-    for candidate in candidates:
-        try:
-            visible_exact = page.get_by_text(candidate, exact=True)
-            for result in await visible_exact.all():
-                if await result.is_visible():
-                    await result.click()
-                    return candidate
-        except (AttributeError, TypeError):
-            break
+    for item in await page.locator(CONVERSATION_ITEM_SELECTOR).all():
+        if hasattr(item, "is_visible") and not await item.is_visible():
+            continue
+        title = (
+            await item.locator(CONVERSATION_TITLE_SELECTOR).inner_text()
+        ).strip()
+        if title in candidates:
+            await item.click()
+            return title
 
     for selector in SEARCH_INPUT_SELECTORS:
         try:
