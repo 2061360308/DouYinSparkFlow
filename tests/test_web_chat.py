@@ -140,6 +140,72 @@ class WebChatSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(page.result.clicked)
         self.assertTrue(page.recent_requested)
 
+    async def test_search_result_clicks_send_message_button(self):
+        class SearchField:
+            def __init__(self):
+                self.first = self
+
+            async def count(self):
+                return 1
+
+            async def fill(self, _value):
+                return None
+
+        class SendButton:
+            def __init__(self):
+                self.clicked = False
+
+            async def count(self):
+                return 1
+
+            async def is_visible(self):
+                return True
+
+            async def click(self):
+                self.clicked = True
+
+        class Result(FakeConversation):
+            def __init__(self):
+                super().__init__("wzlovegsy")
+                self.send_button = SendButton()
+
+            def locator(self, selector):
+                if "发消息" in selector:
+                    return self.send_button
+                return super().locator(selector)
+
+        class Results:
+            def __init__(self, item):
+                self.items = [item]
+                self.first = item
+
+            async def count(self):
+                return 1
+
+            async def all(self):
+                return self.items
+
+        class Page:
+            def __init__(self):
+                self.search = SearchField()
+                self.result = Result()
+
+            def locator(self, selector):
+                if selector == ".conversationConversationItemwrapper":
+                    return FakeConversationList([])
+                return self.search
+
+            def get_by_text(self, _text, exact):
+                return Results(self.result)
+
+        page = Page()
+
+        selected = await select_web_chat_target(page, "wzlovegsy")
+
+        self.assertEqual("wzlovegsy", selected)
+        self.assertTrue(page.result.send_button.clicked)
+        self.assertFalse(page.result.clicked)
+
     async def test_ignores_hidden_duplicate_and_clicks_visible_conversation(self):
         page = FakeWebChatPage(
             ["ʚ繁花ɞ🌸", "ʚ繁花ɞ🌸"],

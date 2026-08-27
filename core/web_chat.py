@@ -126,6 +126,20 @@ async def list_visible_web_chat_targets(page, timeout=30000):
     return targets
 
 
+async def _click_search_result(result) -> None:
+    try:
+        send_button = result.locator(
+            "xpath=ancestor::*[.//button[normalize-space()='发消息']][1]"
+            "//button[normalize-space()='发消息']"
+        )
+        if await send_button.count() > 0 and await send_button.is_visible():
+            await send_button.click()
+            return
+    except (AttributeError, TypeError):
+        pass
+    await result.click()
+
+
 async def select_web_chat_target(page, target, timeout=30000, aliases=()):
     """Select one exact target, preferring real conversation rows over page text."""
     normalized_target = target.strip()
@@ -159,7 +173,7 @@ async def select_web_chat_target(page, target, timeout=30000, aliases=()):
                     for result in results:
                         if hasattr(result, "is_visible") and not await result.is_visible():
                             continue
-                        await result.click()
+                        await _click_search_result(result)
                         return candidate
         except (AttributeError, TypeError):
             # Older page doubles and older layouts have no global search surface.
