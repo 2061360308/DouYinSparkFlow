@@ -140,6 +140,26 @@ async def _click_search_result(result) -> None:
     await result.click()
 
 
+async def _wait_for_visible_search_results(page, candidate, timeout_ms):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + min(3.0, max(0.2, timeout_ms / 1000))
+    while True:
+        exact = page.get_by_text(candidate, exact=True)
+        if await exact.count() > 0:
+            results = await exact.all() if hasattr(exact, "all") else [exact.first]
+            visible = []
+            for result in results:
+                if hasattr(result, "is_visible") and not await result.is_visible():
+                    continue
+                visible.append(result)
+            if visible:
+                return visible
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return []
+        await asyncio.sleep(min(0.2, remaining))
+
+
 async def select_web_chat_target(page, target, timeout=30000, aliases=()):
     """Select one exact target, preferring real conversation rows over page text."""
     normalized_target = target.strip()
@@ -167,14 +187,12 @@ async def select_web_chat_target(page, target, timeout=30000, aliases=()):
             field = search.first
             for candidate in candidates:
                 await field.fill(candidate)
-                exact = page.get_by_text(candidate, exact=True)
-                if await exact.count() > 0:
-                    results = await exact.all() if hasattr(exact, "all") else [exact.first]
-                    for result in results:
-                        if hasattr(result, "is_visible") and not await result.is_visible():
-                            continue
-                        await _click_search_result(result)
-                        return candidate
+                results = await _wait_for_visible_search_results(
+                    page, candidate, timeout
+                )
+                for result in results:
+                    await _click_search_result(result)
+                    return candidate
         except (AttributeError, TypeError):
             # Older page doubles and older layouts have no global search surface.
             break

@@ -206,6 +206,51 @@ class WebChatSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(page.result.send_button.clicked)
         self.assertFalse(page.result.clicked)
 
+    async def test_waits_for_delayed_search_result(self):
+        class SearchField:
+            def __init__(self):
+                self.first = self
+
+            async def count(self):
+                return 1
+
+            async def fill(self, _value):
+                return None
+
+        class DelayedResults:
+            def __init__(self):
+                self.item = FakeConversation("wzlovegsy")
+                self.first = self.item
+                self.checks = 0
+
+            async def count(self):
+                self.checks += 1
+                return 1 if self.checks >= 3 else 0
+
+            async def all(self):
+                return [self.item]
+
+        class Page:
+            def __init__(self):
+                self.search = SearchField()
+                self.results = DelayedResults()
+
+            def locator(self, selector):
+                if selector == ".conversationConversationItemwrapper":
+                    return FakeConversationList([])
+                return self.search
+
+            def get_by_text(self, _text, exact):
+                return self.results
+
+        page = Page()
+
+        selected = await select_web_chat_target(page, "wzlovegsy", timeout=1000)
+
+        self.assertEqual("wzlovegsy", selected)
+        self.assertGreaterEqual(page.results.checks, 3)
+        self.assertTrue(page.results.item.clicked)
+
     async def test_ignores_hidden_duplicate_and_clicks_visible_conversation(self):
         page = FakeWebChatPage(
             ["ʚ繁花ɞ🌸", "ʚ繁花ɞ🌸"],
