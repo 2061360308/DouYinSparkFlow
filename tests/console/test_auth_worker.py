@@ -7,6 +7,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from core.web_chat import DouyinUserIdentity
 from spark_console.auth_scanner import (
     LoginTimedOut,
     QrLoadFailed,
@@ -20,6 +21,7 @@ from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.models import (
     AuditEvent,
     DouyinAccount,
+    DouyinContactIdentity,
     DouyinConversation,
     DouyinLoginSession,
     ScanStatus,
@@ -102,6 +104,13 @@ class _LifecycleScanner:
             " douyin-123 ",
             self.state,
             ("wzlovegsy", "gsy", "wzlovegsy"),
+            (
+                DouyinUserIdentity(
+                    sec_uid="stable-user-id",
+                    nickname="新的昵称",
+                    remark_name="我的备注",
+                ),
+            ),
         )
 
 
@@ -236,6 +245,9 @@ class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
                 .where(DouyinConversation.account_id == account.id)
                 .order_by(DouyinConversation.display_name)
             ).all()
+            contact = session.get(
+                DouyinContactIdentity, (account.id, "stable-user-id")
+            )
             audits = session.scalars(select(AuditEvent)).all()
             self.assertEqual(2, account.cookie_version)
             self.assertEqual("valid", account.validation_state)
@@ -249,6 +261,8 @@ class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
             self.assertEqual(["gsy", "wzlovegsy"], conversations)
+            self.assertEqual("新的昵称", contact.nickname)
+            self.assertEqual("我的备注", contact.remark_name)
         self.assertEqual(0, len(scanner.state))
 
     async def test_typed_scanner_errors_map_to_fixed_public_codes(self):

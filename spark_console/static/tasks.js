@@ -1,9 +1,16 @@
 (() => {
   const account = document.querySelector("#task-account");
+  const target = document.querySelector("#task-target");
+  const targetSecUid = document.querySelector("#task-target-sec-uid");
   const options = document.querySelector("#task-target-options");
   const refresh = document.querySelector("#refresh-targets");
   const status = document.querySelector("#target-status");
-  if (!account || !options || !refresh || !status) return;
+  if (!account || !target || !targetSecUid || !options || !refresh || !status) return;
+
+  function bindSelectedIdentity() {
+    const selected = Array.from(options.options).find((item) => item.value === target.value);
+    targetSecUid.value = selected?.dataset.secUid || "";
+  }
 
   async function loadTargets() {
     refresh.disabled = true;
@@ -19,6 +26,7 @@
       for (const item of body.items || []) {
         const option = document.createElement("option");
         option.value = item.name;
+        option.dataset.secUid = item.sec_uid || "";
         options.appendChild(option);
       }
       status.textContent = body.items?.length
@@ -31,7 +39,12 @@
     }
   }
 
-  account.addEventListener("change", loadTargets);
+  account.addEventListener("change", () => {
+    target.value = "";
+    targetSecUid.value = "";
+    loadTargets();
+  });
+  target.addEventListener("input", bindSelectedIdentity);
   refresh.addEventListener("click", loadTargets);
   status.textContent = "点击“读取好友列表”读取最近会话；只在需要时访问抖音";
 })();

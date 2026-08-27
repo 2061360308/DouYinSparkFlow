@@ -18,6 +18,7 @@ from spark_console.crypto import CookieCipher
 from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.models import (
     DouyinAccount,
+    DouyinContactIdentity,
     DouyinConversation,
     SparkTask,
     TaskRun,
@@ -263,12 +264,46 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             user, _record = auth.current(request, db)
             service = AccountService(db, cipher, AuditService(db))
             service.get_owned(user.id, account_id)
-            targets = db.scalars(
+            conversation_names = db.scalars(
                 select(DouyinConversation.display_name)
                 .where(DouyinConversation.account_id == account_id)
                 .order_by(DouyinConversation.display_name)
             ).all()
-            return {"items": [{"name": target} for target in targets]}
+            contacts = db.scalars(
+                select(DouyinContactIdentity)
+                .where(DouyinContactIdentity.account_id == account_id)
+            ).all()
+            aliases = {
+                value
+                for contact in contacts
+                for value in (
+                    contact.remark_name,
+                    contact.nickname,
+                    contact.unique_id,
+                    contact.short_id,
+                )
+                if value
+            }
+            items = [
+                {
+                    "name": contact.remark_name
+                    or contact.nickname
+                    or contact.unique_id
+                    or contact.short_id,
+                    "sec_uid": contact.sec_uid,
+                }
+                for contact in contacts
+                if contact.remark_name
+                or contact.nickname
+                or contact.unique_id
+                or contact.short_id
+            ]
+            items.extend(
+                {"name": name, "sec_uid": None}
+                for name in conversation_names
+                if name not in aliases
+            )
+            return {"items": sorted(items, key=lambda item: item["name"])}
 
     @app.get("/tasks")
     def tasks_page(request: Request):
@@ -283,13 +318,21 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         request: Request,
         csrf_token: str = Form(default=""),
         account_id: str = Form(), target_name: str = Form(),
+        target_sec_uid: str = Form(default=""),
         send_time: str = Form(), message_template: str = Form(),
     ):
         with session_scope(engine) as db:
             user, record = auth.current(request, db)
             auth.csrf(record, csrf_token)
             service = TaskService(db, AccountService(db, cipher, AuditService(db)), AuditService(db))
-            service.create(user.id, account_id, target_name, send_time, message_template)
+            service.create(
+                user.id,
+                account_id,
+                target_name,
+                send_time,
+                message_template,
+                target_sec_uid=target_sec_uid,
+            )
         return RedirectResponse("/tasks", status_code=303)
 
     @app.post("/tasks/{task_id}/toggle")

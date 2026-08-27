@@ -2,6 +2,7 @@ import unittest
 
 from core.web_chat import (
     TargetNotFoundError,
+    UserInfoCollector,
     list_visible_web_chat_targets,
     select_web_chat_target,
 )
@@ -56,6 +57,47 @@ class FakeWebChatPage:
 
 
 class WebChatSelectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_user_info_collector_maps_stable_id_to_current_aliases(self):
+        class Response:
+            url = "https://www.douyin.com/aweme/v1/web/im/user/info/?aid=6383"
+            status = 200
+
+            async def json(self):
+                return {
+                    "data": [
+                        {
+                            "sec_uid": "stable-user-id",
+                            "short_id": "123456",
+                            "unique_id": "old-search-id",
+                            "nickname": "新的昵称",
+                            "remark_name": "我的备注",
+                        }
+                    ]
+                }
+
+        collector = UserInfoCollector()
+        await collector.handle_response(Response())
+
+        identity = collector.get("stable-user-id")
+        self.assertEqual("stable-user-id", identity.sec_uid)
+        self.assertEqual(
+            ("我的备注", "新的昵称", "old-search-id", "123456"),
+            identity.aliases,
+        )
+
+    async def test_selects_renamed_friend_using_current_identity_alias(self):
+        page = FakeWebChatPage(["新的昵称", "another friend"])
+
+        selected = await select_web_chat_target(
+            page,
+            "旧的昵称",
+            aliases=("我的备注", "新的昵称", "old-search-id"),
+        )
+
+        self.assertEqual("新的昵称", selected)
+        self.assertTrue(page.items[0].clicked)
+        self.assertFalse(page.items[1].clicked)
+
     async def test_lists_visible_unique_conversations_for_task_picker(self):
         page = FakeWebChatPage(
             [" wzlovegsy ", "gsy", "wzlovegsy", "隐藏"],

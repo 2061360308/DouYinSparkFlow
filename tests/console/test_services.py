@@ -5,13 +5,16 @@ from unittest.mock import patch
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from core.web_chat import DouyinUserIdentity
 from spark_console.crypto import CookieCipher
 from spark_console.db import create_schema
 from spark_console.models import (
     AuditEvent,
     DouyinAccount,
     DouyinAccountIdentity,
+    DouyinContactIdentity,
     SparkTask,
+    SparkTaskTargetIdentity,
     User,
 )
 from spark_console.security import PasswordService
@@ -125,6 +128,78 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertFalse(cookie_marker.decode() in audits)
         self.assertFalse(storage_marker.decode() in audits)
+
+    def test_stable_contact_identity_is_saved_and_bound_to_new_task(self):
+        state = {
+            "cookies": [
+                {
+                    "name": "sid",
+                    "value": "secret",
+                    "domain": ".douyin.com",
+                    "path": "/",
+                    "expires": -1,
+                    "httpOnly": True,
+                    "secure": True,
+                    "sameSite": "Lax",
+                }
+            ],
+            "origins": [],
+        }
+        account = self.accounts.create_from_storage_state(
+            self.owner.id,
+            "稳定账号",
+            state,
+            contact_identities=(
+                DouyinUserIdentity(
+                    sec_uid="stable-user-id",
+                    short_id="123456",
+                    unique_id="search-id",
+                    nickname="新的昵称",
+                    remark_name="我的备注",
+                ),
+            ),
+        )
+
+        task = self.tasks.create(
+            self.owner.id,
+            account.id,
+            "我的备注",
+            "09:00",
+            "今日火花",
+            target_sec_uid="stable-user-id",
+        )
+        self.session.flush()
+
+        contact = self.session.get(
+            DouyinContactIdentity, (account.id, "stable-user-id")
+        )
+        binding = self.session.get(SparkTaskTargetIdentity, task.id)
+        self.assertEqual("新的昵称", contact.nickname)
+        self.assertEqual("我的备注", contact.remark_name)
+        self.assertEqual("stable-user-id", binding.sec_uid)
+
+    def test_task_rejects_contact_identity_owned_by_another_account(self):
+        other_account = self.accounts.create(
+            self.owner.id, "其他账号", b'[{"name":"sid","value":"other"}]'
+        )
+        self.session.add(
+            DouyinContactIdentity(
+                account_id=other_account.id,
+                sec_uid="other-account-contact",
+                nickname="不属于当前账号",
+            )
+        )
+        self.session.flush()
+
+        with self.assertRaises(ValidationError):
+            self.tasks.create(
+                self.owner.id,
+                self.account.id,
+                "不属于当前账号",
+                "09:00",
+                "今日火花",
+                target_sec_uid="other-account-contact",
+            )
 
     def test_storage_state_rejects_empty_cookies_before_creating_account(self):
         before = len(self.session.scalars(select(DouyinAccount)).all())

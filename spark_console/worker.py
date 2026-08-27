@@ -12,7 +12,12 @@ from spark_console.config import Settings
 from spark_console.crypto import CookieCipher
 from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.executor import DouyinExecutor
-from spark_console.models import DouyinAccount, SparkTask, TaskRun
+from spark_console.models import (
+    DouyinAccount,
+    SparkTask,
+    SparkTaskTargetIdentity,
+    TaskRun,
+)
 from spark_console.scheduler import claim_next_due_task, finish_run
 from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
@@ -62,6 +67,8 @@ class Worker:
             account_service = AccountService(db, self.cipher, AuditService(db))
             account = db.get(DouyinAccount, task.douyin_account_id)
             credential_version = account.cookie_version
+            target_identity = db.get(SparkTaskTargetIdentity, task.id)
+            target_sec_uid = target_identity.sec_uid if target_identity else None
             cookies = account_service.decrypt_for_worker(task.douyin_account_id)
             try:
                 try:
@@ -70,6 +77,7 @@ class Worker:
                         task.target_name,
                         task.message_template,
                         credential_version=credential_version,
+                        target_sec_uid=target_sec_uid,
                     )
                 except Exception:
                     return finish_run(

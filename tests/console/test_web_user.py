@@ -12,8 +12,10 @@ from spark_console.crypto import CookieCipher
 from spark_console.db import create_schema, session_scope
 from spark_console.models import (
     DouyinAccount,
+    DouyinContactIdentity,
     DouyinConversation,
     SparkTask,
+    SparkTaskTargetIdentity,
     TaskRun,
     User,
 )
@@ -233,6 +235,13 @@ class UserWebTests(unittest.TestCase):
                 [
                     DouyinConversation(account_id=account_id, display_name="wzlovegsy"),
                     DouyinConversation(account_id=account_id, display_name="gsy"),
+                    DouyinContactIdentity(
+                        account_id=account_id,
+                        sec_uid="stable-user-id",
+                        unique_id="wzlovegsy",
+                        nickname="新的昵称",
+                        remark_name="我的备注",
+                    ),
                 ]
             )
         tasks_page = self.client.get("/tasks")
@@ -240,12 +249,62 @@ class UserWebTests(unittest.TestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertEqual(
-            {"items": [{"name": "gsy"}, {"name": "wzlovegsy"}]},
+            {
+                "items": [
+                    {"name": "gsy", "sec_uid": None},
+                    {"name": "我的备注", "sec_uid": "stable-user-id"},
+                ]
+            },
             response.json(),
         )
         self.assertIn('list="task-target-options"', tasks_page.text)
+        self.assertIn('name="target_sec_uid"', tasks_page.text)
         self.assertIn("读取好友列表", tasks_page.text)
         self.assertNotIn("secret-marker", response.text)
+
+    def test_new_task_binds_selected_stable_contact_identity(self):
+        self.login()
+        with session_scope(self.engine) as session:
+            user = session.scalar(select(User).where(User.username == "friend"))
+            user.must_change_password = False
+            account = AccountService(
+                session,
+                CookieCipher(self.settings.cookie_key_file.read_bytes()),
+                AuditService(session),
+            ).create(
+                user.id,
+                "我的抖音",
+                b'[{"name":"sessionid","value":"secret","url":"https://www.douyin.com"}]',
+            )
+            session.add(
+                DouyinContactIdentity(
+                    account_id=account.id,
+                    sec_uid="stable-user-id",
+                    nickname="新的昵称",
+                )
+            )
+            account_id = account.id
+        page = self.client.get("/tasks")
+        csrf = page.text.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+        response = self.client.post(
+            "/tasks",
+            data={
+                "csrf_token": csrf,
+                "account_id": account_id,
+                "target_name": "新的昵称",
+                "target_sec_uid": "stable-user-id",
+                "send_time": "09:00",
+                "message_template": "今日火花",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(303, response.status_code)
+        with session_scope(self.engine) as session:
+            task = session.scalar(select(SparkTask).where(SparkTask.owner_user_id == user.id))
+            binding = session.get(SparkTaskTargetIdentity, task.id)
+            self.assertEqual("stable-user-id", binding.sec_uid)
 
     def test_run_history_uses_chinese_status_and_shanghai_time(self):
         with session_scope(self.engine) as session:

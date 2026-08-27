@@ -1,6 +1,9 @@
+import asyncio
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime
+from urllib.parse import urlparse
 
 from utils.logger import setup_logger
 
@@ -15,6 +18,91 @@ SEARCH_INPUT_SELECTORS = (
 )
 
 logger = setup_logger(level=logging.DEBUG)
+
+
+@dataclass(frozen=True)
+class DouyinUserIdentity:
+    sec_uid: str
+    short_id: str | None = None
+    unique_id: str | None = None
+    nickname: str | None = None
+    remark_name: str | None = None
+
+    @property
+    def aliases(self) -> tuple[str, ...]:
+        values = (
+            self.remark_name,
+            self.nickname,
+            self.unique_id,
+            self.short_id,
+        )
+        return tuple(dict.fromkeys(value.strip() for value in values if value and value.strip()))
+
+
+class UserInfoCollector:
+    PATH = "/aweme/v1/web/im/user/info"
+
+    def __init__(self):
+        self.identities: dict[str, DouyinUserIdentity] = {}
+        self._changed = asyncio.Event()
+        self._pending: set[asyncio.Task] = set()
+
+    def capture(self, response) -> None:
+        if self.PATH not in urlparse(response.url).path:
+            return
+        task = asyncio.create_task(self.handle_response(response))
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+
+    async def handle_response(self, response) -> None:
+        if self.PATH not in urlparse(response.url).path or response.status != 200:
+            return
+        try:
+            body = await response.json()
+        except Exception:
+            return
+        data = body.get("data", ()) if isinstance(body, dict) else ()
+        for item in data if isinstance(data, list) else ():
+            if not isinstance(item, dict):
+                continue
+            sec_uid = str(item.get("sec_uid") or "").strip()
+            if not sec_uid:
+                continue
+            self.identities[sec_uid] = DouyinUserIdentity(
+                sec_uid=sec_uid,
+                short_id=_optional_string(item.get("short_id")),
+                unique_id=_optional_string(item.get("unique_id")),
+                nickname=_optional_string(item.get("nickname")),
+                remark_name=_optional_string(item.get("remark_name")),
+            )
+            self._changed.set()
+
+    def get(self, sec_uid: str) -> DouyinUserIdentity | None:
+        return self.identities.get(sec_uid)
+
+    async def wait_for(self, sec_uid: str, timeout: float = 15.0) -> DouyinUserIdentity | None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            identity = self.get(sec_uid)
+            if identity is not None:
+                return identity
+            self._changed.clear()
+            try:
+                await asyncio.wait_for(self._changed.wait(), deadline - loop.time())
+            except TimeoutError:
+                break
+        return self.get(sec_uid)
+
+    async def drain(self) -> tuple[DouyinUserIdentity, ...]:
+        if self._pending:
+            await asyncio.gather(*tuple(self._pending), return_exceptions=True)
+        return tuple(self.identities.values())
+
+
+def _optional_string(value) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 
 class TargetNotFoundError(RuntimeError):
@@ -38,18 +126,24 @@ async def list_visible_web_chat_targets(page, timeout=30000):
     return targets
 
 
-async def select_web_chat_target(page, target, timeout=30000):
+async def select_web_chat_target(page, target, timeout=30000, aliases=()):
     """Select one exact target, preferring global chat search over recent items."""
     normalized_target = target.strip()
+    candidates = tuple(
+        dict.fromkeys(
+            value.strip() for value in (*aliases, normalized_target) if value and value.strip()
+        )
+    )
 
-    try:
-        visible_exact = page.get_by_text(normalized_target, exact=True)
-        for result in await visible_exact.all():
-            if await result.is_visible():
-                await result.click()
-                return normalized_target
-    except (AttributeError, TypeError):
-        pass
+    for candidate in candidates:
+        try:
+            visible_exact = page.get_by_text(candidate, exact=True)
+            for result in await visible_exact.all():
+                if await result.is_visible():
+                    await result.click()
+                    return candidate
+        except (AttributeError, TypeError):
+            break
 
     for selector in SEARCH_INPUT_SELECTORS:
         try:
@@ -57,15 +151,16 @@ async def select_web_chat_target(page, target, timeout=30000):
             if await search.count() == 0:
                 continue
             field = search.first
-            await field.fill(normalized_target)
-            exact = page.get_by_text(normalized_target, exact=True)
-            if await exact.count() > 0:
-                results = await exact.all() if hasattr(exact, "all") else [exact.first]
-                for result in results:
-                    if hasattr(result, "is_visible") and not await result.is_visible():
-                        continue
-                    await result.click()
-                    return normalized_target
+            for candidate in candidates:
+                await field.fill(candidate)
+                exact = page.get_by_text(candidate, exact=True)
+                if await exact.count() > 0:
+                    results = await exact.all() if hasattr(exact, "all") else [exact.first]
+                    for result in results:
+                        if hasattr(result, "is_visible") and not await result.is_visible():
+                            continue
+                        await result.click()
+                        return candidate
         except (AttributeError, TypeError):
             # Older page doubles and older layouts have no global search surface.
             break
@@ -78,9 +173,9 @@ async def select_web_chat_target(page, target, timeout=30000):
         title = (
             await item.locator(CONVERSATION_TITLE_SELECTOR).inner_text()
         ).strip()
-        if title == normalized_target:
+        if title in candidates:
             await item.click()
-            return normalized_target
+            return title
 
     raise TargetNotFoundError(f"未在抖音聊天列表中找到好友 {normalized_target}")
 
