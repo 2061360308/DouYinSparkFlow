@@ -89,21 +89,10 @@ def build_registration_router(
     @router.post("/admin/invites")
     def create_invite(request: Request, csrf_token: str = Form(default="")):
         with session_scope(engine) as db:
-            admin, record, context = auth.admin_context(request, db)
+            admin, record, _context = auth.admin_context(request, db)
             auth.csrf(record, csrf_token)
             InviteService(db, AuditService(db), cipher).create(admin.id)
-            invites = admin_invite_items(db, cipher)
-            users, tasks, runs = _admin_page_data(db)
-            return page(
-                request,
-                "admin.html",
-                title="管理后台",
-                users=users,
-                tasks=tasks,
-                runs=runs,
-                invites=invites,
-                **context,
-            )
+        return RedirectResponse("/admin", 303)
 
     @router.post("/admin/invites/{invite_id}/revoke")
     def revoke_invite(

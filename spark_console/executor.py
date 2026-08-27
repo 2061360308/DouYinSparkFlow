@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import StrEnum
 
-from core.web_chat import CHAT_EDITOR_SELECTOR, WEB_CHAT_URL, TargetNotFoundError, select_web_chat_target
+from core.web_chat import (
+    CHAT_EDITOR_SELECTOR,
+    WEB_CHAT_URL,
+    TargetNotFoundError,
+    UserInfoCollector,
+    select_web_chat_target,
+)
 from spark_console.credentials import CredentialError, CredentialPayload
+
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionStage(StrEnum):
@@ -33,6 +43,7 @@ class DouyinExecutor:
         target: str,
         message: str,
         credential_version: int = 1,
+        target_sec_uid: str | None = None,
     ) -> ExecutionResult:
         from playwright.async_api import async_playwright
         from core.tasks import confirm_message_sent
@@ -50,11 +61,24 @@ class DouyinExecutor:
                     if legacy_cookies:
                         await context.add_cookies(legacy_cookies)
                     page = await context.new_page()
+                    user_info = UserInfoCollector()
+                    if target_sec_uid:
+                        page.on("response", user_info.capture)
                     await page.goto(WEB_CHAT_URL, wait_until="domcontentloaded", timeout=120000)
                     stage = ExecutionStage.SELECTING_TARGET
-                    await select_web_chat_target(page, target, timeout=45000)
-                    stage = ExecutionStage.SENDING
+                    identity = (
+                        await user_info.wait_for(target_sec_uid)
+                        if target_sec_uid
+                        else None
+                    )
+                    await select_web_chat_target(
+                        page,
+                        target,
+                        timeout=45000,
+                        aliases=identity.aliases if identity else (),
+                    )
                     await page.wait_for_selector(CHAT_EDITOR_SELECTOR, timeout=30000)
+                    stage = ExecutionStage.SENDING
                     editor = page.locator(CHAT_EDITOR_SELECTOR).first
                     lines = message.splitlines() or [message]
                     for index, line in enumerate(lines):
@@ -84,7 +108,20 @@ class DouyinExecutor:
             return ExecutionResult(False, ExecutionStage.SELECTING_TARGET, "target_not_found", "未找到完全匹配的目标好友")
         except CredentialError:
             return ExecutionResult(False, ExecutionStage.AUTHENTICATING, "cookie_invalid", "账号凭据格式无效")
-        except Exception:
+        except Exception as error:
+            logger.warning(
+                "douyin execution failed stage=%s exception=%s",
+                stage,
+                type(error).__name__,
+            )
+            if stage == ExecutionStage.SELECTING_TARGET:
+                return ExecutionResult(
+                    False,
+                    ExecutionStage.SELECTING_TARGET,
+                    "conversation_not_opened",
+                    "已找到好友，但聊天窗口没有打开",
+                    retryable=True,
+                )
             return ExecutionResult(
                 False,
                 stage,

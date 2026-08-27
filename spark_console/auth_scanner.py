@@ -8,7 +8,12 @@ from datetime import datetime, timezone
 from typing import Callable
 from urllib.parse import urlparse
 
-from core.web_chat import CONVERSATION_ITEM_SELECTOR, CONVERSATION_TITLE_SELECTOR
+from core.web_chat import (
+    CONVERSATION_ITEM_SELECTOR,
+    CONVERSATION_TITLE_SELECTOR,
+    DouyinUserIdentity,
+    UserInfoCollector,
+)
 
 
 CHAT_LOGIN_URL = "https://www.douyin.com/chat"
@@ -69,6 +74,7 @@ class ScannedAccount:
     unique_id: str | None
     storage_state: dict[str, object]
     conversation_names: tuple[str, ...] = ()
+    contact_identities: tuple[DouyinUserIdentity, ...] = ()
 
 
 def _default_playwright_factory():
@@ -124,6 +130,8 @@ class DouyinQrScanner:
                 page = await self._await_stage(
                     context.new_page(), cancelled, deadline
                 )
+                user_info = UserInfoCollector()
+                page.on("response", user_info.capture)
                 await self._await_stage(
                     page.goto(
                         CHAT_LOGIN_URL,
@@ -181,11 +189,15 @@ class DouyinQrScanner:
                 conversation_names = await self._await_stage(
                     self._visible_conversation_names(page), cancelled, deadline
                 )
+                contact_identities = await self._await_stage(
+                    user_info.drain(), cancelled, deadline
+                )
                 return ScannedAccount(
                     display_name,
                     unique_id,
                     storage_state,
                     conversation_names,
+                    contact_identities,
                 )
             finally:
                 try:

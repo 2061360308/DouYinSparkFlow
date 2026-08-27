@@ -62,6 +62,22 @@ class DouyinConversation(Base):
     )
 
 
+class DouyinContactIdentity(Base):
+    __tablename__ = "douyin_contact_identities"
+
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("douyin_accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    sec_uid: Mapped[str] = mapped_column(String(256), primary_key=True)
+    short_id: Mapped[str | None] = mapped_column(String(64))
+    unique_id: Mapped[str | None] = mapped_column(String(128))
+    nickname: Mapped[str | None] = mapped_column(String(256))
+    remark_name: Mapped[str | None] = mapped_column(String(256))
+    discovered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+
+
 class ScanStatus(StrEnum):
     QUEUED = "queued"
     LOADING_QR = "loading_qr"
@@ -178,6 +194,16 @@ class SparkTask(Base):
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class SparkTaskTargetIdentity(Base):
+    __tablename__ = "spark_task_target_identities"
+
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("spark_tasks.id", ondelete="CASCADE"), primary_key=True
+    )
+    sec_uid: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class TaskRun(Base):

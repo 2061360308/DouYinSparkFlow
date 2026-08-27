@@ -12,7 +12,13 @@ from spark_console.config import Settings
 from spark_console.crypto import CookieCipher
 from spark_console.db import create_schema
 from spark_console.executor import ExecutionResult, ExecutionStage
-from spark_console.models import DouyinAccount, SparkTask, TaskRun, User
+from spark_console.models import (
+    DouyinAccount,
+    SparkTask,
+    SparkTaskTargetIdentity,
+    TaskRun,
+    User,
+)
 from spark_console.scheduler import claim_next_due_task, compute_next_run
 from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
@@ -51,12 +57,19 @@ class _RecordingExecutor:
     def __init__(self):
         self.credential_version = None
         self.payload_reference = None
+        self.target_sec_uid = None
 
     async def execute(
-        self, cookie_payload, target, message, credential_version=1
+        self,
+        cookie_payload,
+        target,
+        message,
+        credential_version=1,
+        target_sec_uid=None,
     ):
         self.credential_version = credential_version
         self.payload_reference = cookie_payload
+        self.target_sec_uid = target_sec_uid
         return ExecutionResult(True, ExecutionStage.COMPLETE)
 
 
@@ -132,6 +145,13 @@ class WorkerCredentialTests(unittest.IsolatedAsyncioTestCase):
                     next_run_at=scheduled,
                 )
                 session.add(task)
+                session.flush()
+                session.add(
+                    SparkTaskTargetIdentity(
+                        task_id=task.id,
+                        sec_uid="stable-user-id",
+                    )
+                )
                 session.commit()
 
             executor = _RecordingExecutor()
@@ -160,6 +180,7 @@ class WorkerCredentialTests(unittest.IsolatedAsyncioTestCase):
                 engine.dispose()
             self.assertEqual("success", result.status)
             self.assertEqual(2, executor.credential_version)
+            self.assertEqual("stable-user-id", executor.target_sec_uid)
             self.assertEqual(0, len(payload))
 
     async def test_retryable_failure_retries_after_one_then_five_minutes(self):

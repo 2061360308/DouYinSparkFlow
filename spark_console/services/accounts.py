@@ -10,6 +10,7 @@ from spark_console.crypto import CookieCipher
 from spark_console.models import (
     DouyinAccount,
     DouyinAccountIdentity,
+    DouyinContactIdentity,
     DouyinConversation,
     SparkTask,
     utc_now,
@@ -52,6 +53,7 @@ class AccountService:
         storage_state: dict,
         douyin_unique_id: str | None = None,
         conversation_names=(),
+        contact_identities=(),
     ) -> DouyinAccount:
         name = self._validated_display_name(display_name)
         normalized_unique_id = (
@@ -97,6 +99,20 @@ class AccountService:
                 DouyinConversation(
                     account_id=account.id,
                     display_name=normalized_name[:256],
+                )
+            )
+        for identity in contact_identities:
+            sec_uid = str(identity.sec_uid).strip()
+            if not sec_uid:
+                continue
+            self.session.add(
+                DouyinContactIdentity(
+                    account_id=account.id,
+                    sec_uid=sec_uid[:256],
+                    short_id=_limited(identity.short_id, 64),
+                    unique_id=_limited(identity.unique_id, 128),
+                    nickname=_limited(identity.nickname, 256),
+                    remark_name=_limited(identity.remark_name, 256),
                 )
             )
         self.audit.write(owner_id, "account.created", "douyin_account", account.id)
@@ -158,3 +174,8 @@ class AccountService:
         if not name or len(name) > 64:
             raise ValidationError("账号名称须为 1–64 个字符")
         return name
+
+
+def _limited(value, length: int) -> str | None:
+    text = str(value or "").strip()
+    return text[:length] or None

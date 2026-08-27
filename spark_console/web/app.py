@@ -18,8 +18,10 @@ from spark_console.crypto import CookieCipher
 from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.models import (
     DouyinAccount,
+    DouyinContactIdentity,
     DouyinConversation,
     SparkTask,
+    SparkTaskTargetIdentity,
     TaskRun,
     User,
 )
@@ -27,6 +29,7 @@ from spark_console.rate_limit import FailedAttemptLimiter
 from spark_console.security import PasswordService, SessionService
 from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
+from spark_console.services import Conflict, NotFound, ValidationError
 from spark_console.services.tasks import TaskService
 from spark_console.services.users import UserService
 from spark_console.web.account_scan_routes import build_account_scan_router
@@ -263,12 +266,46 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             user, _record = auth.current(request, db)
             service = AccountService(db, cipher, AuditService(db))
             service.get_owned(user.id, account_id)
-            targets = db.scalars(
+            conversation_names = db.scalars(
                 select(DouyinConversation.display_name)
                 .where(DouyinConversation.account_id == account_id)
                 .order_by(DouyinConversation.display_name)
             ).all()
-            return {"items": [{"name": target} for target in targets]}
+            contacts = db.scalars(
+                select(DouyinContactIdentity)
+                .where(DouyinContactIdentity.account_id == account_id)
+            ).all()
+            aliases = {
+                value
+                for contact in contacts
+                for value in (
+                    contact.remark_name,
+                    contact.nickname,
+                    contact.unique_id,
+                    contact.short_id,
+                )
+                if value
+            }
+            items = [
+                {
+                    "name": contact.remark_name
+                    or contact.nickname
+                    or contact.unique_id
+                    or contact.short_id,
+                    "sec_uid": contact.sec_uid,
+                }
+                for contact in contacts
+                if contact.remark_name
+                or contact.nickname
+                or contact.unique_id
+                or contact.short_id
+            ]
+            items.extend(
+                {"name": name, "sec_uid": None}
+                for name in conversation_names
+                if name not in aliases
+            )
+            return {"items": sorted(items, key=lambda item: item["name"])}
 
     @app.get("/tasks")
     def tasks_page(request: Request):
@@ -283,13 +320,100 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         request: Request,
         csrf_token: str = Form(default=""),
         account_id: str = Form(), target_name: str = Form(),
+        target_sec_uid: str = Form(default=""),
         send_time: str = Form(), message_template: str = Form(),
     ):
         with session_scope(engine) as db:
             user, record = auth.current(request, db)
             auth.csrf(record, csrf_token)
             service = TaskService(db, AccountService(db, cipher, AuditService(db)), AuditService(db))
-            service.create(user.id, account_id, target_name, send_time, message_template)
+            service.create(
+                user.id,
+                account_id,
+                target_name,
+                send_time,
+                message_template,
+                target_sec_uid=target_sec_uid,
+            )
+        return RedirectResponse("/tasks", status_code=303)
+
+    @app.get("/tasks/{task_id}/edit")
+    def edit_task_page(request: Request, task_id: str):
+        with session_scope(engine) as db:
+            user, _record, context = auth.user_context(request, db)
+            account_service = AccountService(db, cipher, AuditService(db))
+            service = TaskService(db, account_service, AuditService(db))
+            try:
+                task = service.get_owned(user.id, task_id)
+            except NotFound as error:
+                raise HTTPException(404) from error
+            binding = db.get(SparkTaskTargetIdentity, task.id)
+            form = {
+                "account_id": task.douyin_account_id or "",
+                "target_name": task.target_name,
+                "target_sec_uid": binding.sec_uid if binding else "",
+                "send_time": task.send_time,
+                "message_template": task.message_template,
+            }
+            return page(
+                request,
+                "task_edit.html",
+                title="编辑续火任务",
+                task=task,
+                accounts=account_service.list_owned(user.id),
+                form=form,
+                error=None,
+                **context,
+            )
+
+    @app.post("/tasks/{task_id}/edit")
+    def edit_task(
+        request: Request,
+        task_id: str,
+        csrf_token: str = Form(default=""),
+        account_id: str = Form(),
+        target_name: str = Form(),
+        target_sec_uid: str = Form(default=""),
+        send_time: str = Form(),
+        message_template: str = Form(),
+    ):
+        with session_scope(engine) as db:
+            user, record, context = auth.user_context(request, db)
+            auth.csrf(record, csrf_token)
+            account_service = AccountService(db, cipher, AuditService(db))
+            service = TaskService(db, account_service, AuditService(db))
+            try:
+                task = service.get_owned(user.id, task_id)
+                service.update_owned(
+                    user.id,
+                    task_id,
+                    account_id,
+                    target_name,
+                    send_time,
+                    message_template,
+                    target_sec_uid=target_sec_uid,
+                )
+            except NotFound as error:
+                raise HTTPException(404) from error
+            except (ValidationError, Conflict) as error:
+                form = {
+                    "account_id": account_id,
+                    "target_name": target_name,
+                    "target_sec_uid": target_sec_uid,
+                    "send_time": send_time,
+                    "message_template": message_template,
+                }
+                return page(
+                    request,
+                    "task_edit.html",
+                    status_code=400,
+                    title="编辑续火任务",
+                    task=task,
+                    accounts=account_service.list_owned(user.id),
+                    form=form,
+                    error=str(error),
+                    **context,
+                )
         return RedirectResponse("/tasks", status_code=303)
 
     @app.post("/tasks/{task_id}/toggle")
