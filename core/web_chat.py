@@ -130,7 +130,8 @@ async def _click_search_result(result) -> None:
     try:
         send_button = result.locator(
             "xpath=ancestor::*[.//*[normalize-space()='发消息']][1]"
-            "//*[normalize-space()='发消息']"
+            "//*[normalize-space()='发消息' and "
+            "not(.//*[normalize-space()='发消息'])]"
         )
         if await send_button.count() > 0 and await send_button.is_visible():
             await send_button.click()

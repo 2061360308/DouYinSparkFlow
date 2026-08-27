@@ -168,6 +168,13 @@ class WebChatSelectionTests(unittest.IsolatedAsyncioTestCase):
             async def count(self):
                 return 0
 
+        class AmbiguousLocator:
+            async def count(self):
+                return 2
+
+            async def is_visible(self):
+                raise RuntimeError("strict mode: parent and child both matched")
+
         class Result(FakeConversation):
             def __init__(self):
                 super().__init__("wzlovegsy")
@@ -177,6 +184,8 @@ class WebChatSelectionTests(unittest.IsolatedAsyncioTestCase):
                 if "//button" in selector:
                     return EmptyLocator()
                 if "发消息" in selector:
+                    if "not(.//*" not in selector:
+                        return AmbiguousLocator()
                     return self.send_button
                 return super().locator(selector)
 
