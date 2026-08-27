@@ -164,12 +164,18 @@ class WebChatSelectionTests(unittest.IsolatedAsyncioTestCase):
             async def click(self):
                 self.clicked = True
 
+        class EmptyLocator:
+            async def count(self):
+                return 0
+
         class Result(FakeConversation):
             def __init__(self):
                 super().__init__("wzlovegsy")
                 self.send_button = SendButton()
 
             def locator(self, selector):
+                if "//button" in selector:
+                    return EmptyLocator()
                 if "发消息" in selector:
                     return self.send_button
                 return super().locator(selector)
