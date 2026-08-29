@@ -57,8 +57,8 @@ def get_config():
             os.getenv("BROWSER_TIMEOUT", "120000")
         ),  # 浏览器操作超时时间，单位毫秒
         "friendListTimeout": int(
-            os.getenv("FRIEND_LIST_WAIT_TIME", "2000")
-        ),  # 好友列表加载超时时间，单位毫秒
+            os.getenv("FRIEND_LIST_WAIT_TIME", "20000")
+        ),  # 好友列表加载超时时间，单位毫秒（无头环境下懒加载耗时更长）
         "taskRetryTimes": int(os.getenv("TASK_RETRY_TIMES", "3")),  # 任务重试次数
         "logLevel": os.getenv("LOG_LEVEL", "DEBUG"),  # 日志级别
     }

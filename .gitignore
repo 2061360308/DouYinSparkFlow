@@ -1,8 +1,11 @@
 .venv/
 **/__pycache__/
 .vscode/
-chrome/
+chrome
 logs/
 .DS_Store
 usersData.json
 .env
+.env.backup
+screenshots/
+*.pyc
