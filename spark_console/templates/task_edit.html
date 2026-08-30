@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% block content %}
 <section class="task-edit-page">
   <div class="task-edit-card panel">
-    <a class="edit-back" href="/tasks">← 返回任务列表</a>
+    <a class="edit-back" href="{{ back_url|default('/tasks') }}">← 返回任务列表</a>
     <header class="edit-heading">
       <div><span class="eyebrow">EDIT SCHEDULE</span><h1>编辑续火任务</h1><p>修改后会重新计算下一次发送时间，任务的启用状态保持不变。</p></div>
       <span class="pill {{ 'good' if task.enabled else 'off' }}">{{ '已启用' if task.enabled else '已暂停' }}</span>
@@ -12,7 +12,7 @@
       <input id="task-target-sec-uid" type="hidden" name="target_sec_uid" value="{{ form.target_sec_uid }}">
       <div class="edit-form-grid">
         <label>发送账号
-          <select id="task-account" name="account_id" required>{% for account in accounts %}<option value="{{ account.id }}"{% if account.id == form.account_id %} selected{% endif %}>{{ account.display_name }}</option>{% endfor %}</select>
+          <select id="task-account" name="account_id" data-conversation-prefix="{{ conversation_prefix|default('/accounts') }}" required>{% for account in accounts %}<option value="{{ account.id }}"{% if account.id == form.account_id %} selected{% endif %}>{{ account.display_name }}</option>{% endfor %}</select>
         </label>
         <label>每天发送时间
           <input type="time" name="send_time" value="{{ form.send_time }}" required>
@@ -26,9 +26,9 @@
       <label>消息内容
         <textarea name="message_template" maxlength="500" rows="6" required>{{ form.message_template }}</textarea>
       </label>
-      <div class="edit-actions"><a class="button quiet" href="/tasks">取消</a><button type="submit">保存修改</button></div>
+      <div class="edit-actions"><a class="button quiet" href="{{ back_url|default('/tasks') }}">取消</a><button type="submit">保存修改</button></div>
     </form>
   </div>
 </section>
-<script defer src="/static/tasks.js?v=20260827-2"></script>
+<script defer src="/static/tasks.js?v=20260830-1"></script>
 {% endblock %}

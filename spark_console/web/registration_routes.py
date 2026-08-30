@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -22,6 +23,23 @@ from spark_console.models import InviteCode, SparkTask, TaskRun, User
 
 
 PUBLIC_ERROR = "注册信息或邀请码无效"
+_ADMIN_QUERY_KEYS = (
+    "invite_page",
+    "invite_status",
+    "task_page",
+    "task_q",
+    "task_status",
+)
+
+
+def _admin_return(request: Request) -> str:
+    values = {
+        key: request.query_params.get(key, "")[:80]
+        for key in _ADMIN_QUERY_KEYS
+        if request.query_params.get(key)
+    }
+    query = urlencode(values)
+    return f"/admin?{query}" if query else "/admin"
 
 
 @dataclass(frozen=True)
@@ -92,7 +110,7 @@ def build_registration_router(
             admin, record, _context = auth.admin_context(request, db)
             auth.csrf(record, csrf_token)
             InviteService(db, AuditService(db), cipher).create(admin.id)
-        return RedirectResponse("/admin", 303)
+        return RedirectResponse(_admin_return(request), 303)
 
     @router.post("/admin/invites/{invite_id}/revoke")
     def revoke_invite(
@@ -107,7 +125,7 @@ def build_registration_router(
                 )
             except ValidationError as error:
                 raise HTTPException(400, str(error)) from error
-        return RedirectResponse("/admin", 303)
+        return RedirectResponse(_admin_return(request), 303)
 
     @router.post("/admin/invites/{invite_id}/delete")
     def delete_invite(
@@ -122,7 +140,7 @@ def build_registration_router(
                 )
             except ValidationError as error:
                 raise HTTPException(404, "邀请码不存在") from error
-        return RedirectResponse("/admin", 303)
+        return RedirectResponse(_admin_return(request), 303)
 
     return router
 

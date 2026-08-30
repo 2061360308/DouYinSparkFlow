@@ -18,6 +18,7 @@ from spark_console.models import (
     SparkTask,
     TaskRun,
     User,
+    WorkerLock,
 )
 from spark_console.security import PasswordService
 from spark_console.services.audits import AuditService
@@ -261,13 +262,13 @@ class RegistrationWebTests(unittest.TestCase):
         with Session(self.engine) as session:
             self.assertIsNone(session.get(InviteCode, invite_id))
 
-    def test_admin_invites_offer_manual_and_automatic_status_refresh(self):
+    def test_admin_invites_offer_manual_refresh_without_disruptive_auto_reload(self):
         self.login()
 
         response = self.client.get("/admin")
 
-        self.assertIn("刷新状态", response.text)
-        self.assertIn("setTimeout", response.text)
+        self.assertIn("刷新数据", response.text)
+        self.assertNotIn("location.reload()", response.text)
         self.assertIn("/admin/invites/", response.text)
         self.assertIn("/delete", response.text)
 
@@ -386,6 +387,198 @@ class RegistrationWebTests(unittest.TestCase):
         self.assertEqual("已使用", items[used_id].status)
         self.assertEqual("friend", items[used_id].used_by_username)
         self.assertEqual("已撤销", items[revoked_id].status)
+
+    def test_admin_paginates_invites_and_tasks_independently_with_real_totals(self):
+        now = datetime.now(timezone.utc)
+        with session_scope(self.engine) as session:
+            account = DouyinAccount(
+                owner_user_id=self.friend.id,
+                display_name="分页账号",
+                encrypted_cookies=b"encrypted",
+                cookie_nonce=b"nonce",
+            )
+            session.add(account)
+            session.flush()
+            for index in range(8):
+                session.add(
+                    SparkTask(
+                        owner_user_id=self.friend.id,
+                        douyin_account_id=account.id,
+                        target_name=f"分页好友-{index}",
+                        send_time=f"0{index}:00",
+                        message_template="今日火花",
+                        enabled=index % 2 == 0,
+                        next_run_at=now + timedelta(days=1),
+                    )
+                )
+            for index in range(6):
+                session.add(
+                    InviteCode(
+                        code_hash=hashlib.sha256(f"page-{index}".encode()).hexdigest(),
+                        created_by_user_id=self.admin.id,
+                        expires_at=now + timedelta(days=1),
+                        created_at=now + timedelta(seconds=index),
+                    )
+                )
+        self.login()
+
+        response = self.client.get("/admin?invite_page=2&task_page=2")
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(2, response.text.count('data-admin-invite="'))
+        self.assertEqual(2, response.text.count('data-admin-task="'))
+        self.assertIn('data-stat="tasks">8<', response.text)
+        self.assertIn("invite_page=2", response.text)
+        self.assertIn("task_page=2", response.text)
+
+    def test_admin_filters_tasks_and_invites_and_does_not_auto_reload(self):
+        now = datetime.now(timezone.utc)
+        with session_scope(self.engine) as session:
+            account = DouyinAccount(
+                owner_user_id=self.friend.id,
+                display_name="筛选账号",
+                encrypted_cookies=b"encrypted",
+                cookie_nonce=b"nonce",
+            )
+            session.add(account)
+            session.flush()
+            session.add_all(
+                [
+                    SparkTask(owner_user_id=self.friend.id, douyin_account_id=account.id, target_name="筛选命中", send_time="08:00", message_template="甲", enabled=True),
+                    SparkTask(owner_user_id=self.friend.id, douyin_account_id=account.id, target_name="其他好友", send_time="08:01", message_template="乙", enabled=False),
+                    InviteCode(code_hash=hashlib.sha256(b"expired-filter").hexdigest(), created_by_user_id=self.admin.id, expires_at=now - timedelta(minutes=1)),
+                ]
+            )
+        self.login()
+
+        response = self.client.get("/admin?task_q=%E7%AD%9B%E9%80%89&task_status=enabled&invite_status=expired")
+
+        self.assertIn("筛选命中", response.text)
+        self.assertNotIn("其他好友", response.text)
+        self.assertIn("已过期", response.text)
+        self.assertNotIn("setTimeout(function(){location.reload()", response.text)
+        self.assertIn("页面更新于", response.text)
+
+    def test_admin_can_edit_an_owned_task_and_return_to_filtered_page(self):
+        with session_scope(self.engine) as session:
+            account = DouyinAccount(
+                owner_user_id=self.friend.id,
+                display_name="编辑账号",
+                encrypted_cookies=b"encrypted",
+                cookie_nonce=b"nonce",
+            )
+            session.add(account)
+            session.flush()
+            task = SparkTask(owner_user_id=self.friend.id, douyin_account_id=account.id, target_name="旧好友", send_time="09:00", message_template="旧消息", enabled=True)
+            session.add(task)
+            session.flush()
+            task_id = task.id
+        self.login()
+        edit_page = self.client.get(f"/admin/tasks/{task_id}/edit?task_page=2&task_q=friend")
+        csrf = edit_page.text.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+        response = self.client.post(
+            f"/admin/tasks/{task_id}/edit?task_page=2&task_q=friend",
+            data={"csrf_token": csrf, "account_id": account.id, "target_name": "新好友", "target_sec_uid": "", "send_time": "10:30", "message_template": "新消息"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(303, response.status_code)
+        self.assertIn("task_page=2", response.headers["location"])
+        self.assertIn("notice=task_updated", response.headers["location"])
+        with Session(self.engine) as session:
+            updated = session.get(SparkTask, task_id)
+            self.assertEqual(("新好友", "10:30", "新消息"), (updated.target_name, updated.send_time, updated.message_template))
+
+    def test_admin_health_uses_worker_lease_account_state_and_repeated_failures(self):
+        now = datetime.now(timezone.utc)
+        with session_scope(self.engine) as session:
+            lock = session.get(WorkerLock, 1)
+            lock.worker_id = "worker-test"
+            lock.lease_until = now + timedelta(minutes=1)
+            account = DouyinAccount(owner_user_id=self.friend.id, display_name="失效账号", encrypted_cookies=b"encrypted", cookie_nonce=b"nonce", validation_state="invalid")
+            session.add(account)
+            session.flush()
+            task = SparkTask(owner_user_id=self.friend.id, douyin_account_id=account.id, target_name="告警好友", send_time="11:00", message_template="消息", enabled=True)
+            session.add(task)
+            session.flush()
+            for index in range(3):
+                session.add(TaskRun(task_id=task.id, scheduled_for=now - timedelta(minutes=index), status="failed", stage="sending", error_code="network_unavailable"))
+        self.login()
+
+        response = self.client.get("/admin")
+
+        self.assertIn("Worker 在线", response.text)
+        self.assertIn("1 个抖音账号需要重新登录", response.text)
+        self.assertIn("连续失败", response.text)
+
+    def test_admin_health_does_not_call_nonconsecutive_failures_continuous(self):
+        now = datetime.now(timezone.utc)
+        with session_scope(self.engine) as session:
+            account = DouyinAccount(owner_user_id=self.friend.id, display_name="健康账号", encrypted_cookies=b"encrypted", cookie_nonce=b"nonce", validation_state="valid")
+            session.add(account)
+            session.flush()
+            task = SparkTask(owner_user_id=self.friend.id, douyin_account_id=account.id, target_name="健康好友", send_time="11:30", message_template="消息", enabled=True)
+            session.add(task)
+            session.flush()
+            for index, status in enumerate(("failed", "success", "failed", "failed")):
+                session.add(TaskRun(task_id=task.id, scheduled_for=now - timedelta(minutes=index), status=status, stage="complete", error_code="network_unavailable" if status == "failed" else None))
+        self.login()
+
+        response = self.client.get("/admin")
+
+        self.assertIn("近期执行稳定", response.text)
+        self.assertNotIn("1 个任务连续失败", response.text)
+
+    def test_admin_retry_only_schedules_known_pre_send_failure_once(self):
+        now = datetime.now(timezone.utc)
+        with session_scope(self.engine) as session:
+            account = DouyinAccount(owner_user_id=self.friend.id, display_name="重试账号", encrypted_cookies=b"encrypted", cookie_nonce=b"nonce", validation_state="valid")
+            session.add(account)
+            session.flush()
+            task = SparkTask(owner_user_id=self.friend.id, douyin_account_id=account.id, target_name="重试好友", send_time="12:00", message_template="消息", enabled=True, next_run_at=now + timedelta(days=1))
+            session.add(task)
+            session.flush()
+            run = TaskRun(task_id=task.id, scheduled_for=now - timedelta(minutes=1), status="failed", stage="navigation", error_code="network_unavailable")
+            session.add(run)
+            session.flush()
+            run_id, task_id = run.id, task.id
+        self.login()
+        csrf = self.csrf_for()
+
+        first = self.client.post(f"/admin/runs/{run_id}/retry", data={"csrf_token": csrf}, follow_redirects=False)
+        with Session(self.engine) as session:
+            first_retry_at = session.get(SparkTask, task_id).next_run_at
+        second = self.client.post(f"/admin/runs/{run_id}/retry", data={"csrf_token": csrf}, follow_redirects=False)
+        with Session(self.engine) as session:
+            second_retry_at = session.get(SparkTask, task_id).next_run_at
+
+        self.assertIn("notice=retry_scheduled", first.headers["location"])
+        self.assertIn("notice=retry_already_scheduled", second.headers["location"])
+        self.assertEqual(first_retry_at, second_retry_at)
+
+    def test_admin_retry_rejects_timeout_with_unknown_delivery_state(self):
+        now = datetime.now(timezone.utc)
+        original_next = now + timedelta(days=1)
+        with session_scope(self.engine) as session:
+            account = DouyinAccount(owner_user_id=self.friend.id, display_name="超时账号", encrypted_cookies=b"encrypted", cookie_nonce=b"nonce", validation_state="valid")
+            session.add(account)
+            session.flush()
+            task = SparkTask(owner_user_id=self.friend.id, douyin_account_id=account.id, target_name="超时好友", send_time="12:30", message_template="消息", enabled=True, next_run_at=original_next)
+            session.add(task)
+            session.flush()
+            run = TaskRun(task_id=task.id, scheduled_for=now - timedelta(minutes=1), status="failed", stage="worker_timeout", error_code="execution_timeout")
+            session.add(run)
+            session.flush()
+            run_id, task_id = run.id, task.id
+        self.login()
+
+        response = self.client.post(f"/admin/runs/{run_id}/retry", data={"csrf_token": self.csrf_for()}, follow_redirects=False)
+
+        self.assertIn("notice=retry_not_allowed", response.headers["location"])
+        with Session(self.engine) as session:
+            persisted = session.get(SparkTask, task_id).next_run_at.replace(tzinfo=timezone.utc)
+            self.assertEqual(original_next.replace(microsecond=0), persisted.replace(microsecond=0))
 
 
 if __name__ == "__main__":

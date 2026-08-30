@@ -6,7 +6,7 @@ import signal
 import socket
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from spark_console.config import Settings
 from spark_console.crypto import CookieCipher
@@ -17,6 +17,7 @@ from spark_console.models import (
     SparkTask,
     SparkTaskTargetIdentity,
     TaskRun,
+    WorkerLock,
 )
 from spark_console.scheduler import claim_next_due_task, finish_run
 from spark_console.services.accounts import AccountService
@@ -26,6 +27,7 @@ from spark_console.services.audits import AuditService
 class Worker:
     STARTUP_GRACE = timedelta(minutes=5)
     RETRY_DELAYS = (timedelta(minutes=1), timedelta(minutes=5))
+    EXECUTION_TIMEOUT_SECONDS = 180
 
     def __init__(
         self,
@@ -34,6 +36,7 @@ class Worker:
         executor=None,
         clock_offset_seconds=0.0,
         started_at: datetime | None = None,
+        execution_timeout_seconds: float | None = None,
     ):
         self.settings = settings
         self.engine = engine
@@ -41,14 +44,55 @@ class Worker:
         self.worker_id = f"{socket.gethostname()}-{os.getpid()}"
         self.clock_offset_seconds = clock_offset_seconds
         self.started_at = started_at or datetime.now(timezone.utc)
+        self.execution_timeout_seconds = (
+            execution_timeout_seconds or self.EXECUTION_TIMEOUT_SECONDS
+        )
         self.cipher = CookieCipher(settings.cookie_key_file.read_bytes())
+        self._recover_interrupted_runs()
+
+    def _recover_interrupted_runs(self) -> None:
+        retry_at = self.started_at + self.RETRY_DELAYS[0]
+        with session_scope(self.engine) as db:
+            interrupted = db.scalars(
+                select(TaskRun).where(
+                    TaskRun.status == "running",
+                    TaskRun.finished_at.is_(None),
+                )
+            ).all()
+            for run in interrupted:
+                finish_run(
+                    run,
+                    "failed",
+                    "worker_restart",
+                    self.started_at,
+                    "worker_interrupted",
+                    "执行器重启中断了任务，已安排 1 分钟后重试",
+                )
+                task = db.get(SparkTask, run.task_id)
+                if task is not None and task.enabled:
+                    task.next_run_at = retry_at
 
     async def run_once(self, now: datetime | None = None):
         current_time = now or datetime.now(timezone.utc)
         with session_scope(self.engine) as db:
+            lock = db.get(WorkerLock, 1)
+            if lock is None:
+                lock = WorkerLock(id=1)
+                db.add(lock)
+            lock.worker_id = self.worker_id
+            lock.lease_until = current_time + timedelta(
+                seconds=max(30, self.settings.worker_poll_seconds * 3)
+            )
             run = claim_next_due_task(db, current_time, self.worker_id)
             if run is None:
                 return None
+            lock.lease_until = current_time + timedelta(
+                seconds=max(
+                    30,
+                    int(self.execution_timeout_seconds)
+                    + self.settings.worker_poll_seconds * 3,
+                )
+            )
             task = db.get(SparkTask, run.task_id)
             if abs(self.clock_offset_seconds) > self.settings.clock_offset_limit_seconds:
                 return finish_run(run, "failed", "clock_check", current_time, "system_time_unhealthy", "服务器时间未同步")
@@ -70,27 +114,70 @@ class Worker:
             target_identity = db.get(SparkTaskTargetIdentity, task.id)
             target_sec_uid = target_identity.sec_uid if target_identity else None
             cookies = account_service.decrypt_for_worker(task.douyin_account_id)
+            run_id = run.id
+            task_id = task.id
+            account_id = account.id
+            target_name = task.target_name
+            message_template = task.message_template
+
+        try:
+            timed_out = False
             try:
-                try:
-                    result = await self.executor.execute(
+                result = await asyncio.wait_for(
+                    self.executor.execute(
                         cookies,
-                        task.target_name,
-                        task.message_template,
+                        target_name,
+                        message_template,
                         credential_version=credential_version,
                         target_sec_uid=target_sec_uid,
+                    ),
+                    timeout=self.execution_timeout_seconds,
+                )
+            except TimeoutError:
+                timed_out = True
+                result = None
+            except Exception:
+                result = None
+        finally:
+            cookies[:] = b"\0" * len(cookies)
+            cookies.clear()
+
+        with session_scope(self.engine) as db:
+            run = db.get(TaskRun, run_id)
+            task = db.get(SparkTask, task_id)
+            if timed_out:
+                return finish_run(
+                    run,
+                    "failed",
+                    "worker_timeout",
+                    datetime.now(timezone.utc),
+                    "execution_timeout",
+                    "页面操作超过 3 分钟，已终止本次执行",
+                )
+            if result is None:
+                return finish_run(
+                    run,
+                    "failed",
+                    "worker_error",
+                    datetime.now(timezone.utc),
+                    "unexpected_error",
+                    "任务执行发生意外异常，Worker 已继续运行",
+                )
+            if result.success:
+                db.execute(
+                    update(DouyinAccount)
+                    .where(DouyinAccount.id == account_id)
+                    .values(
+                        validation_state="valid",
+                        last_verified_at=datetime.now(timezone.utc),
                     )
-                except Exception:
-                    return finish_run(
-                        run,
-                        "failed",
-                        "worker_error",
-                        datetime.now(timezone.utc),
-                        "unexpected_error",
-                        "任务执行发生意外异常，Worker 已继续运行",
-                    )
-            finally:
-                cookies[:] = b"\0" * len(cookies)
-                cookies.clear()
+                )
+            elif result.error_code == "cookie_invalid":
+                db.execute(
+                    update(DouyinAccount)
+                    .where(DouyinAccount.id == account_id)
+                    .values(validation_state="invalid")
+                )
             if not result.success and result.retryable:
                 retry = self._schedule_retry(
                     db, task, run, current_time, result.stage

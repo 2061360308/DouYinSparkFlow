@@ -17,7 +17,8 @@
     status.textContent = "正在读取该账号的聊天列表…";
     options.replaceChildren();
     try {
-      const response = await fetch(`/accounts/${encodeURIComponent(account.value)}/conversations`, {
+      const prefix = account.dataset.conversationPrefix || "/accounts";
+      const response = await fetch(`${prefix}/${encodeURIComponent(account.value)}/conversations`, {
         credentials: "same-origin",
         headers: { Accept: "application/json" },
       });
