@@ -1,0 +1,38 @@
+# DouYinSparkFlow Cloudflare Workers 版本配置
+# 文档：https://developers.cloudflare.com/workers/wrangler/configuration/
+
+name = "douyinsparkflow-worker"
+main = "src/worker.js"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ============================================================
+# 定时任务（Cron Triggers）
+# 默认每天 01:00 UTC = 北京时间 09:00
+# 如需修改请编辑下方 cron 表达式（注意 cron 使用 UTC 时间）
+# ============================================================
+[triggers]
+crons = ["0 1 * * *"]
+
+# ============================================================
+# Browser Rendering 绑定（必填）
+# 免费计划每天 10 分钟浏览器时长，付费计划每月 10 小时
+# 文档：https://developers.cloudflare.com/browser-rendering/
+# ============================================================
+[browser]
+binding = "BROWSER"
+
+# ============================================================
+# 非敏感变量（可直接修改）
+# 敏感信息（TASKS / COOKIES_* / RUN_TOKEN）请用 secrets：
+#   npx wrangler secret put TASKS
+#   npx wrangler secret put COOKIES_你的抖音号
+#   npx wrangler secret put RUN_TOKEN
+# ============================================================
+[vars]
+MESSAGE_TEMPLATE = "[盖瑞]今日火花[加一]\n—— [右边] 每日一言 [左边] ——\n[API]"
+HITOKOTO_TYPES = '["文学","影视","诗词","哲学"]'
+BROWSER_TIMEOUT = "60000"
+FRIEND_LIST_WAIT_TIME = "2000"
+TASK_RETRY_TIMES = "3"
+LOG_LEVEL = "INFO"

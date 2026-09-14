@@ -1,0 +1,19 @@
+{
+  "name": "douyinsparkflow-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DouYinSparkFlow Cloudflare Workers 版本 - 基于 Browser Rendering 的抖音续火工具",
+  "main": "src/worker.js",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {
+    "@cloudflare/puppeteer": "^1.4.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.131.2"
+  }
+}
