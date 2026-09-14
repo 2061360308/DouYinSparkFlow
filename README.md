@@ -61,6 +61,8 @@
 
 3. 源码部署 （更适合高级用户），操作说明见[源代码部署说明](docs/源代码部署说明.md)
 
+4. Cloudflare Workers 部署（无需服务器，Cron 定时执行），操作说明见 [cloudflare-worker/README.md](cloudflare-worker/README.md)
+
 ## 📢交流讨论
 
 已开放讨论区，有疑问或展示相关成果，发布话题需求的可以加入讨论
