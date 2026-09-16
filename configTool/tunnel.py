@@ -27,6 +27,7 @@ import subprocess
 import threading
 import time
 import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import paths
@@ -36,6 +37,14 @@ READY_TIMEOUT = 20.0
 READY_POLL = 0.25
 # 关停时留给 gost 退出的时间（秒）
 STOP_TIMEOUT = 5.0
+# 启动尝试次数。gost 对单个节点有「失败即摘除」的行为：一旦某次拨号失败，节点会被
+# 打上不可用标记（failTimeout 内不再尝试），同一个进程里怎么重试都只会一路报
+# none node available —— 必须换一个新进程才谈得上重试。
+START_ATTEMPTS = 3
+# 预热目标：轻量、国内可达，用来确认隧道真的能出网
+WARMUP_TARGET = "https://www.baidu.com"
+# 预热请求超时（秒）：这一步会实打实走一趟隧道，函数冷启动的等待都算在这里
+WARMUP_TIMEOUT = 40.0
 
 # 活着的隧道实例；进程退出时兜底 stop
 _LIVE_TUNNELS: set = set()
@@ -73,8 +82,12 @@ def build_forward_url(tunnel: str, user: str = "", password: str = "") -> str:
 
       - 地址里已经带了凭据（含 @）就原样用，不重复插；
       - 账号密码做 percent-encode，密码里出现 @ : / ? 也不会破坏 URL；
+      - **没写端口时按协议补默认端口（wss→443 / ws→80）**：gost 不会替 ws/wss 兜
+        默认端口，少个端口就是拨号失败，而失败会被"节点摘除"放大成一片
+        none node available —— 界面上只剩下 ERR_TUNNEL_CONNECTION_FAILED；
       - 没写 path 时补 ?path=/ws（必须与云函数里 gost 的监听参数一致）；
-      - 顺手补上 keepAlive/ttl：平台会按空闲超时掐断长连接，心跳能明显减少断连。
+      - 顺手补上 keepAlive/ttl：平台会按空闲超时掐断长连接，心跳能明显减少断连；
+      - 再补一个放宽的 handshakeTimeout：函数冷启动时首次握手可能要等几秒。
     """
     tunnel = (tunnel or "").strip()
     if not tunnel:
@@ -92,10 +105,25 @@ def build_forward_url(tunnel: str, user: str = "", password: str = "") -> str:
         rest = f"{cred}@{rest}"
 
     url = f"{scheme}://{rest}"
+
+    # 补默认端口：gost 自己不会兜 ws/wss 的端口，缺了就是"拨号失败"（见 docstring）
+    parts = urllib.parse.urlsplit(url)
+    if parts.port is None:
+        cred = ""
+        if parts.username:
+            cred = urllib.parse.quote(parts.username, safe="")
+            if parts.password:
+                cred += ":" + urllib.parse.quote(parts.password, safe="")
+            cred += "@"
+        netloc = "%s%s:%s" % (cred, parts.hostname or "", "80" if parts.scheme == "ws" else "443")
+        url = urllib.parse.urlunsplit((parts.scheme, netloc, parts.path, parts.query, ""))
+
     if "path=" not in url:
         url += ("&" if "?" in url else "?") + "path=/ws"
     if "keepAlive" not in url:
         url += "&keepAlive=true&ttl=15s"
+    if "handshakeTimeout" not in url:
+        url += "&handshakeTimeout=60s"
     return url
 
 
@@ -148,7 +176,16 @@ class GostTunnel:
 
     # -- 启停 ---------------------------------------------------------------
     def start(self) -> str:
-        """启动 gost 并等本地端口就绪，返回可交给浏览器 proxy 参数的地址。"""
+        """启动 gost、确认真的能出网，然后返回可交给浏览器 proxy 参数的地址。
+
+        为什么不是"起来就用"：函数冷启动时第一次握手可能很慢（实测同一地址首次
+        35 秒超时、紧接着第二次只要 4 秒），而 gost 对单个节点是"失败即摘除" ——
+        一旦某次拨号被判失败，同一个进程里之后所有请求都只会报 none node available，
+        浏览器拿到的是一条已经残废的隧道（ERR_TUNNEL_CONNECTION_FAILED）。
+
+        所以这里自己先打一枪（预热）：通了才交给浏览器；不通就换一个新进程重来，
+        最多 START_ATTEMPTS 次。这样"慢一点"总比"打开就失败"强。
+        """
         if not Path(self.gost_path).is_file():
             raise RuntimeError(
                 f"找不到 gost 可执行文件：{self.gost_path}\n"
@@ -156,6 +193,29 @@ class GostTunnel:
                 "解压出 gost.exe 放到程序目录（或在界面上填「gost 程序路径」）。"
             )
 
+        last_error = ""
+        for attempt in range(1, START_ATTEMPTS + 1):
+            self._spawn()
+            try:
+                self._wait_ready()
+                self._warmup()
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                if attempt < START_ATTEMPTS:
+                    self.log(f"隧道第 {attempt}/{START_ATTEMPTS} 次未通，换个新进程重试…")
+                self.stop()
+                time.sleep(1.0)
+                continue
+            self.log(f"隧道已就绪，本地代理：{self.proxy_url}")
+            return self.proxy_url
+
+        raise RuntimeError(
+            f"配套代理连不通（已试 {START_ATTEMPTS} 次）：{last_error}\n"
+            "常见原因：云函数冷启动过慢、隧道地址/账号密码不对、或云函数侧没起来。"
+        )
+
+    def _spawn(self) -> None:
+        """拉起一个 gost 进程并接上日志泵（只负责起进程，不做可用性判断）。"""
         self.port = free_port()
         args = [
             str(self.gost_path),
@@ -170,7 +230,9 @@ class GostTunnel:
         if os.name == "nt":
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-        self.log(f"启动隧道：gost -L http://127.0.0.1:{self.port} -F {mask_credentials(self.forward_url)}")
+        self.log(
+            f"启动隧道：gost -L http://127.0.0.1:{self.port} -F {mask_credentials(self.forward_url)}"
+        )
         self.proc = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,
@@ -189,14 +251,23 @@ class GostTunnel:
         )
         self._reader.start()
 
-        try:
-            self._wait_ready()
-        except Exception:
-            self.stop()
-            raise
+    def _warmup(self, target: str = WARMUP_TARGET, timeout: float = WARMUP_TIMEOUT) -> None:
+        """通过刚建好的本地代理真发一次请求，确认这条隧道端到端能通。
 
-        self.log(f"隧道已就绪，本地代理：{self.proxy_url}")
-        return self.proxy_url
+        除了挡冷启动，它还能顺手把"凭据错了"这类问题在开浏览器之前就暴露出来
+        （那种情况会一路失败到重试上限，报错里带上具体原因）。
+        """
+        handler = urllib.request.ProxyHandler(
+            {"http": self.proxy_url, "https": self.proxy_url}
+        )
+        opener = urllib.request.build_opener(handler)
+        try:
+            with opener.open(target, timeout=timeout) as resp:
+                resp.read(64)
+        except Exception as exc:
+            raise RuntimeError(
+                f"出口连通性检查未通过（{target}）：{type(exc).__name__}: {exc}"
+            ) from exc
 
     def stop(self) -> None:
         """关停 gost。幂等，重复调用无副作用。"""

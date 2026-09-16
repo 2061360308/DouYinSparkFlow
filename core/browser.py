@@ -36,9 +36,9 @@ def get_browser(fingerprint=None):
         # playwright = sync_playwright().start() 
         # browser = playwright.chromium.launch(headless=headless)
         if proxyAddress:
-            browser = launch(proxy=proxyAddress, headless=headless, args=BASE_CHROME_ARGS)
+            browser = launch(proxy=proxyAddress, headless=headless, humanize=True, args=BASE_CHROME_ARGS)
         else:  
-            browser = launch(headless=headless, args=BASE_CHROME_ARGS)
+            browser = launch(headless=headless, humanize=True, args=BASE_CHROME_ARGS)
         return browser
     except Exception as e:
         # 捕获浏览器启动错误

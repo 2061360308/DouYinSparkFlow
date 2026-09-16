@@ -307,8 +307,27 @@ class Handler(BaseHTTPRequestHandler):
         log(f"{self.address_string()} {fmt % args}")
 
 
+class _QuietServer(ThreadingHTTPServer):
+    """吞掉「客户端连接被重置」这类噪音。
+
+    FC 的健康检查探针每隔几秒连一次、拿到 200 就断开，偶尔以 RST 收场；
+    socketserver 默认会为这种断开打一整段 Traceback，把真正的业务日志淹掉 ——
+    排查问题时很容易被误当成故障。
+    """
+
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(
+            exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
+        ):
+            return
+        super().handle_error(request, client_address)
+
+
 def serve():
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    server = _QuietServer(("0.0.0.0", PORT), Handler)
     log(f"HTTP Server 已启动，监听 0.0.0.0:{PORT}，等待定时触发器事件")
     log("提示：函数配置里的「监听端口」必须与这个端口一致")
     log("提示：配置可放在定时触发器「触发消息」的 payload 里（.env 全文）")

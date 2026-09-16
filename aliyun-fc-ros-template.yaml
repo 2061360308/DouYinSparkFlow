@@ -279,6 +279,13 @@ Resources:
         Ref: TaskInstanceConcurrency
       # 必须为 true: 容器里的 Chromium 要访问 douyin.com
       InternetAccess: true
+      # 关键: 镜像默认入口 docker/entrypoint.sh 按 LAUNCH_MODE 分派 —— 不设它就默认走
+      # cron 模式, 而 cron 模式要求容器里有 /app/.env; FC 上的配置来自定时触发器的
+      # 触发消息, 容器里本来就没有这个文件, 于是容器启动即退出:
+      #   CAExited ... Logs: Config file not found: /app/.env
+      # 设成 fc 才会 exec 到 entrypoint-fc.sh(起 HTTP Server 等触发器事件)。
+      EnvironmentVariables:
+        LAUNCH_MODE: fc
       Role:
         Fn::GetAtt:
           - Role
@@ -288,14 +295,11 @@ Resources:
           Ref: TaskImageUrl
         Port:
           Ref: TaskContainerPort
-        # fc_server.py 的 do_GET 一律回 200, 可以直接用根路径做健康检查
-        HealthCheckConfig:
-          HttpGetUrl: /
-          InitialDelaySeconds: 5
-          PeriodSeconds: 5
-          TimeoutSeconds: 3
-          SuccessThreshold: 1
-          FailureThreshold: 3
+        # 刻意不配 HealthCheckConfig。
+        # 健康检查探针会每隔几秒打一次请求, 实例因此一直处于"活跃"状态, FC 永远不会
+        # 回收它 —— 任务早就跑完了, 实例却 24 小时常驻, 规格 × 时长一路计费。
+        # 不配时 FC 用默认的端口探测判断容器是否就绪(容器照常起停), 代价只是低频的
+        # 定时触发偶尔要等一次冷启动(几秒), 这对"每天跑一次"的任务完全可以接受。
       Tags:
         - Key: Service
           Value:
