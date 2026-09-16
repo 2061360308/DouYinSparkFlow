@@ -10,7 +10,7 @@ on:
       - Dockerfile
       - .dockerignore
       # 构建期会 COPY 进镜像的东西 —— 镜像里是 `COPY . /app` 全量打进，改了就必须重建，
-      # 否则推上去镜像还是旧的。这里按「运行时真正会用到的」枚举:
+      # 否则推上去镜像还是旧的。这份清单要与 detect-changes 里的 PATTERNS 保持一致:
       - main.py
       - fc_server.py
       - core/**
@@ -28,40 +28,131 @@ permissions:
   packages: write
 
 jobs:
-  publish:
+  # ── 0. 变更判定: 决定构建 job 要不要跑 ────────────────────────────────────
+  # 为什么不干脆让 on.push.paths 一家说了算: workflow_dispatch 手动触发时 paths
+  # 不生效，需要一个 forced 开关兜底；把「本次要不要重建」在这里算一次，构建 job
+  # 只读结果，不各自重复判断。
+  detect-changes:
+    name: Detect changes
     runs-on: ubuntu-latest
+    outputs:
+      forced: ${{ steps.classify.outputs.forced }}
+      cloakbrowser: ${{ steps.classify.outputs.cloakbrowser }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 要按 before..sha 做 diff，必须拿到 before 那个提交
 
+      - name: 判定镜像是否需要重建
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # 手动触发 = 强制重建（dispatch 不受 paths 过滤影响，语义上就是「我现在就要它跑」）
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "forced=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "forced=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            CHANGED="$(git diff --name-only "$BEFORE_SHA" "$HEAD_SHA")"
+          else
+            # before 拿不到（首次推送 / 新分支 / force push）：保守起见按「全都要」算
+            CHANGED="$(git ls-files)"
+          fi
+          echo "本次改动文件："
+          echo "$CHANGED"
+
+          # 改到这些就得重建镜像（与 on.push.paths 那份清单保持一致）
+          PATTERNS='^(Dockerfile|\.dockerignore|main\.py|fc_server\.py|VERSION|requirements\.txt|docker-compose\.yml|\.github/workflows/docker-publish\.yml)$|^(core|utils|docker)/'
+
+          if printf '%s\n' "$CHANGED" | grep -Eq "$PATTERNS"; then
+            echo "cloakbrowser=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "cloakbrowser=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── 1. 只构建一次，同时推送到 GHCR 与阿里云 ACR ──────────────────────────
+  # 一次 buildx build 带多个 `--output type=image` —— buildx 会构建一遍，然后由
+  # 每个 exporter 各自 push 到目标仓库（多个 tag / 多个 registry 都只是多次导出，
+  # 不是重复构建）。Chromium(~200MB) + Windows 字体(~230MB) + pip 那几层只跑一遍。
+  publish:
+    name: Build once → GHCR + ACR
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.forced == 'true' || needs.detect-changes.outputs.cloakbrowser == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/douyinsparkflow
+      ACR_REGISTRY: crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com
+      ACR_IMAGE: crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com/oilu/douyinsparkflow
+      VERSION_FILE: VERSION
+      CONTEXT_DIR: .
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
+      - name: 初始化 buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: 登录 GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata
+      - name: 登录阿里云 ACR
+        run: echo "${{ secrets.ACR_PASSWORD }}" | docker login --username="${{ secrets.ACR_USERNAME }}" --password-stdin "$ACR_REGISTRY"
+
+      - name: 计算 GHCR 镜像 tag
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/douyinsparkflow
+          images: ${{ env.GHCR_IMAGE }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
             type=sha,prefix=sha-
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: 构建一次并推送到 GHCR 与 ACR
+        env:
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          IMAGE_VERSION="$(cat "$VERSION_FILE")"
+          cd "$CONTEXT_DIR"
+
+          ARGS=()
+
+          # GHCR: 沿用 metadata-action 算出来的 tag（latest / 分支名 / sha-xxxx）
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            ARGS+=(--output "type=image,name=${tag},push=true,oci-mediatypes=false")
+          done <<< "$GHCR_TAGS"
+
+          # ACR: 镜像版本号(取自 VERSION 文件) + latest
+          ARGS+=(--output "type=image,name=${ACR_IMAGE}:${IMAGE_VERSION},push=true,oci-mediatypes=false")
+          ARGS+=(--output "type=image,name=${ACR_IMAGE}:latest,push=true,oci-mediatypes=false")
+
+          echo "本次推送目标："
+          printf '  %s\n' "${ARGS[@]}"
+
+          # --provenance=false --sbom=false: 禁止 buildx 默认附加 SLSA attestation
+          #   (会生成 unknown/unknown 平台的 OCI index, 0.1.0/latest 曾因此异常)
+          # --output type=image,push=true,oci-mediatypes=false: 强制导出 docker
+          #   schema2 manifest(而非 buildx 默认的 OCI), ACR 个人版控制台只认
+          #   schema2, 否则层/大小显示空白。GHCR 同样吃 schema2，不受影响。
+          docker buildx build --provenance=false --sbom=false \
+            -f Dockerfile \
+            --build-arg IMAGE_VERSION="$IMAGE_VERSION" \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            "${ARGS[@]}" \
+            .
