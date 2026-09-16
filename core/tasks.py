@@ -2,48 +2,18 @@ import traceback
 from utils.logger import setup_logger
 from utils.config import get_config, get_userData
 from utils import norm
-from core.msg_builder import build_message, build_message_with_openai
+from core.msg_builder import build_message
 from core.browser import get_browser
-from playwright.sync_api import Response
 import time
 
 config = get_config()
 userData = get_userData()
 logger = setup_logger(level=config.get("logLevel", "Info"))
-userIDDict = {}
 
 CONVERSATION_ITEM_SELECTOR = ".conversationConversationItemwrapper"
 CONVERSATION_TITLE_SELECTOR = ".conversationConversationItemtitle"
 CONVERSATION_LIST_SELECTOR = ".conversationConversationListwrapper"
 CHAT_EDITOR_SELECTOR = ".messageEditorimChatEditorContainer"
-
-
-def handle_response(response: Response):
-    """
-    只监听你要的那个接口响应
-    """
-    global userIDDict
-    # 精准匹配目标接口 URL
-    if "aweme/v1/web/im/user/info" in response.url:
-        # print(f"URL: {response.url}")
-        # print(f"状态码: {response.status}")
-        try:
-            # 获取接口返回的 JSON 数据
-            json_data = response.json()
-            # print("\n📦 响应 JSON 数据：")
-            # print(json.dumps(json_data, indent=4, ensure_ascii=False))
-            for item in json_data.get("data", []):
-                short_id = item.get("short_id")  # short_id
-                unique_id = item.get("unique_id")  # unique_id
-                sec_uid = item.get("sec_uid", "")  # sec_uid 可能不存在，提供默认值为空字符串
-                nickname = norm(item.get("nickname"))  # 昵称
-                remark_name = norm(item.get("remark_name", nickname))  #  备注名，如果没有则使用昵称
-                userIDDict[remark_name] = [short_id, unique_id, sec_uid, nickname, remark_name]
-        except Exception as e:
-            tb = traceback.extract_tb(e.__traceback__)
-            last = tb[-1]
-            print(f"解析响应失败: {e}")
-            print(f"文件: {last.filename}, 行号: {last.lineno}, 函数: {last.name}")
 
 
 def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
@@ -68,21 +38,16 @@ def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
                 raise
 
 def checkTargetName(targetName, targets):
-    """检查targetName是否为目标
+    """检查 targetName 是否在目标列表里。
+
+    命中就返回归一化后的名字，没命中返回 None。
+    返回名字而不是 True/False，是因为调用方要拿它记账：yield 出去当好友名、
+    从 remaining_targets 里扣掉 —— 返回布尔值这两件事都做不成。
+
+    前提：targets 必须是归一化过的（见 runTasks），两边都归过才谈得上相等。
     """
-    
-    targetSymbol = None
-    
-    targetName = norm(targetName)
-    
-    if targetName in userIDDict:
-        matched = next((v for v in userIDDict[targetName] if v and v in targets), None)
-        if matched is not None:
-            targetSymbol = matched
-    else:
-        if targetName in targets:
-            targetSymbol = targetName
-    return targetSymbol
+    name = norm(targetName)
+    return name if name in targets else None
 
 
 def scroll_and_select_user(page, username, targets):
@@ -227,8 +192,6 @@ def do_user_task(browser, username, cookies, targets):
 
     page = context.new_page()
 
-    page.on("response", handle_response)  # 监听响应，收集好友完整信息用于匹配
-
     # 注入 Cookie
     context.add_cookies(cookies)
 
@@ -245,8 +208,9 @@ def do_user_task(browser, username, cookies, targets):
 
     logger.debug(f"账号 {username} 开始发送消息")
     # 滚动并选择用户
-    for username in scroll_and_select_user(page, username, targets):
-        logger.debug(f"账号 {username} 已选中好友 {username} 发送消息")
+    # 生成器迭代出的是「选中的好友名」，不要用来覆盖 username（账号名），否则日志会串
+    for friend in scroll_and_select_user(page, username, targets):
+        logger.debug(f"账号 {username} 已选中好友 {friend} 发送消息")
         # 等待聊天输入框元素加载完成，使用更稳定的属性选择器
         chat_input_selector = CHAT_EDITOR_SELECTOR
         page.wait_for_selector(chat_input_selector, timeout=config["browserTimeout"])
@@ -260,8 +224,8 @@ def do_user_task(browser, username, cookies, targets):
             if line != message.split("\\n")[-1]:
                 chat_input.press("Shift+Enter")  # 模拟 Shift+Enter 插入换行
 
-        logger.debug(f"账号 {username} 准备发送消息给好友 {username}：\n\t{message}")
-        logger.debug(f"账号 {username} 给好友 {username} 发送消息完成")
+        logger.debug(f"账号 {username} 准备发送消息给好友 {friend}：\n\t{message}")
+        logger.debug(f"账号 {username} 给好友 {friend} 发送消息完成")
         # 模拟按下回车键发送消息
         chat_input.press("Enter")
         time.sleep(2)  # 发送完等待一会儿
@@ -270,29 +234,32 @@ def do_user_task(browser, username, cookies, targets):
 
 
 def runTasks():
-    playwright, browser = get_browser()
-    try:
-        # 检查是否启用多任务和任务数量
-        # 创建信号量以限制并发任务数量
-        logger.info("开始执行任务")
-        logger.debug(f"当前配置如下：")
-        logger.debug(f"消息模板: {config.get('messageTemplate', '未找到消息模板')}")
-        logger.debug(f"一言类型: {config['hitokotoTypes']}")
-        for user in userData:
-            logger.debug(
-                f"用户: {user.get('username', '未知用户')}, 目标好友: {user['targets']}"
-            )
+    # 检查是否启用多任务和任务数量
+    # 创建信号量以限制并发任务数量
+    logger.info("开始执行任务")
+    logger.debug(f"当前配置如下：")
+    logger.debug(f"消息模板: {config.get('messageTemplate', '未找到消息模板')}")
+    logger.debug(f"一言类型: {config['hitokotoTypes']}")
+    for user in userData:
+        logger.debug(
+            f"用户: {user.get('username', '未知用户')}, 目标好友: {user['targets']}"
+        )
 
-        for user in userData:
-            cookies = user["cookies"]
-            targets = user["targets"]
-            username = user.get("username", "未知用户")
-            logger.info(f"开始处理账号 {username}")
-            # 创建任务
+    for user in userData:
+        cookies = user["cookies"]
+        # 目标好友也要归一化：DOM 里抓到的会话名在 checkTargetName 里会归一，
+        # 两边都归过才谈得上相等 —— 否则配置里的「Ｌｕ瞳」永远匹配不上页面上的「Lu瞳」。
+        # 同时丢掉归一后变空的项：空串留在剩余名单里永远扣不掉，会白滚到底。
+        targets = [t for t in map(norm, user["targets"]) if t]
+        username = user.get("username", "未知用户")
+        fingerprint = user.get("fingerprint", None)
+        logger.info(f"开始处理账号 {username}")
+        # 创建任务
+        try:
+            browser = get_browser(fingerprint)
             do_user_task(browser, username, cookies, targets)
             logger.info(f"账号 {username} 任务完成")
-    finally:
-        # 关闭浏览器实例
-        browser.close()
-
-        playwright.stop()
+        finally:
+            # 关闭浏览器实例
+            browser.close()
+    

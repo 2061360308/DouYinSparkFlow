@@ -6,10 +6,21 @@ on:
     branches:
       - main
     paths:
+      # 构建上下文本身(Dockerfile 内容 / 忽略规则)
       - Dockerfile
-      - docker-compose.yml
+      - .dockerignore
+      # 构建期会 COPY 进镜像的东西 —— 镜像里是 `COPY . /app` 全量打进，改了就必须重建，
+      # 否则推上去镜像还是旧的。这里按「运行时真正会用到的」枚举:
+      - main.py
+      - fc_server.py
+      - core/**
+      - utils/**
+      - VERSION
       - requirements.txt
+      # 容器入口与编排
       - docker/**
+      - docker-compose.yml
+      # 本工作流自身
       - .github/workflows/docker-publish.yml
 
 permissions:
