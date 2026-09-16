@@ -1,0 +1,144 @@
+name: Build configTool (Windows)
+
+# 把 configTool 打包成 Windows 可执行文件并发布到 Release。
+#
+# 发布包解开后的结构（exe 与两个"本地分发物"同级 —— configTool/paths.py 正是按
+# 「程序目录 / resource_dir」去找它们的，所以用户解压即用）：
+#
+#   DouyinSparkFlow-configTool/
+#     DouyinSparkFlow-configTool.exe     ← PyInstaller onedir 产物
+#     _internal/...                      ← PyInstaller 运行时
+#     cloakbrowser-windows-x64/          ← 自带隐身 Chromium（构建时从上游 release 拉）
+#     gost/gost.exe                      ← 配套代理客户端（同理）
+#
+# 这两个目录都超过 GitHub 单文件 / 仓库合理体积，所以不入库，构建时现拉；
+# 版本号在下面 env 里，升级时改一处即可。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '发布用的 tag（留空则用 configtool-v<运行序号>）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+env:
+  # 与 Dockerfile 里的 CLOAK_CHROMIUM_VERSION 保持一致，别各改各的
+  CLOAK_CHROMIUM_VERSION: 146.0.7680.177.5
+  # 与 configTool/gost/gost.exe 的版本保持一致（gost -V 可查）
+  GOST_VERSION: 2.12.0
+  # PyInstaller 产物名：exe 与目录同名
+  APP_NAME: DouyinSparkFlow-configTool
+  # cloakbrowser 若不在公开 PyPI，可在仓库 Secrets 里配 PIP_INDEX_URL / PIP_EXTRA_INDEX_URL
+  # （pip 会自己读这两个环境变量，这里不用显式映射）
+
+jobs:
+  build-windows:
+    name: Build & Release (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装打包依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir pyinstaller python-dotenv cloakbrowser==0.5.10
+
+      - name: 下载自带隐身浏览器（Windows x64）
+        shell: pwsh
+        run: |
+          $url = "https://github.com/CloakHQ/CloakBrowser/releases/download/chromium-v$env:CLOAK_CHROMIUM_VERSION/cloakbrowser-windows-x64.zip"
+          Write-Host "下载 $url"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\cb.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\cb.zip" -DestinationPath "$env:RUNNER_TEMP\cb" -Force
+          # 压缩包内可能多套一层目录，直接按 chrome.exe 反查真实目录，别写死层级
+          $exe = Get-ChildItem -Path "$env:RUNNER_TEMP\cb" -Recurse -Filter chrome.exe |
+                 Select-Object -First 1
+          if (-not $exe) { throw "压缩包里没找到 chrome.exe，请检查上游 asset 布局" }
+          $dst = "configTool\cloakbrowser-windows-x64"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Copy-Item -Path (Join-Path $exe.DirectoryName '*') -Destination $dst -Recurse -Force
+          Write-Host "浏览器就位：$dst（chrome.exe $([math]::Round((Get-Item $exe.FullName).Length/1MB,1)) MB）"
+
+      - name: 下载 gost（配套代理客户端）
+        shell: pwsh
+        run: |
+          $url = "https://github.com/go-gost/gost/releases/download/v$env:GOST_VERSION/gost_$($env:GOST_VERSION)_windows_amd64.zip"
+          Write-Host "下载 $url"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\gost.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\gost.zip" -DestinationPath "$env:RUNNER_TEMP\gost" -Force
+          $exe = Get-ChildItem -Path "$env:RUNNER_TEMP\gost" -Recurse -Filter gost.exe |
+                 Select-Object -First 1
+          if (-not $exe) { throw "压缩包里没找到 gost.exe" }
+          $dst = "configTool\gost"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Copy-Item -Path $exe.FullName -Destination $dst -Force
+          Write-Host "gost.exe 就位：$dst"
+
+      - name: PyInstaller 打包
+        shell: pwsh
+        run: |
+          # --collect-all playwright：cloakbrowser 底层用 playwright.sync_api，而它的
+          #   driver 目录（含 node 运行时）必须一起带上，否则打包后启动浏览器会失败。
+          pyinstaller --noconfirm --clean --onedir --windowed `
+            --name "$env:APP_NAME" `
+            --paths configTool `
+            --hidden-import cloakbrowser `
+            --collect-all cloakbrowser `
+            --collect-all playwright `
+            --collect-all dotenv `
+            "configTool\main.py"
+
+      - name: 把两个分发物放到 exe 同级
+        shell: pwsh
+        run: |
+          $dist = "dist\$env:APP_NAME"
+          if (-not (Test-Path $dist)) { throw "没找到 PyInstaller 产物 $dist" }
+          Copy-Item -Path "configTool\cloakbrowser-windows-x64" -Destination $dist -Recurse -Force
+          Copy-Item -Path "configTool\gost" -Destination $dist -Recurse -Force
+          Write-Host "发布目录顶层内容："
+          Get-ChildItem $dist | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: 压缩成发布包
+        shell: pwsh
+        run: |
+          $zip = "$env:APP_NAME-win-x64.zip"
+          Compress-Archive -Path "dist\$env:APP_NAME" -DestinationPath $zip -Force
+          $size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+          Write-Host "发布包：$zip（$size MB）"
+
+      - name: 计算发布 tag
+        id: meta
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'push') {
+            $tag = '${{ github.ref_name }}'
+          } elseif ('${{ github.event.inputs.tag }}') {
+            $tag = '${{ github.event.inputs.tag }}'
+          } else {
+            $tag = "configtool-v${{ github.run_number }}"
+          }
+          Write-Host "发布 tag：$tag"
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: 上传到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          files: DouyinSparkFlow-configTool-win-x64.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true
