@@ -1,14 +1,73 @@
+# 两个容器，与云函数部署（aliyun-fc-ros-template.yaml）里的两个函数一一对应：
+#
+#   ① douyin-spark-flow  任务执行器 —— 容器内 cron 到点跑一轮续火花   （对应 DYSparkTask）
+#   ② gost               配套代理   —— 本地 configTool 抓 Cookie 时借道（对应 DYSparkGost）
+#
+# 为什么 Docker 场景更省事：两个容器跑在同一台机器上，出网 IP **完全相同**，
+# 「抓 Cookie 的出口」和「跑任务的出口」天然一致，不需要像云函数那样再搭一层隧道服务。
+#
+# 用法：
+#   docker compose up -d --build      # 构建并启动两个容器
+#   docker compose logs -f            # 看日志
+#   docker compose down               # 停止
+
 services:
+  # ===========================================================================
+  # ① 任务执行器：容器内 cron 定时跑任务
+  # ===========================================================================
   douyin-spark-flow:
     build:
       context: .
       dockerfile: Dockerfile
+    # 本地构建出的镜像打个标签，方便以后单独引用/推送
+    image: douyin-spark-flow:local
     container_name: douyin-spark-flow
     restart: unless-stopped
+    # Chromium 需要较大的 /dev/shm，别删
     shm_size: 1gb
     environment:
+      # 镜像入口 docker/entrypoint.sh 按它分派：cron = 容器内定时跑（云函数上要写 fc）
+      # 不写也默认 cron，这里显式声明，免得和云函数那份配置看串
+      LAUNCH_MODE: cron
       GITHUB_ACTIONS: "true"
       PYTHONUNBUFFERED: "1"
     volumes:
+      # 配置（含 TASKS / COOKIES_* / CRON_HOUR / TZ），只读挂载
       - ${CONFIG_ENV_FILE:-./config/.env}:/app/.env:ro
       - ${LOGS_DIR:-./logs}:/app/logs
+
+  # ===========================================================================
+  # ② 配套代理：给本地 configTool 提供与任务容器一致的出口
+  # ===========================================================================
+  gost:
+    image: crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com/oilu/gost:latest
+    # 国内拉 ACR 需要先登录：docker login crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com
+    # 不想用 ACR 也可以换成官方镜像 gogost/gost:latest（但要能访问 Docker Hub）
+    container_name: douyin-spark-gost
+    restart: unless-stopped
+    command:
+      - "-L"
+      # 用 http+ws 而不是裸 http：configTool 那边要求隧道地址以 ws:// 开头，
+      # 这样本地填的写法与云函数场景完全一致，换个部署方式不用改配置。
+      #   GOST_USER / GOST_PASSWORD：在项目根目录的 .env 里设，或直接改下面的默认值
+      - "http+ws://${GOST_USER:-gost}:${GOST_PASSWORD:-CHANGE-ME-PLEASE}@:9000?path=/ws"
+    ports:
+      # 暴露给本地 configTool 连；宿主机 9000 被占就改左边的端口
+      - "${GOST_PORT:-9000}:9000"
+
+# ---------------------------------------------------------------------------
+# 本地 configTool 怎么填（「工具配置」页签）：
+#
+#   隧道地址   ws://<服务器公网IP>:9000?path=/ws      ← 端口别省，工具不会给 ws 兜默认端口
+#   隧道账号   gost                                   ← 与上面的 GOST_USER 一致
+#   隧道密码   <你设的 GOST_PASSWORD>
+#
+# 安全提醒：
+#   · 明文 ws 暴露在公网，务必把 GOST_PASSWORD 改成长随机串；
+#     默认值 CHANGE-ME-PLEASE 只是占位，不改等于把代理敞开给人用。
+#   · 建议同时在云服务器安全组里限制 9000 端口的来源 IP（只放你本机的出口 IP）。
+#   · 想要加密传输，可以给 gost 换成 http+wss:// 并挂载证书，本地地址相应改成 wss://。
+#
+# 如果不想在服务器上构建镜像，把 ① 的 build 段去掉、image 换成 ACR 地址即可：
+#   image: crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com/oilu/douyinsparkflow:latest
+# ---------------------------------------------------------------------------

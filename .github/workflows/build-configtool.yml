@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '发布用的 tag（留空则用 configtool-v<运行序号>）'
+        description: '发布用的 tag（留空则用 configtool-v<仓库 VERSION>）'
         required: false
         default: ''
 
@@ -129,7 +129,10 @@ jobs:
           } elseif ('${{ github.event.inputs.tag }}') {
             $tag = '${{ github.event.inputs.tag }}'
           } else {
-            $tag = "configtool-v${{ github.run_number }}"
+            # 手动触发时以仓库根目录的 VERSION 为准，与主程序版本保持一致
+            # （不再用 run_number，免得同一版代码重复发布出一堆 tag）
+            $ver = (Get-Content VERSION -Raw).Trim()
+            $tag = "configtool-v$ver"
           }
           Write-Host "发布 tag：$tag"
           "tag=$tag" >> $env:GITHUB_OUTPUT
