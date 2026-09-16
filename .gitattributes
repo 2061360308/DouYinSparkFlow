@@ -1,0 +1,13 @@
+# 行尾策略
+#
+# 容器入口脚本必须在 Linux 里执行，CRLF 会让内核找不到解释器：
+#     /bin/bash^M: bad interpreter: No such file or directory
+# 本机 core.autocrlf=true（Windows），没有这层约束时 checkout 出来的 .sh 就是 CRLF，
+# 本地 `docker build` 会把 CR 一起 COPY 进镜像、容器直接起不来（CI 上是 LF，所以只
+# 在本地构建时才踩得到，很难发现）。
+*.sh text eol=lf
+
+# Dockerfile / compose 一并按 LF 处理，避免本地构建时把 CR 带进构建逻辑。
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+*.dockerignore text eol=lf
