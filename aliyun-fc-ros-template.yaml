@@ -1,0 +1,429 @@
+# =============================================================================
+# DouyinSparkFlow —— 阿里云 FC3(函数计算 3.0) ROS 部署模板
+#
+# 本模板只做两件事:
+#
+#   ① DYSparkTask   镜像 douyinsparkflow:latest  + 定时触发器(timer)
+#      容器入口是 docker/entrypoint-fc.sh → python main.py fc, 常驻一个 HTTP Server
+#      监听 9000。定时触发器打进来的是 /invoke, 触发消息里的 payload 就是 .env 全文
+#      (FC 函数环境变量总上限 4KB, 装不下 COOKIES_*, 所以配置只能走触发消息,
+#       解析逻辑见 fc_server.py 顶部说明)。
+#
+#   ② DYSparkGost   镜像 gost:latest            + HTTP 触发器(http)
+#      容器里只跑 gost, 以 WebSocket 隧道形态提供代理出口。本地 configTool 抓 Cookie
+#      时经隧道借这个函数所在地域的出口 IP, 从而与 ① 跑任务时的出口落在同一地域。
+#
+#      ⚠ 为什么必须有 HTTP 触发器 + WebSocket:
+#        FC 的 HTTP 触发器不支持 CONNECT 方法, 浏览器无法直接把这个域名当 HTTP 代理;
+#        而 WebSocket 只对 Custom Container 开放, 且触发器方法必须勾上 GET。
+#        所以链路是: 浏览器 → 本地 gost(HTTP 代理, 处理 CONNECT) → wss 隧道
+#        → FC 网关 → 容器内 gost(:9000) → 目标站。
+# =============================================================================
+ROSTemplateFormatVersion: '2015-09-01'
+Description:
+  zh-cn: >-
+    DouyinSparkFlow 云函数(FC3)部署: RAM 服务角色 + 两个自定义容器函数。① DYSparkTask
+    (douyinsparkflow 镜像)由定时触发器驱动, 触发消息携带 .env 全文; ② DYSparkGost
+    (gost 镜像)以 WebSocket 隧道提供同地域代理出口, 由 HTTP 触发器暴露。默认地域 cn-hangzhou。
+  en: >-
+    DouyinSparkFlow FC3 stack: one RAM role + two custom-container functions.
+    DYSparkTask runs on a timer trigger (payload carries the full .env); DYSparkGost
+    exposes a WebSocket tunnel via an HTTP trigger so the local configTool can egress
+    from the same region. Default region: cn-hangzhou.
+
+Parameters:
+  # ===========================================================================
+  # 全局
+  # ===========================================================================
+  NamePrefix:
+    Type: String
+    Default: DouyinSpark
+    Label:
+      zh-cn: 资源名称前缀
+      en: Resource name prefix
+    Description:
+      zh-cn: 角色名/函数名需在账号内全局唯一, 重复请改。
+      en: Role/function names must be account-unique.
+
+  # ===========================================================================
+  # ① 定时任务函数 (douyinsparkflow)
+  # ===========================================================================
+  TaskFunctionName:
+    Type: String
+    Default: DYSparkTask
+    Label:
+      zh-cn: 任务函数名称
+      en: Task function name
+  TaskImageUrl:
+    Type: String
+    Default: crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com/oilu/douyinsparkflow:latest
+    Label:
+      zh-cn: 任务函数镜像地址
+      en: Task function image URL
+    Description:
+      zh-cn: 需与部署地域一致。
+      en: Must be in the same region as the stack.
+  TaskCpu:
+    Type: Number
+    Default: 1
+    MinValue: 0.05
+    MaxValue: 16
+    Label:
+      zh-cn: 任务函数 CPU (vCPU)
+      en: Task CPU (vCPU)
+  TaskMemorySize:
+    Type: Number
+    Default: 1536
+    MinValue: 128
+    Label:
+      zh-cn: 任务函数内存 (MB)
+      en: Task memory (MB)
+  TaskDiskSize:
+    Type: Number
+    Default: 10240
+    AllowedValues:
+      - 512
+      - 10240
+    Label:
+      zh-cn: 任务函数临时磁盘 (MB)
+      en: Task temporary disk (MB)
+  TaskTimeout:
+    Type: Number
+    Default: 480
+    MinValue: 1
+    MaxValue: 86400
+    Label:
+      zh-cn: 任务函数最大执行时间 (秒)
+      en: Task function timeout (s)
+  TaskContainerPort:
+    Type: Number
+    Default: 9000
+    MinValue: 1
+    MaxValue: 65535
+    Label:
+      zh-cn: 任务函数容器监听端口
+      en: Task container port
+    Description:
+      zh-cn: 需与 main.py fc 的 FC_SERVER_PORT 一致。
+      en: Must match FC_SERVER_PORT in "python main.py fc".
+  TaskInstanceConcurrency:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 200
+    Label:
+      zh-cn: 任务函数单实例并发度
+      en: Task instance concurrency
+    Description:
+      zh-cn: 固定 1, 容器内一轮任务串行执行。
+      en: Keep at 1.
+
+  # ===========================================================================
+  # ① 的定时触发器
+  # ===========================================================================
+  TimerTriggerName:
+    Type: String
+    Default: sparkTimer
+    Label:
+      zh-cn: 定时触发器名称
+      en: Timer trigger name
+  CronExpression:
+    Type: String
+    Default: '0 0 9 * * *'
+    Label:
+      zh-cn: 定时表达式 (秒 分 时 日 月 周)
+      en: Cron expression (sec min hour day month week)
+    Description:
+      zh-cn: '6 段：秒 分 时 日 月 周'
+      en: '6-field: sec min hour day month week.'
+  EnvPayload:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Label:
+      zh-cn: 触发消息 payload (.env 全文, 从configTool导出)
+      en: Trigger payload (full .env, optional)
+    Description:
+      zh-cn: 留空则到控制台填触发消息。
+      en: Leave empty to fill it in the console.
+
+  # ===========================================================================
+  # ② gost 隧道代理函数 (gost)
+  # ===========================================================================
+  GostFunctionName:
+    Type: String
+    Default: DYSparkGost
+    Label:
+      zh-cn: gost 隧道函数名称
+      en: Gost tunnel function name
+  GostImageUrl:
+    Type: String
+    Default: crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com/oilu/gost:latest
+    Label:
+      zh-cn: gost 隧道函数镜像地址
+      en: Gost tunnel image URL
+  GostCpu:
+    Type: Number
+    Default: 0.35
+    MinValue: 0.05
+    MaxValue: 16
+    Label:
+      zh-cn: gost 函数 CPU (vCPU)
+      en: Gost CPU (vCPU)
+  GostMemorySize:
+    Type: Number
+    Default: 512
+    MinValue: 128
+    Label:
+      zh-cn: gost 函数内存 (MB)
+      en: Gost memory (MB)
+  GostTimeout:
+    Type: Number
+    Default: 600
+    MinValue: 1
+    MaxValue: 86400
+    Label:
+      zh-cn: gost 函数最大执行时间 (秒)
+      en: Gost function timeout (s)
+    Description:
+      zh-cn: 单条隧道连接的上限, 不是计费时长。
+      en: Per-connection cap, not a billing duration.
+  GostContainerPort:
+    Type: Number
+    Default: 9000
+    MinValue: 1
+    MaxValue: 65535
+    Label:
+      zh-cn: gost 监听端口
+      en: Gost listen port
+  GostInstanceConcurrency:
+    Type: Number
+    Default: 50
+    MinValue: 1
+    MaxValue: 200
+    Label:
+      zh-cn: gost 函数单实例并发度
+      en: Gost instance concurrency
+    Description:
+      zh-cn: 每条隧道占 1 个并发。
+      en: One concurrency per tunnel.
+  GostUser:
+    Type: String
+    Default: gost
+    NoEcho: true
+    Label:
+      zh-cn: 隧道用户名
+      en: Tunnel username
+  GostPassword:
+    Type: String
+    Default: CHANGE-ME-PLEASE
+    NoEcho: true
+    Label:
+      zh-cn: 隧道密码
+      en: Tunnel password
+    Description:
+      zh-cn: 务必改掉, 且勿用 URL 保留字符。
+      en: Change it; avoid URL-reserved characters.
+  HttpTriggerName:
+    Type: String
+    Default: gostTunnel
+    Label:
+      zh-cn: gost HTTP 触发器名称
+      en: Gost HTTP trigger name
+
+Resources:
+  # ===========================================================================
+  # RAM 角色: FC 服务角色 (fc.aliyuncs.com 承担) + 日志系统策略
+  # 两个函数共用, 只用于把日志投递到 SLS。
+  # ===========================================================================
+  Role:
+    Type: ALIYUN::RAM::Role
+    Properties:
+      RoleName:
+        Fn::Join:
+          - '-'
+          - - Ref: NamePrefix
+            - fc3-role
+      Description: FC service role for DouyinSparkFlow (logging disabled, no policies attached)
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - fc.aliyuncs.com
+        Version: '1'
+
+  # ===========================================================================
+  # ① 任务函数 (FC3 自定义容器) —— 定时触发器驱动
+  # ===========================================================================
+  TaskFunction:
+    Type: ALIYUN::FC3::Function
+    DependsOn:
+      - Role
+    Properties:
+      FunctionName:
+        Ref: TaskFunctionName
+      Description: DouyinSparkFlow 续火任务执行器(容器内常驻 HTTP Server, 等定时触发器打进来)
+      Runtime: custom-container
+      Handler: index.handler
+      Cpu:
+        Ref: TaskCpu
+      MemorySize:
+        Ref: TaskMemorySize
+      DiskSize:
+        Ref: TaskDiskSize
+      Timeout:
+        Ref: TaskTimeout
+      InstanceConcurrency:
+        Ref: TaskInstanceConcurrency
+      # 必须为 true: 容器里的 Chromium 要访问 douyin.com
+      InternetAccess: true
+      Role:
+        Fn::GetAtt:
+          - Role
+          - Arn
+      CustomContainerConfig:
+        Image:
+          Ref: TaskImageUrl
+        Port:
+          Ref: TaskContainerPort
+        # fc_server.py 的 do_GET 一律回 200, 可以直接用根路径做健康检查
+        HealthCheckConfig:
+          HttpGetUrl: /
+          InitialDelaySeconds: 5
+          PeriodSeconds: 5
+          TimeoutSeconds: 3
+          SuccessThreshold: 1
+          FailureThreshold: 3
+      Tags:
+        - Key: Service
+          Value:
+            Ref: NamePrefix
+
+  TimerTrigger:
+    Type: ALIYUN::FC3::Trigger
+    DependsOn:
+      - TaskFunction
+    Properties:
+      FunctionName:
+        Ref: TaskFunctionName
+      TriggerName:
+        Ref: TimerTriggerName
+      TriggerType: timer
+      Qualifier: LATEST
+      Description: DouyinSparkFlow 定时调度(触发消息 payload 携带 .env 全文)
+      TriggerConfig:
+        cronExpression:
+          Ref: CronExpression
+        enable: true
+        # 留空时沿用进程环境变量(镜像里没有 /app/.env, 等同没有配置),
+        # 因此正式使用请把 .env 全文填到控制台的触发消息里。
+        payload:
+          Ref: EnvPayload
+
+  # ===========================================================================
+  # ② gost 隧道函数 (FC3 自定义容器) —— HTTP 触发器暴露
+  # ===========================================================================
+  GostFunction:
+    Type: ALIYUN::FC3::Function
+    DependsOn:
+      - Role
+    Properties:
+      FunctionName:
+        Ref: GostFunctionName
+      Description: DouyinSparkFlow 代理出口(gost WebSocket 隧道, 供本地 configTool 借用同地域出口)
+      Runtime: custom-container
+      Handler: index.handler
+      Cpu:
+        Ref: GostCpu
+      MemorySize:
+        Ref: GostMemorySize
+      DiskSize: 512
+      Timeout:
+        Ref: GostTimeout
+      InstanceConcurrency:
+        Ref: GostInstanceConcurrency
+      # 必须为 true: gost 要替我们把请求发到目标站
+      InternetAccess: true
+      Role:
+        Fn::GetAtt:
+          - Role
+          - Arn
+      CustomContainerConfig:
+        Image:
+          Ref: GostImageUrl
+        Port:
+          Ref: GostContainerPort
+        # 只注入"启动参数"(FC3 命名: Entrypoint=启动命令, Command=启动参数),
+        # 不覆盖 Entrypoint, 以继承 gost 官方镜像自带的入口。
+        # 最终等价于: gost -L "http+ws://<user>:<pass>@:9000?path=/ws"
+        Command:
+          - '-L'
+          - Fn::Join:
+              - ''
+              - - 'http+ws://'
+                - Ref: GostUser
+                - ':'
+                - Ref: GostPassword
+                - '@:'
+                - Ref: GostContainerPort
+                - '?path=/ws'
+        # 刻意不配 HealthCheckConfig: gost 只应答 ws 升级请求, 普通 GET 未必是 2xx。
+      Tags:
+        - Key: Service
+          Value:
+            Ref: NamePrefix
+
+  GostHttpTrigger:
+    Type: ALIYUN::FC3::Trigger
+    DependsOn:
+      - GostFunction
+    Properties:
+      FunctionName:
+        Ref: GostFunctionName
+      TriggerName:
+        Ref: HttpTriggerName
+      TriggerType: http
+      Qualifier: LATEST
+      Description: gost 隧道入口(anonymous; 鉴权由 gost 自身的账号密码完成)
+      TriggerConfig:
+        # 访问控制交给 gost 的 user:pass, 不额外套函数签名/JWT —— 客户端是本地 gost, 不是函数 SDK。
+        authType: anonymous
+        # 必须含 GET: WebSocket 握手是 GET, 少了它握手会被直接拒绝。
+        methods:
+          - GET
+
+Outputs:
+  TaskFunctionName:
+    Description: 任务函数名称
+    Value:
+      Fn::GetAtt:
+        - TaskFunction
+        - FunctionName
+  TimerTriggerId:
+    Description: 定时触发器 ID (在控制台"触发器"页可编辑其触发消息 payload)
+    Value:
+      Fn::GetAtt:
+        - TimerTrigger
+        - TriggerId
+  GostFunctionName:
+    Description: gost 隧道函数名称
+    Value:
+      Fn::GetAtt:
+        - GostFunction
+        - FunctionName
+  GostTriggerUrlInternet:
+    Description: >-
+      gost HTTP 触发器公网地址。本地客户端用它拼隧道:
+      wss://<GostUser>:<GostPassword>@<去掉 https:// 的域名>:443?path=/ws
+    Value:
+      Fn::GetAtt:
+        - GostHttpTrigger
+        - UrlInternet
+  GostTriggerUrlIntranet:
+    Description: gost HTTP 触发器私网地址(同 VPC 内调用时用)
+    Value:
+      Fn::GetAtt:
+        - GostHttpTrigger
+        - UrlIntranet

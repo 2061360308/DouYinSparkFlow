@@ -11,27 +11,9 @@ logger = setup_logger(level=logging.DEBUG)
 是否启用调试模式
 更详细的日志打印，浏览器操作可视化等
 """
-DEBUG = True
+DEBUG = True if os.environ.get("DEBUG", "").lower() == "true" else False
 config = None
 userData = None
-
-
-class Environment(Enum):
-    GITHUBACTION = "GITHUB_ACTION"  # GitHub Action 运行
-    LOCAL = "LOCAL"  # 本地代码运行
-    PACKED = "PACKED"  # PyInstaller 打包运行
-
-    def __str__(self):
-        return self.value
-
-
-def get_environment():
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return Environment.PACKED
-    elif os.getenv("GITHUB_ACTIONS") == "true":
-        return Environment.GITHUBACTION
-    else:
-        return Environment.LOCAL
 
 
 def get_config():
@@ -90,6 +72,7 @@ def get_userData():
     for task in tasks:
         username = task.get("username", "未知用户")
         unique_id = task.get("unique_id")
+        fingerprint = task.get("fingerprint")
         if not unique_id:
             logger.warning(f"{username} 的任务  缺少 unique_id 字段，已跳过")
             continue
@@ -110,8 +93,10 @@ def get_userData():
             {
                 "unique_id": unique_id,
                 "username": username,
+                "fingerprint": fingerprint,
                 "cookies": sanitize_cookies(cookies),
-                "targets": [norm(t) for t in task.get("targets", [])], # 标准化目标列表
+                # 归一化目标列表；丢掉归一后为空的项（空串在后续匹配里永远扣不掉）
+                "targets": [t for t in map(norm, task.get("targets", [])) if t],
             }
         )
 

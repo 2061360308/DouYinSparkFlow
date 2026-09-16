@@ -8,5 +8,5 @@ if [[ -n "${CRON_SECOND:-}" && "${CRON_SECOND}" != "0" ]]; then
   sleep "${CRON_SECOND}"
 fi
 cd /app
-python main.py
+python main.py task
 echo "[docker] $(date '+%Y-%m-%d %H:%M:%S') scheduled task finished"
