@@ -6,3 +6,29 @@ logs/
 .DS_Store
 usersData.json
 .env
+
+# 账户登录态的浏览器配置目录：体积大且含敏感登录信息，绝不入库
+configTool/profiles/
+loginTool/browser_profile/
+
+# 抖音号 -> 配置目录 对照表（含昵称 / uid 等账号信息），不入库
+configTool/profiles.json
+
+# 登录工具生成的产物，里面是真实可用的 sessionid —— 入库等于把账号交出去
+loginTool/cookies.json
+loginTool/cookies_env.txt
+loginTool/storage_state.json
+
+# 自带的隐身 Chromium：单文件 chrome.dll 约 281 MB，超过 GitHub 单文件 100 MB 上限，
+# 提交上去也推不动。它属于「本地分发物」，跟着程序目录走，不入版本库。
+# 如果你确实要把它纳入仓库，删掉下面两行即可。
+loginTool/cloakbrowser-windows-x64/
+configTool/cloakbrowser-windows-x64/
+
+# PyInstaller 打包产物
+build/
+dist/
+*.spec
+
+# 工作目录（本地笔记与临时脚本）
+.workbuddy/
