@@ -24,6 +24,8 @@ loginTool/storage_state.json
 # 如果你确实要把它纳入仓库，删掉下面两行即可。
 loginTool/cloakbrowser-windows-x64/
 configTool/cloakbrowser-windows-x64/
+# 分发包本体（约 536 MB）同理，不入库
+configTool/cloakbrowser-windows-x64.zip
 
 # PyInstaller 打包产物
 build/

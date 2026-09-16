@@ -218,16 +218,22 @@ def do_user_task(browser, username, cookies, targets):
 
         # 在 chat-input-dccKiL 中输入内容
         message = build_message()
-        for line in message.split("\\n"):
-            chat_input.type(line)  # 输入每一行
+        lines = message.split("\\n")
+        for line in lines:
+            # force=True: 跳过 cloakbrowser 拟人化的「可操作性检查」。
+            # 开了 humanize 之后 type() 会先检查元素是否可编辑, 而抖音的输入框选择器
+            # (.messageEditorimChatEditorContainer) 指向的是外层容器, 检查会判定
+            # "element is not editable" 并抛 ElementNotEditableError。force=True 只跳过
+            # 这一步检查, 逐字输入 + 随机延时的拟人化节奏照常保留。
+            chat_input.type(line, force=True)
             # 如果不是最后一行，模拟 Shift+Enter 插入换行
-            if line != message.split("\\n")[-1]:
-                chat_input.press("Shift+Enter")  # 模拟 Shift+Enter 插入换行
+            if line != lines[-1]:
+                chat_input.press("Shift+Enter", force=True)  # 模拟 Shift+Enter 插入换行
 
         logger.debug(f"账号 {username} 准备发送消息给好友 {friend}：\n\t{message}")
         logger.debug(f"账号 {username} 给好友 {friend} 发送消息完成")
         # 模拟按下回车键发送消息
-        chat_input.press("Enter")
+        chat_input.press("Enter", force=True)
         time.sleep(2)  # 发送完等待一会儿
 
     context.close()  # 任务完成后关闭上下文
