@@ -35,6 +35,7 @@ from datetime import datetime
 from tkinter import messagebox, ttk
 
 import env_store
+import local_settings
 import profile_store
 from conversation_dialog import ConversationDialog
 from login_dialog import LoginDialog
@@ -102,21 +103,32 @@ class ScrollFrame(ttk.Frame):
 
 
 def _wrap_to_width(label: ttk.Label, minimum: int = 220) -> None:
-    """让一段说明文字跟着容器宽度自动换行。
+    """让一段说明文字跟着**容器**宽度自动换行。
 
-    ttk.Label 默认不换行 —— 窗口一窄，右边就被硬生生切掉一句话
-    （截图核对新布局时才看出来的）。这里把 wraplength 绑到实际宽度上，
-    赋值前先比一次，避免「设 wraplength → 触发 <Configure> → 再设」自激。
+    血泪教训：早先这里拿 label 自己的 ``event.width`` 算宽度并回写 wraplength，
+    而改 wraplength 会改变 Label 的**请求宽度**，于是 <Configure> 又带着新宽度回来，
+    形成「设 → 变 → 再设」的自激。平时布局稳定看不出来，一旦别的页签内容高度变化
+    （比如把一组控件搬到新页签），就会在 Tk 的几何循环里死转 —— 表现为窗口能显示、
+    标题栏按钮有反应，但点任何控件都卡死，调用栈停在 ``update`` 里出不来。
+
+    现在改成以 ``label.master``（容器）的宽度为基准：容器的宽度由外层布局决定，
+    不随 Label 自身换行而变，回路就断了。再加两道闸：宽度未变直接返回、宽度 <= 1
+    （还没完成首次布局）也跳过。
     """
+    last = {"width": -1}
 
-    def apply(event) -> None:
-        wanted = max(minimum, event.width - 4)
+    def apply(event=None) -> None:
         try:
-            current = int(label.cget("wraplength") or 0)
-        except (TypeError, ValueError, tk.TclError):
-            current = -1
-        if current != wanted:
-            label.configure(wraplength=wanted)
+            width = label.master.winfo_width()
+        except Exception:
+            return
+        if width <= 1 or width == last["width"]:
+            return
+        last["width"] = width
+        try:
+            label.configure(wraplength=max(minimum, width - 8))
+        except tk.TclError:
+            pass
 
     label.bind("<Configure>", apply)
 
@@ -269,11 +281,85 @@ class ConfigApp:
 
         base_tab = ttk.Frame(self.notebook)
         account_tab = ttk.Frame(self.notebook)
+        tunnel_tab = ttk.Frame(self.notebook)
         self.notebook.add(base_tab, text="  基础配置  ")
         self.notebook.add(account_tab, text="  账户配置  ")
+        # 工具配置单独占一页：它只影响「本地抓 Cookie」，跟 .env 里那个给云函数用的
+        # 代理完全是两回事，摆在同一个表单里极易看串。
+        self.notebook.add(tunnel_tab, text="  工具配置  ")
 
         self._build_base_tab(base_tab)
         self._build_account_tab(account_tab)
+        self._build_tunnel_tab(tunnel_tab)
+
+    def _build_tunnel_tab(self, master) -> None:
+        """抓取代理：本地抓 Cookie 时接到云函数侧的 gost 隧道。
+
+        与「基础配置」里那个代理地址分工不同 —— 那个会写进 .env 交给云函数跑任务，
+        这里只影响本地开浏览器抓 Cookie，设置也只留在本机 local.json。
+        """
+        scroller = ScrollFrame(master)
+        scroller.pack(fill="both", expand=True)
+        form = scroller.inner
+
+        def label(text: str, hint: str = "") -> None:
+            ttk.Label(form, text=text, font=FONT_UI).pack(anchor="w", pady=(10, 2))
+            if hint:
+                ttk.Label(
+                    form, text=hint, font=("Microsoft YaHei UI", 9), foreground="#888780"
+                ).pack(anchor="w")
+
+        ttk.Label(
+            form,
+            text="打开浏览器抓 Cookie 前，先用 gost 接入配套代理，"
+            "让出口 IP 与云端跑任务时同地域。",
+            font=FONT_UI,
+            wraplength=560,
+            justify="left",
+        ).pack(anchor="w", pady=(2, 6))
+
+        self.var_tunnel_on = tk.BooleanVar()
+        ttk.Checkbutton(
+            form,
+            text="启用：每次打开浏览器前自动接入配套代理，关窗即释放",
+            variable=self.var_tunnel_on,
+        ).pack(anchor="w")
+
+        label("隧道地址", "形如 wss://xxx.cn-hangzhou.fcapp.run:443?path=/ws（只填地址，凭据填下面）")
+        self.var_tunnel = tk.StringVar()
+        ttk.Entry(form, textvariable=self.var_tunnel, font=FONT_UI).pack(fill="x")
+
+        label("隧道账号 / 密码", "配套代理服务端的 user:password")
+        auth_row = ttk.Frame(form)
+        auth_row.pack(fill="x")
+        self.var_tunnel_user = tk.StringVar()
+        ttk.Entry(auth_row, textvariable=self.var_tunnel_user, font=FONT_UI).pack(
+            side="left", fill="x", expand=True
+        )
+        self.var_tunnel_pwd = tk.StringVar()
+        ttk.Entry(auth_row, textvariable=self.var_tunnel_pwd, font=FONT_UI, show="•").pack(
+            side="left", fill="x", expand=True, padx=(6, 0)
+        )
+
+        label("gost 程序路径", "留空则自动找程序目录下的 gost.exe（gost/ 或 bin/ 子目录也行）")
+        self.var_gost_path = tk.StringVar()
+        ttk.Entry(form, textvariable=self.var_gost_path, font=FONT_UI).pack(fill="x")
+
+        ttk.Label(
+            form,
+            text="这些设置只存在本机 local.json，不写进 .env，也不会传到云端。",
+            font=("Microsoft YaHei UI", 9),
+            foreground="#888780",
+        ).pack(anchor="w", pady=(12, 0))
+
+        for var in (
+            self.var_tunnel_on,
+            self.var_tunnel,
+            self.var_tunnel_user,
+            self.var_tunnel_pwd,
+            self.var_gost_path,
+        ):
+            var.trace_add("write", self._on_field_changed)
 
     def _build_base_tab(self, master) -> None:
         scroller = ScrollFrame(master)
@@ -287,7 +373,7 @@ class ConfigApp:
                     form, text=hint, font=("Microsoft YaHei UI", 9), foreground="#888780"
                 ).pack(anchor="w")
 
-        label("代理地址", "当前代码未实际使用，可留空")
+        label("代理地址", "写进 .env 交给云函数跑任务用；本地抓 Cookie 的隧道在「工具配置」页签")
         self.var_proxy = tk.StringVar()
         ttk.Entry(form, textvariable=self.var_proxy, font=FONT_UI).pack(fill="x")
 
@@ -611,6 +697,15 @@ class ConfigApp:
         config = self.config
 
         self.var_proxy.set(config.proxy_address)
+
+        # 抓取代理（工具自己的设置，存在 local.json，不进 .env）
+        proxy = local_settings.proxy_config()
+        self.proxy_settings = dict(proxy)
+        self.var_tunnel_on.set(bool(proxy.get("enabled")))
+        self.var_tunnel.set(proxy.get("tunnel", ""))
+        self.var_tunnel_user.set(proxy.get("user", ""))
+        self.var_tunnel_pwd.set(proxy.get("password", ""))
+        self.var_gost_path.set(proxy.get("gost_path", ""))
         hour, minute, second = split_run_time(config.run_time)
         self.var_hour.set(hour)
         self.var_minute.set(minute)
@@ -633,6 +728,14 @@ class ConfigApp:
     def collect_from_ui(self) -> None:
         config = self.config
         config.proxy_address = self.var_proxy.get().strip()
+        # 抓取代理：工具私有设置，与 .env 分开存（见 local_settings.py）
+        self.proxy_settings = {
+            "enabled": bool(self.var_tunnel_on.get()),
+            "tunnel": self.var_tunnel.get().strip(),
+            "user": self.var_tunnel_user.get().strip(),
+            "password": self.var_tunnel_pwd.get().strip(),
+            "gost_path": self.var_gost_path.get().strip(),
+        }
         config.run_time = build_run_time(
             self.var_hour.get(), self.var_minute.get(), self.var_second.get()
         )
@@ -720,6 +823,12 @@ class ConfigApp:
             if force:
                 messagebox.showerror("保存失败", f"{type(exc).__name__}: {exc}")
             return
+
+        # 抓取代理单独落本地设置文件（.env 是给主程序的，别把工具私有配置混进去）
+        try:
+            local_settings.save_proxy(self.proxy_settings)
+        except Exception as exc:
+            self.save_var.set(f"本地设置保存失败：{type(exc).__name__}: {exc}")
 
         self.orphans = orphans
         self.last_saved = datetime.now().strftime("%H:%M:%S")
@@ -945,10 +1054,16 @@ class ConfigApp:
 
     def _open_login_dialog(self, account: Account, mode: str = "add") -> None:
         taken = [item.unique_id for item in self.config.accounts if item.unique_id.strip()]
+        self.collect_from_ui()  # 用界面上最新的隧道配置，别用上次保存的
         try:
             # 不需要模态：浏览器窗口本来就是独立的，用户也可以同时回主界面看别的账号
             LoginDialog(
-                self.root, account, on_saved=self._on_login_saved, mode=mode, taken_ids=taken
+                self.root,
+                account,
+                on_saved=self._on_login_saved,
+                mode=mode,
+                taken_ids=taken,
+                proxy=self.proxy_settings,
             )
         except Exception as exc:
             messagebox.showerror("打不开登录窗口", f"{type(exc).__name__}: {exc}")
@@ -1033,8 +1148,14 @@ class ConfigApp:
         self._set_message(
             f"正在用「{profile_store.describe(folder)}」拉取「{account.display_name}」的会话列表…"
         )
+        self.collect_from_ui()  # 用界面上最新的隧道配置，别用上次保存的
         try:
-            ConversationDialog(self.root, account, on_fetched=self._on_conversations_fetched)
+            ConversationDialog(
+                self.root,
+                account,
+                on_fetched=self._on_conversations_fetched,
+                proxy=self.proxy_settings,
+            )
         except Exception as exc:
             messagebox.showerror("打不开拉取窗口", f"{type(exc).__name__}: {exc}")
 

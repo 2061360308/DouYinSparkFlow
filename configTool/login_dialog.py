@@ -56,10 +56,14 @@ class LoginDialog(tk.Toplevel):
         taken_ids=(),
         auto_close: bool = True,
         auto_grab: bool = True,
+        proxy=None,
     ) -> None:
         super().__init__(master)
         self.account = account
         self.on_saved = on_saved
+        # 云函数代理配置（local_settings.proxy_config()），由主窗口传入；
+        # 启用后每次打开浏览器都会先拉起 gost 隧道，关窗即释放。
+        self.proxy = dict(proxy or {})
         self.mode = mode if mode in MODE_TITLES else "add"
         self.auto_close = auto_close
         # add 模式下这些抖音号已经在列表里（用来提示「会更新而不是新增」）
@@ -94,7 +98,7 @@ class LoginDialog(tk.Toplevel):
         self._auto_close_job = None
 
         self.worker = BrowserLoginWorker(
-            self.profile_dir, fingerprint=self.fingerprint
+            self.profile_dir, fingerprint=self.fingerprint, proxy=self.proxy
         )
         self.worker.start()
 

@@ -50,6 +50,10 @@ PROFILE_ROOT = APP_DIR / "profiles"
 # 抖音号 -> 配置目录名 的对照表，由 profile_store.py 读写
 PROFILES_INDEX = APP_DIR / "profiles.json"
 
+# 本工具自己的设置（如抓取隧道），由 local_settings.py 读写。
+# 不进 .env：.env 是给主程序（以及云函数）吃的配置文件，工具私有键塞进去会污染它。
+LOCAL_SETTINGS = APP_DIR / "local.json"
+
 # 自带的隐身 Chromium 目录名
 BROWSER_DIR_NAME = "cloakbrowser-windows-x64"
 BROWSER_EXE_NAMES = ("chrome.exe", "chrome")
@@ -74,3 +78,48 @@ def browser_binary() -> Path:
         if (directory / name).is_file():
             return directory / name
     return directory / BROWSER_EXE_NAMES[0]
+
+
+# ---------------------------------------------------------------------------
+# gost（抓取时接云函数隧道用）
+# ---------------------------------------------------------------------------
+# Windows 下载包解出来是 gost.exe；源码跑在 Linux/macOS 上时是 gost
+GOST_EXE_NAMES = ("gost.exe", "gost")
+
+# 找不到 gost 时给用户的下载页
+GOST_RELEASES_URL = "https://github.com/go-gost/gost/releases"
+
+
+def gost_candidates() -> list:
+    """gost 可执行文件的候选路径，按优先级排列。
+
+    用户可以把它放在程序目录、或程序目录下的 gost/、bin/ 子目录；
+    打包成 exe 后 resource_dir() 指向解包目录 —— 与自带浏览器同一套查找机制。
+    """
+    found: list = []
+    seen: set = set()
+    for root in (resource_dir(), APP_DIR, APP_DIR / "gost", APP_DIR / "bin"):
+        for name in GOST_EXE_NAMES:
+            candidate = root / name
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            if candidate.is_file():
+                found.append(candidate)
+    return found
+
+
+def gost_binary(explicit: str = "") -> Path:
+    """解析 gost 可执行文件路径。
+
+    explicit（界面上填的路径）优先；否则按候选顺序找；都找不到就返回一个预期路径，
+    好让报错信息能说清「该把 gost.exe 放哪」。
+    """
+    text = str(explicit or "").strip()
+    if text:
+        return Path(text).expanduser()
+    found = gost_candidates()
+    if found:
+        return found[0]
+    return APP_DIR / "gost" / GOST_EXE_NAMES[0]

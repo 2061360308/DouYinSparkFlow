@@ -50,11 +50,15 @@ class ConversationDialog(tk.Toplevel):
         *,
         headless: bool = True,
         auto_close: bool = True,
+        proxy=None,
     ) -> None:
         super().__init__(master)
         self.account = account
         self.on_fetched = on_fetched
         self.auto_close = auto_close
+        # 云函数代理配置（local_settings.proxy_config()），由主窗口传入；
+        # 与登录窗口走同一份配置，保证「登录」和「拉列表」是同一个出口
+        self.proxy = dict(proxy or {})
 
         self.folder = str(getattr(account, "profile_folder", "") or "").strip()
         self.profile_dir = profile_store.profile_dir(self.folder)
@@ -167,6 +171,7 @@ class ConversationDialog(tk.Toplevel):
             events=self.events,
             headless=headless,
             fingerprint=self.fingerprint,
+            proxy=self.proxy,
         )
         self.worker.start()
         self._started = time.monotonic()

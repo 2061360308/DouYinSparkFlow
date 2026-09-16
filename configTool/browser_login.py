@@ -34,7 +34,9 @@ import threading
 import time
 from pathlib import Path
 
+import local_settings
 import paths
+from tunnel import GostTunnel
 
 CHAT_URL = "https://www.douyin.com/chat"
 
@@ -466,12 +468,17 @@ class BrowserLoginWorker(threading.Thread):
         *,
         headless: bool = False,
         fingerprint: str = "",
+        proxy: dict | None = None,
     ) -> None:
         super().__init__(daemon=True, name="browser-login-worker")
         self.profile_dir = Path(profile_dir)
         self.headless = headless
         # 该账号固定的指纹种子；空串表示不干预，用 cloakbrowser 的默认随机种子
         self.fingerprint = str(fingerprint or "").strip()
+        # 云函数代理配置（local_settings.proxy_config() 那一份）；未启用表示直连
+        self.proxy = dict(proxy or {})
+        # 本次会话的 gost 隧道：开浏览器前拉起，关浏览器后释放
+        self.tunnel = None
         self.commands: queue.Queue = queue.Queue()
         self.events: queue.Queue = events or queue.Queue()
         self.ctx = None
@@ -528,6 +535,8 @@ class BrowserLoginWorker(threading.Thread):
                     break
             except Exception as exc:
                 self.emit("error", f"{type(exc).__name__}: {exc}")
+        # 线程收尾：不管怎么退出，都别把 gost 留在后台
+        self._stop_tunnel()
         self.emit("done")
 
     # -- 内部实现 -----------------------------------------------------------
@@ -944,16 +953,35 @@ class BrowserLoginWorker(threading.Thread):
             self.log(f"浏览器：{BROWSER_BINARY}")
 
         launch = load_cloakbrowser()
+        # 先把隧道拉起来再开浏览器：隧道起不来宁可不开 —— 否则会拿本机 IP 去登录，
+        # cookie 的出口和云端任务对不上，反而给账号添风险。
+        proxy_url = self._start_tunnel()
+        if self.proxy.get("enabled") and not proxy_url:
+            self.emit("error", "配套代理未就绪，已中止打开浏览器（避免用本机 IP 登录）")
+            return
+
         # 显式把指纹钉死：cloakbrowser 默认每次启动随机一个新种子，
         # 传进去的同名 flag 会覆盖它（其余隐身参数不受影响）。
-        extra_args = (
-            [f"{FINGERPRINT_FLAG}{self.fingerprint}"] if self.fingerprint else None
-        )
+        extra_args = [f"{FINGERPRINT_FLAG}{self.fingerprint}"] if self.fingerprint else []
         if extra_args:
             self.log(f"固定指纹：{FINGERPRINT_FLAG}{self.fingerprint}")
         else:
             self.log("未指定固定指纹，本次由浏览器自行随机")
-        self.ctx = launch(str(self.profile_dir), headless=self.headless, args=extra_args)
+        if proxy_url:
+            # 走代理时必须让 WebRTC 也报代理出口 IP，否则它会绕过 HTTP 代理暴露本机真实 IP
+            extra_args.append("--fingerprint-webrtc-ip=auto")
+
+        try:
+            self.ctx = launch(
+                str(self.profile_dir),
+                headless=self.headless,
+                proxy=proxy_url or None,
+                args=extra_args or None,
+            )
+        except Exception:
+            # 浏览器没起来，这条隧道的使命也就结束了，立刻释放
+            self._stop_tunnel()
+            raise
         self.log("隐身 Chromium 已启动" + ("（无头模式）" if self.headless else ""))
 
         pages = [p for p in self.ctx.pages if not p.is_closed()]
@@ -1035,10 +1063,57 @@ class BrowserLoginWorker(threading.Thread):
 
     def _close(self) -> None:
         if self.ctx is None:
+            self._stop_tunnel()
             return
         try:
             self.ctx.close()
         except Exception:
             pass
         self._reset()
+        # 浏览器一关就释放隧道：云函数那边的连接断开，实例随即回收、不再计费
+        self._stop_tunnel()
         self.log("浏览器已关闭")
+
+    # -- 云函数隧道 ---------------------------------------------------------
+    def _start_tunnel(self) -> str:
+        """按需拉起 gost 隧道，返回本地代理地址；未启用或失败时返回空串。
+
+        失败不抛异常 —— 原因通过 error 事件发到界面，由调用方决定是否中止。
+        """
+        proxy = dict(self.proxy or {})
+        if not proxy.get("enabled"):
+            return ""
+
+        ok, why = local_settings.proxy_ready(proxy)
+        if not ok:
+            self.emit("error", f"配套代理配置不可用：{why}")
+            return ""
+
+        self._stop_tunnel()  # 上一次会话没清干净时兜底
+        try:
+            tunnel = GostTunnel(
+                proxy.get("tunnel", ""),
+                proxy.get("user", ""),
+                proxy.get("password", ""),
+                gost_path=proxy.get("gost_path", ""),
+                log=self.log,
+            )
+            url = tunnel.start()
+        except Exception as exc:
+            self.emit("error", f"配套代理启动失败：{exc}")
+            return ""
+
+        self.tunnel = tunnel
+        self.emit("status", f"已接入配套代理：{url}")
+        return url
+
+    def _stop_tunnel(self) -> None:
+        """释放隧道（幂等）。浏览器关掉后立刻调用，别让云函数那边白烧实例时长。"""
+        tunnel = self.tunnel
+        self.tunnel = None
+        if tunnel is None:
+            return
+        try:
+            tunnel.stop()
+        except Exception as exc:
+            self.log(f"释放隧道时出错（可忽略）：{type(exc).__name__}: {exc}")
