@@ -31,8 +31,9 @@ permissions:
 env:
   # 与 Dockerfile 里的 CLOAK_CHROMIUM_VERSION 保持一致，别各改各的
   CLOAK_CHROMIUM_VERSION: 146.0.7680.177.5
-  # 与 configTool/gost/gost.exe 的版本保持一致（gost -V 可查）
-  GOST_VERSION: 2.12.0
+  # 注意：gost v2.x 的 release **没有 Windows 资产**（只有 linux 包），必须用 v3。
+  # 实测存在的版本：3.0.0 / 3.1.0 / 3.2.0 / 3.3.0；v3 的包是 zip，下面的解压逻辑通用。
+  GOST_VERSION: 3.3.0
   # PyInstaller 产物名：exe 与目录同名
   APP_NAME: DouyinSparkFlow-configTool
   # cloakbrowser 若不在公开 PyPI，可在仓库 Secrets 里配 PIP_INDEX_URL / PIP_EXTRA_INDEX_URL

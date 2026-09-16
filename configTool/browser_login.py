@@ -137,13 +137,25 @@ def matches_target(domain: str) -> bool:
     return any(domain == d or domain.endswith("." + d) for d in TARGET_DOMAINS)
 
 
-def clean_cookie(cookie: dict) -> dict:
-    """只保留 Playwright add_cookies 需要的字段，去掉 sameSite（与主项目一致）。"""
+def clean_cookie(cookie: dict):
+    """把一条 cookie 裁剪成 Playwright add_cookies 需要的字段。
+
+    返回 None 表示这条**不可用**，调用方应丢弃：
+      - name 为空：站点确实会产生这种条目（实测抖音上就有一条 value="douyin.com"
+        的空名 cookie），而 add_cookies 遇到空 name 会让整批注入失败；
+      - domain 为空：没有归属域，Playwright 同样不接受。
+
+    去掉 sameSite 与主项目 utils/config.py::sanitize_cookies 的口径保持一致。
+    """
+    name = str(cookie.get("name") or "").strip()
+    domain = str(cookie.get("domain") or "").strip()
+    if not name or not domain:
+        return None
     return {
-        "name": cookie.get("name", ""),
+        "name": name,
         "value": cookie.get("value", ""),
-        "domain": cookie.get("domain", ""),
-        "path": cookie.get("path", "/"),
+        "domain": domain,
+        "path": cookie.get("path") or "/",
         "expires": cookie.get("expires", -1),
         "httpOnly": bool(cookie.get("httpOnly", False)),
         "secure": bool(cookie.get("secure", False)),
@@ -1025,10 +1037,25 @@ class BrowserLoginWorker(threading.Thread):
 
         state = self.ctx.storage_state()
         raw = state.get("cookies", [])
-        cookies = [clean_cookie(c) for c in raw if matches_target(c.get("domain", ""))]
-        if not cookies:
-            self.log("未匹配到抖音域下的 Cookie，改为保存全部 Cookie")
-            cookies = [clean_cookie(c) for c in raw]
+
+        # 逐条裁剪，丢掉 clean_cookie 判定不可用的（name/domain 为空）——
+        # 留着会让 Playwright 的 add_cookies 整批失败，表现为「配置里有 cookie 却登不上」。
+        target_raw = [c for c in raw if matches_target(c.get("domain", ""))]
+        cookies = [c for c in (clean_cookie(item) for item in target_raw) if c]
+        invalid = len(target_raw) - len(cookies)
+
+        # 兜底：一条都没命中、或命中数不到总数一半 —— 都当成「TARGET_DOMAINS 没跟上
+        # 站点变化」处理，宁可多带（全量保存）也不要漏：少一条登录态 cookie 就登不上了，
+        # 而多带几条无关域的 cookie 顶多是配置大一点。
+        if not cookies or len(cookies) * 2 < len(raw):
+            if cookies:
+                self.log(f"目标域只匹配到 {len(cookies)}/{len(raw)} 条 Cookie，改为保存全部")
+            else:
+                self.log("未匹配到抖音域下的 Cookie，改为保存全部 Cookie")
+            cookies = [c for c in (clean_cookie(item) for item in raw) if c]
+
+        if invalid:
+            self.log(f"已剔除 {invalid} 条无效 Cookie（name 或 domain 为空）")
 
         local_storage: dict[str, dict] = {}
         for origin in state.get("origins", []):
