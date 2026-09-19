@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import paths
+from configTool import paths
 
 SETTINGS_FILE = paths.LOCAL_SETTINGS
 VERSION = 1

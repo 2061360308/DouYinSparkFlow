@@ -1,4 +1,4 @@
-"""读写程序目录下的 .env。
+"""读写项目根的 .env（位置见 paths.ENV_FILE）。
 
 写入策略是「就地更新」：只改动本工具管理的那些键，你手写的注释和其他变量原样保留。
 （用 python-dotenv 的 set_key / unset_key 实现，它们会保留文件原有结构与注释行。）
@@ -10,8 +10,8 @@ from pathlib import Path
 
 from dotenv import dotenv_values, set_key, unset_key
 
-from models import Config
-from paths import ENV_FILE
+from configTool.models import Config
+from configTool.paths import ENV_FILE
 
 HEADER = """# DouYinSparkFlow 配置文件
 #
@@ -25,9 +25,8 @@ HEADER = """# DouYinSparkFlow 配置文件
 # - TASKS 里每项的 fingerprint 是该账号固定的浏览器指纹种子（由 configTool 分配，
 #   与 profiles.json 里的那份一致），别手改 —— 改了等于让这个账号换设备
 # - MESSAGE_TEMPLATE 用 \\n 表示换行
-# - 生成后请把本文件放到主程序的运行目录：
-#     本地运行 → 项目根目录（与 main.py 同级）
-#     Docker   → ./config/.env
+# - 本文件生成在项目根目录，主程序直接用；Docker → 复制 / 挂载为 ./config/.env
+# - 工具自己的数据（profiles/、profiles.json、local.json）在 configTool/ 下
 """
 
 

@@ -3,7 +3,6 @@ from enum import Enum
 import json
 import logging
 from utils.logger import setup_logger
-from utils import norm
 
 logger = setup_logger(level=logging.DEBUG)
 
@@ -35,14 +34,26 @@ def get_config():
         "hitokotoTypes": json.loads(
             os.getenv("HITOKOTO_TYPES", '["文学","影视","诗词","哲学"]')
         ),
-        "browserTimeout": int(
-            os.getenv("BROWSER_TIMEOUT", "120000")
-        ),  # 浏览器操作超时时间，单位毫秒
-        "friendListTimeout": int(
-            os.getenv("FRIEND_LIST_WAIT_TIME", "2000")
-        ),  # 好友列表加载超时时间，单位毫秒
+        # .env 里统一用**秒**，出口按消费方的单位给：
+        #   browserActionTimeout / friendListSettleMs 带单位后缀 → 已是毫秒，调用方直接用
+        #   imScanTimeout / imReadyTimeout / imMaxSteps 原本就是秒/步
+        "browserActionTimeout": int(
+            float(os.getenv("BROWSER_ACTION_TIMEOUT", "120")) * 1000
+        ),  # 单次浏览器操作/导航超时（Playwright 级），毫秒
+        "imScanTimeout": int(
+            os.getenv("IM_SCAN_TIMEOUT", "120")
+        ),  # 扫描总预算，秒
+        "imReadyTimeout": int(
+            os.getenv("IM_READY_TIMEOUT", "120")
+        ),  # 门禁等待上限，秒
+        "friendListSettleMs": int(
+            float(os.getenv("FRIEND_LIST_WAIT_TIME", "3")) * 1000
+        ),  # 资料静默窗，毫秒
+        "imMaxSteps": int(
+            os.getenv("IM_MAX_STEPS", "200")
+        ),  # 滚动步数硬上限
         "taskRetryTimes": int(os.getenv("TASK_RETRY_TIMES", "3")),  # 任务重试次数
-        "logLevel": os.getenv("LOG_LEVEL", "DEBUG"),  # 日志级别
+        "logLevel": os.getenv("LOG_LEVEL", "Debug"),  # 日志级别
     }
 
     return config
@@ -66,6 +77,9 @@ def get_userData():
         return userData
 
     tasks = json.loads(os.getenv("TASKS", "[]"))
+    
+    if DEBUG:
+        logger.info(f"读取到tasks：{tasks}")
 
     userData = []
 
@@ -95,8 +109,10 @@ def get_userData():
                 "username": username,
                 "fingerprint": fingerprint,
                 "cookies": sanitize_cookies(cookies),
-                # 归一化目标列表；丢掉归一后为空的项（空串在后续匹配里永远扣不掉）
-                "targets": [t for t in map(norm, task.get("targets", [])) if t],
+                # 目标列表保持原样（不在这里归一化）。
+                # 归一化统一由 tasks.py 在匹配前做 —— 读取端不做加工，
+                # 配置读出来什么就是什么，避免同一份数据两处变换。
+                "targets": list(task.get("targets", [])),
             }
         )
 

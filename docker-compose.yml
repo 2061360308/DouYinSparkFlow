@@ -16,11 +16,7 @@ services:
   # ① 任务执行器：容器内 cron 定时跑任务
   # ===========================================================================
   douyin-spark-flow:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    # 本地构建出的镜像打个标签，方便以后单独引用/推送
-    image: douyin-spark-flow:local
+    image: crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com/oilu/douyinsparkflow:latest
     container_name: douyin-spark-flow
     restart: unless-stopped
     # Chromium 需要较大的 /dev/shm，别删
@@ -50,7 +46,7 @@ services:
       # 用 http+ws 而不是裸 http：configTool 那边要求隧道地址以 ws:// 开头，
       # 这样本地填的写法与云函数场景完全一致，换个部署方式不用改配置。
       #   GOST_USER / GOST_PASSWORD：在项目根目录的 .env 里设，或直接改下面的默认值
-      - "http+ws://${GOST_USER:-gost}:${GOST_PASSWORD:-CHANGE-ME-PLEASE}@:9000?path=/ws"
+      - "http+ws://${GOST_USER:-luao}:${GOST_PASSWORD:-A020218z}@:9000?path=/ws"
     ports:
       # 暴露给本地 configTool 连；宿主机 9000 被占就改左边的端口
       - "${GOST_PORT:-9000}:9000"

@@ -29,6 +29,71 @@ def _unique_names(values) -> list:
     return out
 
 
+# ---------------------------------------------------------------------------
+# 滚轮保护：ttk 的 Spinbox / Combobox 在 Windows 上自带「滚轮改值」
+# ---------------------------------------------------------------------------
+WHEEL_SENSITIVE = (ttk.Spinbox, ttk.Combobox)
+
+
+def _all_children(widget) -> list:
+    """整棵子树（不含自己）。"""
+    out: list = []
+    stack = list(widget.winfo_children())
+    while stack:
+        node = stack.pop()
+        out.append(node)
+        try:
+            stack.extend(node.winfo_children())
+        except Exception:
+            continue
+    return out
+
+
+def _find_scroller(widget):
+    """沿 master 链找最近的滚动容器，返回它的 _on_wheel。
+
+    靠「有没有 _on_wheel」认人，避免 import main 造成循环引用。
+    """
+    node = widget
+    hops = 0
+    while node is not None and hops < 30:
+        handler = getattr(node, "_on_wheel", None)
+        if callable(handler):
+            return handler
+        node = getattr(node, "master", None)
+        hops += 1
+    return None
+
+
+def disable_wheel_change(widget) -> None:
+    """禁止滚轮改这个控件的值，但保留表单滚动。
+
+    必须绑在 widget 这一级：Tk 事件顺序是 widget → class → toplevel → all，
+    表单滚动挂在 all 上，等它跑到时 ttk 的类绑定已经改完值了。
+    """
+    def _handled(event):
+        scroller = _find_scroller(widget)
+        if scroller is not None:
+            try:
+                scroller(event)
+            except Exception:
+                pass
+        return "break"      # 中止后续 bindtag
+
+    for target in [widget, *_all_children(widget)]:
+        target.bind("<MouseWheel>", _handled)
+
+
+def harden_wheel(root) -> int:
+    """保护整棵控件树里所有滚轮敏感的控件，返回处理个数。"""
+    count = 0
+    for widget in [root, *_all_children(root)]:
+        if isinstance(widget, WHEEL_SENSITIVE):
+            disable_wheel_change(widget)
+            count += 1
+    return count
+
+
 class ConversationPicker(ttk.Frame):
     """可搜索的多选列表：从抓取到的会话列表里挑目标好友。
 

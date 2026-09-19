@@ -13,15 +13,15 @@
     {
       "version": 1,
       "accounts": {
-        "49709841077": {
+        "12345678901": {
           "folder": "p3f9a2c7b1e04",
           "fingerprint": "73841",
-          "nickname": "卢瞳",
-          "uid": "108672188914",
-          "sec_uid": "MS4wLjABAAA...",
+          "nickname": "示例昵称",
+          "uid": "10000000000000001",
+          "sec_uid": "MS4wLjABAAAA...",
           "created_at": "2026-09-16 11:58:11",
           "updated_at": "2026-09-16 12:05:03",
-          "conversations": ["赵思雨", "常鸣", "室温超导体研究团"],
+          "conversations": ["甲同学", "乙同学", "某群聊"],
           "conversations_at": "2026-09-16 13:20:41"
         }
       }
@@ -59,7 +59,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-import paths
+from configTool import paths
 
 # 允许测试替换成临时路径（函数里每次都重新读这个模块级变量）
 INDEX_FILE = paths.PROFILES_INDEX

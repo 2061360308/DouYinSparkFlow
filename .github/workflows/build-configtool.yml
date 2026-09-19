@@ -13,6 +13,11 @@ name: Build configTool (Windows)
 #
 # 这两个目录都超过 GitHub 单文件 / 仓库合理体积，所以不入库，构建时现拉；
 # 版本号在下面 env 里，升级时改一处即可。
+#
+# 入口是仓库根的 run_configtool.py（configTool 是包，只能从根入口启动）。
+# 发布版里工具数据（profiles/、profiles.json、local.json、.env）都在 exe 同级目录 ——
+# 见 configTool/paths.py 的 project_root()：源码运行时 .env 落在仓库根，
+# 打包后没有仓库可言，跟着 exe 走。
 
 on:
   push:
@@ -92,16 +97,19 @@ jobs:
       - name: PyInstaller 打包
         shell: pwsh
         run: |
+          # 入口在仓库根（run_configtool.py）：从那里打包，PyInstaller 的搜索路径天然
+          # 就是仓库根，于是 configTool 包、以及它 import 的 core/douyin_im（连带
+          # utils/*）都会被静态分析到，不需要 --paths 或逐个 --hidden-import。
+          #
           # --collect-all playwright：cloakbrowser 底层用 playwright.sync_api，而它的
           #   driver 目录（含 node 运行时）必须一起带上，否则打包后启动浏览器会失败。
           pyinstaller --noconfirm --clean --onedir --windowed `
             --name "$env:APP_NAME" `
-            --paths configTool `
             --hidden-import cloakbrowser `
             --collect-all cloakbrowser `
             --collect-all playwright `
             --collect-all dotenv `
-            "configTool\main.py"
+            "run_configtool.py"
 
       - name: 把两个分发物放到 exe 同级
         shell: pwsh

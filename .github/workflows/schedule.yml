@@ -1,41 +1,118 @@
 name: DouYin Spark Flow Schedule Run
+
+# 定时跑一轮任务，环境在 runner 上现搭（对应 Docker 的定时 cron 形态）。
+# 配置来自 Variables / Secrets（Environment: user-data），由 export_github_env.py
+# 经 toJson 注入进程环境 —— COOKIES_<抖音号> 键名跟着账号走，没法逐条写 env 映射。
 on:
   workflow_dispatch: # 允许手动触发
   schedule: # 定时任务
     - cron: "0 1 * * *" # 每天 1:00 UTC（对应北京时间 9:00）
+
+# 同一账号并发登录会把会话挤掉
+concurrency:
+  group: douyin-spark-flow
+  cancel-in-progress: false
+
+env:
+  # 与 Dockerfile 的 CLOAK_CHROMIUM_VERSION / CLOAK_BINARY_SHA256 一致，改要一起改
+  CLOAK_CHROMIUM_VERSION: 146.0.7680.177.5
+  CLOAK_BINARY_SHA256: 4a12bcde95fa1bb1beef2b41ab5e5c27c36be78e3be3d0dac8c64d705216670e
+  CLOAKBROWSER_AUTO_UPDATE: "false"
+  PYTHONUNBUFFERED: "1"
+
 jobs:
   run-main:
-    timeout-minutes: 20
+    timeout-minutes: 40 # 首次要下字体 + Chromium + 依赖
     runs-on: ubuntu-latest
     environment: user-data
     steps:
     - uses: actions/checkout@v4
+
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
+
     - name: Test Douyin Accessibility
       run: |
         curl -I https://creator.douyin.com/
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-    - name: Ensure browsers are installed
-      run: playwright install chromium --with-deps --only-shell
+
+    # 只装依赖库；浏览器本体用下面的隐身 Chromium
+    - name: 安装 Chromium 系统依赖
+      run: python -m playwright install-deps chromium
+
+    # 缺 Windows 字体是字体指纹的破绽；失败只告警，不阻断当天任务。
+    # 这里不加 actions/cache：下载失败时目录是空的，cache 仍会把它存成正式条目，
+    # 之后每次运行都命中空缓存、下载步骤被跳过，字体就再也装不上了。
+    - name: 下载并安装 Windows 默认字体
+      continue-on-error: true
+      run: |
+        set -e
+        mkdir -p /tmp/wf
+        curl -fL --connect-timeout 15 --max-time 600 --retry 2 --retry-delay 3 \
+          -o /tmp/wf.tar.gz \
+          https://github.com/ErwinLiYH/all_win10_fonts/archive/refs/heads/main.tar.gz
+        tar -xzf /tmp/wf.tar.gz -C /tmp/wf
+
+        sudo mkdir -p /usr/share/fonts/truetype/windows
+        count=0
+        while IFS= read -r -d '' font; do
+          sudo cp -n "$font" /usr/share/fonts/truetype/windows/ && count=$((count + 1))
+        done < <(find /tmp/wf -type f \( -iname "*.ttf" -o -iname "*.ttc" -o -iname "*.otf" \) -print0)
+        sudo fc-cache -f >/dev/null 2>&1 || true
+
+        echo "==> 安装字体 $count 个"
+        fc-list | grep -qiE 'segoe ui|microsoft yahei|simsun|calibri' \
+          && echo "==> Windows 字体就绪" \
+          || echo "::warning::fc-list 里没看到关键 Windows 字体"
+
+    # 必须用 CloakHQ 的构建（cloakbrowser 启动的是自己的二进制）
+    - name: 下载隐身 Chromium
+      run: |
+        set -euo pipefail
+        tag="chromium-v${CLOAK_CHROMIUM_VERSION}"
+        url="https://github.com/CloakHQ/CloakBrowser/releases/download/${tag}/cloakbrowser-linux-x64.tar.gz"
+        echo "==> 下载 $url"
+        curl -fL --connect-timeout 15 --max-time 600 --retry 2 --retry-delay 2 \
+          -o /tmp/cb.tar.gz "$url"
+        echo "${CLOAK_BINARY_SHA256}  /tmp/cb.tar.gz" | sha256sum -c -
+
+        mkdir -p /tmp/cb_extract "$HOME/cloakbrowser"
+        tar -xzf /tmp/cb.tar.gz -C /tmp/cb_extract
+        rm -f /tmp/cb.tar.gz
+
+        chrome="$(find /tmp/cb_extract -maxdepth 6 -type f -name chrome -perm -u+x | head -n 1)"
+        test -n "${chrome}" || { echo "发布包里没找到 chrome 二进制" >&2; exit 1; }
+        # 必须整目录拷贝：icudtl.dat / *.pak / locales 缺一个都启动不了
+        cp -a "$(dirname "${chrome}")/." "$HOME/cloakbrowser/"
+        chmod +x "$HOME/cloakbrowser/chrome"
+        test -f "$HOME/cloakbrowser/icudtl.dat" || { echo "缺 icudtl.dat" >&2; exit 1; }
+
+        "$HOME/cloakbrowser/chrome" --version
+        echo "CLOAKBROWSER_BINARY_PATH=$HOME/cloakbrowser/chrome" >> "$GITHUB_ENV"
+
     - name: Export Github Environment Variables and Secrets to JSON
       env:
         VARS_JSON: ${{ toJson(vars) }}
         SECRETS_JSON: ${{ toJson(secrets) }}
       run: python utils/export_github_env.py
+
     - name: Run DouYin Spark Flow
-      run: python main.py
+      run: python main.py task
+
     - uses: actions/upload-artifact@v4
       if: ${{ !cancelled() }}
       with:
         name: run-logs
         path: logs/
+
   workflow-keepalive:
+    # 仓库 60 天没活动会被 GitHub 停掉 schedule
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     permissions:

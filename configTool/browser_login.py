@@ -5,24 +5,27 @@
     完成全部调用。因此本模块把浏览器操作封在一个后台线程里，外部只通过
     「命令队列 + 事件队列」与它交互，绝不跨线程直接碰 page / context。
   - 每个账户传入自己的 profile 目录，登录态相互隔离，可分别重新登录。
-  - 本模块属于 configTool 内部，只依赖同目录的 paths.py 与第三方包，
-    不引用仓库里其他目录，打包成 exe 后同样可用。
+  - 登录态判定与会话枚举都借主程序的 core/douyin_im.py，不在这里镜像其选择器。
 
 用法：
     worker = BrowserLoginWorker(profile_dir, fingerprint="73841")
     worker.start()
     worker.send("open")           # 启动浏览器并跳转抖音聊天页
     worker.send("probe")          # 廉价探一次：登录了吗 / 账号信息截到了吗（供自动流程轮询）
-    worker.send("grab")           # 抓取登录态
-    worker.send("conversations")  # 滚动会话列表容器，收集全部会话名
+    worker.send("grab")           # 抓取登录态（自动流程）
+    worker.send("grab", {"allow_reload": True, "deep_login": True})  # 手动「立即抓取」
+    worker.send("conversations")  # 枚举全部会话（交给 core.douyin_im 完成）
     worker.send("shutdown")       # 关闭浏览器并结束线程
 
     然后从 worker.events 里取
     ("log"|"status"|"opened"|"probe"|"grabbed"|"conversations"|
      "conversation_progress"|"error"|"done", payload)
 
-fingerprint 是该账号固定的指纹种子（存在 profiles.json 里，见 profile_store.py）。
-传空则退回 cloakbrowser 的默认行为 —— 每次启动随机一个新指纹。
+    probe / grabbed 的 payload 给两个口径：logged_in 是本地有没有 sessionid
+    （抓取门禁只看它），login_state 是 core.douyin_im 的判定（只管提示与拦截）。
+
+指纹与配置目录都取自 profiles.json（见 profile_store.py）。fingerprint 传空则退回
+cloakbrowser 的默认行为 —— 每次启动随机一个新指纹。
 """
 
 from __future__ import annotations
@@ -34,11 +37,16 @@ import threading
 import time
 from pathlib import Path
 
-import local_settings
-import paths
-from tunnel import GostTunnel
+from configTool import local_settings, paths
+from configTool.tunnel import GostTunnel
 
-CHAT_URL = "https://www.douyin.com/chat"
+# 主程序的会话扫描 / 登录态判定实现 —— 「抖音页面怎么点、怎么滚」全项目只有这一份。
+# 顶层导入依赖「仓库根在 sys.path[0] 上」，由仓库根的入口 run_configtool.py 保证；
+# 打包时 PyInstaller 会顺着这个 import 把它一起收进包（见 build-configtool.yml）。
+import core.douyin_im as douyin_im
+
+# 与 core.douyin_im.CHAT_URL 同一份，别再各写一个字符串
+CHAT_URL = douyin_im.CHAT_URL
 
 # 浏览器指纹种子开关。cloakbrowser 默认每次启动都随机一个种子
 # （config.py::get_default_stealth_args 里的 random.randint(10000, 99999)），
@@ -53,6 +61,9 @@ FINGERPRINT_FLAG = "--fingerprint="
 #   WAIT ：刷新之后愿意等多久。
 PROFILE_GRACE_SECONDS = 5.0
 PROFILE_WAIT_SECONDS = 15.0
+
+# 打开抖音聊天页时愿意等首屏多久（毫秒）。走配套代理时链路抖动很大，给宽些。
+GOTO_TIMEOUT_MS = 180_000
 
 # 只保留这些域下的 Cookie，避免把无关站点的 Cookie 灌进任务
 TARGET_DOMAINS = ("douyin.com", "bytedance.com", "snssdk.com", "iesdouyin.com", "amemv.com")
@@ -306,8 +317,8 @@ def extract_self_profile(data) -> dict:
         {
           "status_code": 0,
           "status_msg": null,
-          "user": {"nickname": "卢瞳", "unique_id": "49709841077",
-                   "short_id": "49709841077", "uid": "108672188914", ...}
+          "user": {"nickname": "示例昵称", "unique_id": "12345678901",
+                   "short_id": "12345678901", "uid": "10000000000000001", ...}
         }
 
     nickname  -> 用户名
@@ -373,98 +384,45 @@ def detect_account_info(page) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 会话列表：滚动容器，收集全部会话名
+# 会话列表：整体委托给 core/douyin_im.py
 # ---------------------------------------------------------------------------
-# 类名与主程序 core/tasks.py 里的常量完全一致（改了要同步两边）：
-#     core/tasks.py::CONVERSATION_LIST_SELECTOR  = ".conversationConversationListwrapper"
-#     core/tasks.py::CONVERSATION_ITEM_SELECTOR  = ".conversationConversationItemwrapper"
-#     core/tasks.py::CONVERSATION_TITLE_SELECTOR = ".conversationConversationItemtitle"
-# 2026-09-16 用真实登录态实测确认：容器 overflow-y:scroll，标题文本就是会话名
-# （有备注名时是备注名，与主程序 checkTargetName() 的匹配口径一致）。
-CONVERSATION_LIST_SELECTOR = ".conversationConversationListwrapper"
-CONVERSATION_ITEM_SELECTOR = ".conversationConversationItemwrapper"
-CONVERSATION_TITLE_SELECTOR = ".conversationConversationItemtitle"
-
-# 会话列表等待/滚动节奏
-CONVERSATION_LIST_WAIT_SECONDS = 30.0  # 打开聊天页后等容器出现
-CONVERSATION_SCROLL_WAIT_MS = 700      # 每次滚动后等多久，让列表把新一批渲染出来
-CONVERSATION_MAX_EMPTY_ROUNDS = 6      # 连续这么多轮既无新名字也无新内容 → 判定到底
-CONVERSATION_MAX_ROUNDS = 400          # 硬上限，避免异常页面把线程卡死
-CONVERSATION_TIMEOUT_SECONDS = 180.0   # 硬超时
-
-# 一次 evaluate 同时完成「读名字」+「往下滚一格」，并把滚动指标带回来。
-# 只读 DOM，不点击、不输入，所以不会有任何副作用。
-_CONVERSATION_JS = r"""
-() => {
-  const LIST_SEL = ".conversationConversationListwrapper";
-  const TITLE_SEL = ".conversationConversationItemtitle";
-
-  let wrapper = document.querySelector(LIST_SEL);
-  if (!wrapper) {
-    // 类名万一变了也不至于完全瞎掉：退一步找「同时带 ConversationList 与 wrapper」的容器
-    wrapper = document.querySelector('[class*="ConversationList"][class*="wrapper"]');
-  }
-  if (!wrapper) {
-    return { ok: false, reason: "no-wrapper", names: [] };
-  }
-
-  const clean = (text) => String(text == null ? "" : text).replace(/\s+/g, " ").trim();
-
-  let nodes = wrapper.querySelectorAll(TITLE_SEL);
-  if (!nodes.length) {
-    // 退一步：同时含 "Item" 与 "title" 的类名（大小写都认）
-    nodes = wrapper.querySelectorAll('[class*="Item"][class*="title"], [class*="Item"][class*="Title"]');
-  }
-
-  const names = [];
-  for (const node of nodes) {
-    const text = clean(node.innerText != null ? node.innerText : node.textContent);
-    if (text) names.push(text);
-  }
-
-  const before = wrapper.scrollTop;
-  const step = Math.max(400, Math.round(wrapper.clientHeight * 0.85));
-  wrapper.scrollTop = before + step;
-  const after = wrapper.scrollTop;
-
-  return {
-    ok: true,
-    names: names,
-    before: before,
-    after: after,
-    moved: after !== before,
-    atBottom: after + wrapper.clientHeight >= wrapper.scrollHeight - 2,
-    scrollHeight: wrapper.scrollHeight,
-    clientHeight: wrapper.clientHeight,
-  };
-}
-"""
-
-# 收尾用：滚回顶部（headful 排错时能看到列表开头）
-_CONVERSATION_TOP_JS = r"""
-() => {
-  const w = document.querySelector(".conversationConversationListwrapper");
-  if (w) w.scrollTop = 0;
-  return !!(w && w.scrollTop === 0);
-}
-"""
-
-# 容器是否已渲染出来
-_CONVERSATION_READY_JS = r"""
-() => !!document.querySelector(".conversationConversationListwrapper")
-"""
+# 滚动逻辑只在主程序的 core/douyin_im 里实现一份，本文件不镜像它的选择器。
+# 下面几个常量是喂给 DouyinIM 的入参（语义与 utils/config.py 里同名项一致）。
+CONVERSATION_READY_TIMEOUT_SECONDS = 45.0  # 门禁等待：登录态 + 会话列表就绪
+CONVERSATION_SCAN_TIMEOUT_SECONDS = 180.0  # 滚动扫描总预算（秒）
+CONVERSATION_SETTLE_MS = 800               # 每批新会话等的资料静默窗（毫秒）
+CONVERSATION_MAX_STEPS = 400               # 滚动步数硬上限
+CONVERSATION_PROGRESS_EVERY = 5            # 每收满这么多条就报一次进度
+CONVERSATION_HEARTBEAT_SECONDS = 10.0      # 长时间没有新会话时的心跳间隔
 
 
-def merge_names(seen: list, seen_set: set, incoming) -> int:
-    """把本轮读到的名字并入累积列表（按首次出现顺序去重），返回新增个数。"""
-    added = 0
-    for raw in incoming or []:
-        name = str(raw or "").strip()
-        if name and name not in seen_set:
-            seen_set.add(name)
-            seen.append(name)
-            added += 1
-    return added
+def _display_name(item: dict) -> str:
+    """把 DouyinIM 给出的会话项折成显示名（display 已是「备注 > 昵称 > 标题」）。"""
+    return str(item.get("display") or item.get("title") or "").strip()
+
+
+def _ready_error(res: dict) -> str:
+    """把 DouyinIM 的门禁结论翻译成给用户看的话。"""
+    status = res.get("status")
+    if status == douyin_im.STATUS_LOGGED_OUT:
+        return (
+            "这个账号的浏览器配置里没有登录态。\n\n"
+            "请先点「刷新登录信息」重新登录一次，再来拉取会话列表。"
+        )
+    if status == douyin_im.STATUS_EXPIRED:
+        return (
+            "登录态已失效（本地还存着 sessionid，但服务端已经不认了）。\n\n"
+            "请点「刷新登录信息」重新扫码登录，再来拉取会话列表。"
+        )
+    if status == douyin_im.STATUS_LOGIN_LOST:
+        return "拉取过程中登录失效了，请重新登录后再试。"
+    if status == douyin_im.STATUS_TIMEOUT:
+        return (
+            f"等了 {CONVERSATION_READY_TIMEOUT_SECONDS:.0f} 秒也没等到会话列表就绪。\n\n"
+            "常见原因：网络太慢，或者抖音改了页面结构。\n"
+            "可以先勾选「显示浏览器窗口」重试，看看究竟停在哪一步。"
+        )
+    return f"没能拿到会话列表（{status}）。\n\n可以先勾选「显示浏览器窗口」重试看看。"
 
 
 # ---------------------------------------------------------------------------
@@ -495,6 +453,8 @@ class BrowserLoginWorker(threading.Thread):
         self.events: queue.Queue = events or queue.Queue()
         self.ctx = None
         self.page = None
+        # core.douyin_im 的只读监听：判定登录态要用它（它收的是抖音自己的响应）
+        self.mon = None
         # 账号信息拦截状态（只在工作线程里读写）
         self.self_profile = None  # Python 侧截到的响应原文
         self.self_status = None  # 最近一次该接口的 {code, msg}，未登录时也有值
@@ -539,7 +499,7 @@ class BrowserLoginWorker(threading.Thread):
                 elif command == "probe":
                     self._probe()
                 elif command == "grab":
-                    self._grab()
+                    self._grab(payload)
                 elif command == "conversations":
                     self._conversations()
                 elif command == "shutdown":
@@ -555,11 +515,68 @@ class BrowserLoginWorker(threading.Thread):
     def _reset(self) -> None:
         self.ctx = None
         self.page = None
+        self.mon = None
         self.self_profile = None
         self.self_status = None
         self.self_error = ""
         self._interceptors_ready = False
         self.custom_page = False
+
+    # -- 登录态判定（借 core/douyin_im） -------------------------------------
+    def _login_verdict(self, *, deep: bool = False) -> dict:
+        """登录态判定，复用 ``core.douyin_im.check_login``。
+
+        不参与「能不能开始抓」的决定（那个门禁是 ``_has_login_cookie``）：
+        check_login 的 DOM 兜底只要求页面上有 ``[data-e2e="msg-input"]``，
+        登录过程中的壳页面也满足，据此触发抓取会打断用户正在进行的登录。
+
+        默认只读 ImMonitor 已收到的 SSR；``deep=True`` 才允许序列化整页 DOM。
+        """
+        ssr = dict(getattr(self.mon, "login", None) or {})
+
+        # 与 core/douyin_im.check_login 的口径完全对齐：logged_in 还必须带 user_id
+        if ssr.get("verdict") == "logged_in" and ssr.get("user_id"):
+            return {
+                "state": "LOGGED_IN",
+                "user_id": str(ssr["user_id"]),
+                "nickname": str(ssr.get("nickname") or ""),
+                "sec_uid": str(ssr.get("sec_uid") or ""),
+                "log": "[LOGIN] ✅ 已登录（SSR）",
+            }
+
+        if ssr.get("verdict") == "logged_out":
+            # SSR 说未登录，但本地还留着 sessionid → 服务端已经把它作废了
+            expired = self._has_login_cookie()
+            return {
+                "state": "EXPIRED" if expired else "NOT_LOGGED_IN",
+                "user_id": "",
+                "nickname": "",
+                "sec_uid": "",
+                "log": "[LOGIN] "
+                + ("⚠️ 登录已失效（SSR 说未登录，但本地有 sessionid）"
+                   if expired else "⛔ 未登录（SSR）"),
+            }
+
+        if not deep:
+            return {
+                "state": "UNKNOWN",
+                "user_id": "",
+                "nickname": "",
+                "sec_uid": "",
+                "log": "[LOGIN] ❓ 还没拿到结论",
+            }
+
+        try:
+            return douyin_im.check_login(self.page, self.mon)
+        except Exception as exc:
+            self.log(f"登录态判定出错（按未知处理）：{type(exc).__name__}: {exc}")
+            return {
+                "state": "UNKNOWN",
+                "user_id": "",
+                "nickname": "",
+                "sec_uid": "",
+                "log": "[LOGIN] ❓ 判定失败",
+            }
 
     # -- 账号信息拦截 -------------------------------------------------------
     def _attach_interceptors(self) -> None:
@@ -710,13 +727,18 @@ class BrowserLoginWorker(threading.Thread):
         }
         return result
 
-    def read_account_info(self, *, trigger: bool = True, grace: float | None = None) -> dict:
+    def read_account_info(
+        self, *, trigger: bool = True, grace: float | None = None, allow_reload: bool = True
+    ) -> dict:
         """分层获取账号信息，拿不到就返回空值（绝不抛异常）。
 
         第 1 层：拦截 `/aweme/v1/web/user/profile/self` 的响应
         第 2 层：原地等一小会儿（请求通常只比 goto 晚几百毫秒）
-        第 3 层：刷新页面，等抖音自己再请求一次
+        第 3 层：刷新页面，等抖音自己再请求一次 —— 受 allow_reload 控制
         第 4 层：扫 localStorage
+
+        自动流程必须传 allow_reload=False：用户可能正在扫码 / 等验证码，
+        刷新会打断他的登录流程。
         """
         result = self._collect_captured()
         if result["nickname"] or result["unique_id"]:
@@ -732,10 +754,16 @@ class BrowserLoginWorker(threading.Thread):
             if result:
                 return result
 
-            self._reload_for_profile()
-            result = self._collect_captured()
-            if result["nickname"] or result["unique_id"]:
-                return result
+            if allow_reload:
+                self._reload_for_profile()
+                result = self._collect_captured()
+                if result["nickname"] or result["unique_id"]:
+                    return result
+            else:
+                self.log(
+                    "没截到账号信息；当前不允许自动刷新页面（怕打断正在进行的登录）"
+                    " —— 请在浏览器窗口里按 F5 刷新一次，之后会自动重试"
+                )
         else:
             result = self._collect_captured()
 
@@ -750,8 +778,8 @@ class BrowserLoginWorker(threading.Thread):
         """廉价地看一眼当前状态，供界面的自动流程轮询。
 
         只读不改：不刷新页面、不等待、不抓 Cookie，所以 1.5 秒探一次也不会
-        打扰用户。顺带做一次 page.evaluate —— 这个调用会把排队中的响应回调
-        派发掉（工作线程平时阻塞在 Queue.get 上，Playwright 事件不会自己跑）。
+        打扰用户。顺带读一次 Python 侧缓存，把排队中的响应回调派发掉
+        （工作线程平时阻塞在 Queue.get 上，Playwright 事件不会自己跑）。
         """
         if not self.is_running():
             self._reset()
@@ -760,6 +788,7 @@ class BrowserLoginWorker(threading.Thread):
                 {
                     "running": False,
                     "logged_in": False,
+                    "login_state": "",
                     "detected": extract_self_profile(None),
                     "api_status": None,
                     "url": "",
@@ -767,10 +796,17 @@ class BrowserLoginWorker(threading.Thread):
             )
             return
 
+        # 门禁只看 Cookie（要存进 .env 的就是它），页面级信号可能说谎（见 _login_verdict）
         logged_in = self._has_login_cookie()
+        verdict = self._login_verdict()
+
         detected = (
             self._collect_captured() if logged_in else extract_self_profile(None)
         )
+        # 抖音号只有接口给得出来；昵称可先用库的结论兜底
+        if not detected.get("nickname") and verdict.get("nickname"):
+            detected["nickname"] = verdict["nickname"]
+
         url = ""
         try:
             url = self.page.url
@@ -782,146 +818,101 @@ class BrowserLoginWorker(threading.Thread):
             {
                 "running": True,
                 "logged_in": logged_in,
+                "login_state": verdict.get("state") or "",
                 "detected": detected,
                 "api_status": self.self_status,
                 "url": url,
             },
         )
 
-    # -- 会话列表 -----------------------------------------------------------
-    def _wait_for_conversation_list(self, timeout: float | None = None) -> bool:
-        """等会话列表容器渲染出来。用 Playwright 的等待，它会派发事件。"""
-        deadline = time.monotonic() + (
-            CONVERSATION_LIST_WAIT_SECONDS if timeout is None else timeout
-        )
-        while time.monotonic() < deadline:
-            try:
-                if self.page.evaluate(_CONVERSATION_READY_JS):
-                    return True
-            except Exception:
-                return False
-            try:
-                self.page.wait_for_timeout(500)
-            except Exception:
-                return False
-        return False
-
-    def read_conversation_list(self) -> tuple:
-        """滚动会话列表容器，收集全部会话名。
-
-        返回 (名字列表, 统计信息)。名字按首次出现的顺序排列，已去重。
-
-        判定「到底了」用的是三重信号叠加（比只看行数稳）：
-          · 这一轮没有读到新名字
-          · scrollHeight 没有变大（说明没有在加载新的一批）
-          · scrollTop 已经推不动了（滚到底）
-        连续 CONVERSATION_MAX_EMPTY_ROUNDS 轮都没有进展才收手 —— 抖音的列表是
-        滚动到底部才去请求下一页，中间会出现「滚了但还没数据」的空档，
-        收得太快会漏掉最后一批。
-        """
-        seen: list = []
-        seen_set: set = set()
-        empty_rounds = 0
-        rounds = 0
-        prev_height = -1
-        started = time.monotonic()
-        last: dict = {}
-
-        while rounds < CONVERSATION_MAX_ROUNDS:
-            if time.monotonic() - started > CONVERSATION_TIMEOUT_SECONDS:
-                self.log("会话列表拉取超时，先用已经拿到的部分")
-                break
-
-            rounds += 1
-            try:
-                state = self.page.evaluate(_CONVERSATION_JS)
-            except Exception as exc:
-                self.log(f"读取会话列表出错：{type(exc).__name__}: {exc}")
-                break
-
-            if not isinstance(state, dict) or not state.get("ok"):
-                if rounds == 1:
-                    self.log("页面上没找到会话列表容器，可能登录态已失效")
-                break
-
-            last = state
-            added = merge_names(seen, seen_set, state.get("names"))
-
-            height = int(state.get("scrollHeight") or 0)
-            grew = height > prev_height
-            prev_height = height
-
-            if added or grew:
-                empty_rounds = 0
-            else:
-                empty_rounds += 1
-                if not state.get("moved"):
-                    # 滚不动了，加速判定：正常到底时不必再耗满 MAX_EMPTY_ROUNDS 轮
-                    empty_rounds += 1
-
-            if added:
-                self.emit(
-                    "conversation_progress",
-                    {"count": len(seen), "rounds": rounds},
-                )
-            elif rounds % 10 == 0:
-                # 长时间没有新增时给个心跳，界面上能看出还在跑
-                self.emit(
-                    "conversation_progress",
-                    {"count": len(seen), "rounds": rounds, "waiting": True},
-                )
-
-            if empty_rounds >= CONVERSATION_MAX_EMPTY_ROUNDS:
-                break
-
-            try:
-                self.page.wait_for_timeout(CONVERSATION_SCROLL_WAIT_MS)
-            except Exception:
-                break
-
-        # 收尾：滚回顶部（headful 排错时能看到列表开头）
-        try:
-            self.page.evaluate(_CONVERSATION_TOP_JS)
-        except Exception:
-            pass
-
-        stats = {
-            "rounds": rounds,
-            "elapsed": round(time.monotonic() - started, 1),
-            "hit_bottom": empty_rounds >= CONVERSATION_MAX_EMPTY_ROUNDS,
-            "scroll_height": last.get("scrollHeight"),
-            "client_height": last.get("clientHeight"),
-        }
-        return seen, stats
-
+    # -- 会话列表（委托 core/douyin_im.DouyinIM） ----------------------------
     def _conversations(self) -> None:
-        """会话列表拉取入口（工作线程内执行）。"""
+        """枚举会话列表（工作线程内执行）。
+
+        打开聊天页、门禁、滚动枚举都交给 core.douyin_im.DouyinIM，本方法只把进度
+        翻译成界面事件、把结论发出去。DouyinIM 会自己再导航一次聊天页（它的契约是
+        先挂钩子再导航），这一趟重复加载是有意的。
+        """
         if not self.is_running():
             self._reset()
             self.emit("error", "浏览器未运行（可能已被手动关闭），请重试")
             return
 
-        if not self.custom_page and not self._has_login_cookie():
-            self.emit(
-                "error",
-                "这个账号的浏览器配置里没有登录态（找不到 sessionid）。\n\n"
-                "请先点「刷新登录信息」重新登录一次，再来拉取会话列表。",
+        self.emit("status", "正在打开聊天页并检查登录态…")
+        try:
+            im = douyin_im.DouyinIM(
+                self.page,
+                timeout=CONVERSATION_SCAN_TIMEOUT_SECONDS,
+                max_steps=CONVERSATION_MAX_STEPS,
+                settle_ms=CONVERSATION_SETTLE_MS,
+                ready_timeout=CONVERSATION_READY_TIMEOUT_SECONDS,
             )
+        except Exception as exc:
+            self.emit("error", f"会话扫描初始化失败：{type(exc).__name__}: {exc}")
             return
 
-        self.emit("status", "正在加载会话列表…")
-        if not self._wait_for_conversation_list():
-            self.emit(
-                "error",
-                "没能等到会话列表出现（页面上找不到 "
-                f"{CONVERSATION_LIST_SELECTOR}）。\n\n"
-                "常见原因：登录态已失效、网络太慢，或者抖音改了页面结构。\n"
-                "可以先勾选「显示浏览器窗口」重试，看看到底停在哪一步。",
-            )
+        res = im.wait_ready()
+        if res.get("status") != douyin_im.STATUS_READY:
+            self.emit("error", _ready_error(res))
             return
 
+        self.log(
+            f"门禁通过：user_id={res.get('user_id') or '-'} "
+            f"nickname={res.get('nickname') or '-'}"
+        )
         self.emit("status", "正在滚动加载全部会话…")
-        names, stats = self.read_conversation_list()
+
+        names: list = []
+        seen: set = set()
+        reported = 0
+        started = time.monotonic()
+        last_beat = started
+        try:
+            for item in im.iter_conversations():
+                name = _display_name(item)
+                if name and name not in seen:
+                    seen.add(name)
+                    names.append(name)
+
+                # 进度节流：攒够 N 个报一次，长时间无新增时按心跳报，避免界面像卡死
+                now = time.monotonic()
+                grew = len(names) != reported
+                if (grew and len(names) - reported >= CONVERSATION_PROGRESS_EVERY) or (
+                    now - last_beat >= CONVERSATION_HEARTBEAT_SECONDS
+                ):
+                    self.emit(
+                        "conversation_progress",
+                        {"count": len(names), "waiting": not grew},
+                    )
+                    reported = len(names)
+                    last_beat = now
+        except Exception as exc:
+            self.log(f"枚举会话时出错（用已经拿到的部分）：{type(exc).__name__}: {exc}")
+
+        elapsed = round(time.monotonic() - started, 1)
+        scan = im.last_scan or {}
+
+        # 折叠组 / 陌生人组是独立滚动容器，主列表扫不到（core/tasks.py 也会提醒）
+        try:
+            folds = im.fold_groups() or {}
+            hidden = sum(len(v or []) for v in folds.values())
+        except Exception:
+            hidden = 0
+        if hidden:
+            self.log(f"注意：折叠组 / 陌生人组里还有 {hidden} 个会话，主列表扫不到，未计入")
+
+        try:
+            im.detach()
+        except Exception:
+            pass
+
+        stats = {
+            "rounds": scan.get("steps"),
+            "elapsed": elapsed,
+            "hit_bottom": bool(scan.get("scanned_all")),
+            "visited": scan.get("visited"),
+            "stopped": scan.get("stopped"),
+        }
         self.emit("conversations", {"names": names, "stats": stats})
 
     def _open(self, payload=None) -> None:
@@ -996,16 +987,39 @@ class BrowserLoginWorker(threading.Thread):
             raise
         self.log("隐身 Chromium 已启动" + ("（无头模式）" if self.headless else ""))
 
+        # 统一放宽导航超时，让 DouyinIM 内部不传 timeout 的 goto 也受益
+        # （Playwright 默认只有 30s，走代理时几乎必超）
+        try:
+            self.ctx.set_default_navigation_timeout(GOTO_TIMEOUT_MS)
+        except Exception as exc:
+            self.log(f"设置导航超时失败（用各自默认值继续）：{type(exc).__name__}: {exc}")
+
         pages = [p for p in self.ctx.pages if not p.is_closed()]
         self.page = pages[0] if pages else self.ctx.new_page()
 
-        # 必须在 goto 之前：抖音在页面加载时就会请求账号信息接口
+        # 下面两个钩子都**必须早于 goto**（这是 core/douyin_im 的契约）：
+        #   ImMonitor           登录态就写在聊天页首屏的 SSR HTML 里，挂晚了就漏，
+        #                       之后只能退回去序列化整个 DOM 才能判定
+        #   _attach_interceptors 抖音自己的脚本在页面加载时就会请求账号信息接口
+        self.mon = douyin_im.ImMonitor(self.page)
         self._attach_interceptors()
 
         target_url = url or CHAT_URL
         self.custom_page = bool(url)
         self.log(f"跳转 {target_url}")
-        self.page.goto(target_url, wait_until="domcontentloaded", timeout=90_000)
+        self.emit("status", "正在打开抖音聊天页…（走配套代理，慢的时候要等一会儿）")
+        try:
+            self.page.goto(
+                target_url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS
+            )
+        except Exception as exc:
+            # 超时 ≠ 导航失败：Playwright 只中止「等待」，请求仍在继续，页面随后可能就绪。
+            # 这里按致命错误收场的话 opened 事件发不出去，探针就永远不启动。
+            reason = " ".join(str(exc).split())      # 异常里带多行 Call log，压成一行
+            self.log(
+                f"首屏加载等待超时（{GOTO_TIMEOUT_MS // 1000}s）——"
+                f"导航仍在继续，继续等页面就绪：{reason}"
+            )
 
         if self.custom_page:
             # 自定义页面（回归脚本 / 排错），不做登录态判断
@@ -1027,7 +1041,16 @@ class BrowserLoginWorker(threading.Thread):
         except Exception:
             return False
 
-    def _grab(self) -> None:
+    def _grab(self, payload=None) -> None:
+        """抓取登录信息。
+
+        payload 两个开关默认都关，由 login_dialog 按场景打开：
+        allow_reload 允许刷新页面；deep_login 允许跑 check_login 的完整判定。
+        """
+        options = payload if isinstance(payload, dict) else {}
+        allow_reload = bool(options.get("allow_reload"))
+        deep_login = bool(options.get("deep_login"))
+
         if not self.is_running():
             self._reset()
             self.emit("error", "浏览器未运行（可能已被手动关闭），请先点『打开浏览器』")
@@ -1070,13 +1093,24 @@ class BrowserLoginWorker(threading.Thread):
         except Exception:
             user_agent = ""
 
-        info = self.read_account_info()
+        info = self.read_account_info(allow_reload=allow_reload)
+        # 放在 read_account_info 之后：允许刷新时它会刷新页面，
+        # 刷新后重新收到的 SSR 才是当下的登录态。
+        verdict = self._login_verdict(deep=deep_login)
 
         self.emit(
             "grabbed",
             {
                 "cookies": cookies,
+                # 「抓到的 cookie 里有没有 sessionid」—— 决定这份 Cookie 存下来有没有用
                 "logged_in": any(c["name"] in LOGIN_COOKIE_NAMES for c in cookies),
+                # 「服务端认不认这个登录态」—— 决定这次抓取该不该算成功
+                # （两者都要满足：cookie 里没 sessionid 存了也白存；
+                #   有 sessionid 但已失效，存下去只会让主程序跑到一半掉登录）
+                "login_state": verdict.get("state") or "",
+                "login_log": verdict.get("log") or "",
+                # SSR 里带着昵称但没带抖音号；接口没截到时用它兜个底
+                "login_nickname": verdict.get("nickname") or "",
                 "total": len(raw),
                 "user_agent": user_agent,
                 "local_storage": local_storage,

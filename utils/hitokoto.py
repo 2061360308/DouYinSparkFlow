@@ -1,4 +1,7 @@
+import re
+
 import requests
+
 from utils.config import get_config
 
 hitokotoApi = "https://v1.hitokoto.cn/"
@@ -43,6 +46,13 @@ def request_hitokoto():
         theFromWho = data.get("from_who")
         if theFromWho is None or theFromWho.strip() == "":
             theFromWho = "未知作者"
-        return f"{data['hitokoto']} —— {theFrom} ({theFromWho})"
+        # 一言正文/来源/作者都可能带换行，直接拼进模板会把行结构拆散
+        # （模板靠 \n 分行发送）。这里统一拍平成单行：连续空白收成一个空格。
+        # 用 .get 而不是下标：缺字段时原样抛 KeyError 会被下面的 except 吞掉，
+        # 退化成"[error] 无法获取一言内容"，问题被掩盖。
+        quote = re.sub(r"\s+", " ", str(data.get("hitokoto", ""))).strip()
+        theFrom = re.sub(r"\s+", " ", theFrom).strip()
+        theFromWho = re.sub(r"\s+", " ", theFromWho).strip()
+        return f"{quote} —— {theFrom} ({theFromWho})"
     except Exception as e:
         return "[error] 无法获取一言内容"

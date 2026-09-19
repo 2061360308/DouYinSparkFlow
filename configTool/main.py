@@ -1,28 +1,23 @@
 """DouYinSparkFlow 本地配置生成器（tkinter）。
 
 把 docs/index.html 的功能搬到本地：左侧环境变量预览，右侧「基础配置 / 账户配置」，
-所有改动自动写回程序目录下的 .env，启动时自动载入。
+所有改动自动写回项目根目录的 .env，启动时自动载入。
 
 账户信息全部自动化：
   - 用户名 / 抖音号 / Cookies 都由浏览器登录后自动抓取，界面上只读（手填只会填错）
   - 每个账号用自己独立的浏览器配置目录，对照关系记在 profiles.json
   - 「刷新登录信息」用该账号原来的配置目录重开浏览器，不必重新扫码
+  - 登录态判定与会话扫描都借主程序的 core/douyin_im.py（见 browser_login.py）
 
 目标好友：
   - 手填之外，多了一条「拉取会话列表」——用该账号自己的浏览器配置（无头）打开抖音，
-    自动滚动会话列表容器、收全部会话名，存进 profiles.json，之后直接在界面里点选
+    由 core.douyin_im 滚动枚举全部会话名，存进 profiles.json，之后直接在界面里点选
   - 抓到的名单存在 profiles.json（本工具自己的元数据），**不写进 .env**
 
-运行：
-    cd configTool
-    python main.py
+运行（从仓库根，唯一入口）：
+    python run_configtool.py
 
-本目录完全自包含（打包成 exe 后同样成立）：
-  - .env、profiles/、profiles.json 都生成在本目录，跟着程序走
-  - 只依赖同目录内的模块与第三方包，不引用仓库里其他目录
-
-生成好的 .env 需要放到主程序的运行目录才会生效：
-  本地运行 → 项目根目录（与 main.py 同级）；Docker → ./config/.env
+文件位置见 paths.py：.env 在项目根，profiles/ 等在本目录。
 """
 
 from __future__ import annotations
@@ -34,15 +29,16 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 
-import env_store
-import local_settings
-import profile_store
-from conversation_dialog import ConversationDialog
-from login_dialog import LoginDialog
-from models import (
-    BROWSER_TIMEOUT_RANGE,
+from configTool import env_store, local_settings, profile_store
+from configTool.conversation_dialog import ConversationDialog
+from configTool.login_dialog import LoginDialog
+from configTool.models import (
+    BROWSER_ACTION_TIMEOUT_RANGE,
     FRIEND_LIST_WAIT_RANGE,
     HITOKOTO_OPTIONS,
+    IM_MAX_STEPS_RANGE,
+    IM_READY_TIMEOUT_RANGE,
+    IM_SCAN_TIMEOUT_RANGE,
     LOG_LEVEL_OPTIONS,
     RETRY_TIMES_RANGE,
     TZ_OPTIONS,
@@ -52,7 +48,13 @@ from models import (
     split_run_time,
     validate,
 )
-from widgets import FONT_MONO, FONT_UI, ConversationPicker, ScrolledText
+from configTool.widgets import (
+    FONT_MONO,
+    FONT_UI,
+    ConversationPicker,
+    ScrolledText,
+    harden_wheel,
+)
 
 AUTOSAVE_DELAY_MS = 1500
 
@@ -157,6 +159,8 @@ class ConfigApp:
         self._conversation_owner = None      # 选择器里现在装的是哪个账号
 
         self._build_ui()
+        # 数值框 / 下拉框被滚轮路过就改值（ttk 自带行为），而 trace_add 会立刻存进 .env
+        self.wheel_guarded = harden_wheel(self.root)
         self._load_into_ui()
         self._loading = False
 
@@ -215,7 +219,7 @@ class ConfigApp:
         ttk.Label(header, text="DouYinSparkFlow 配置生成器", font=("Microsoft YaHei UI", 13, "bold")).pack(anchor="w")
         ttk.Label(
             header,
-            text="所有改动都会自动写入本目录下的 .env —— 左侧预览的就是真实写入内容",
+            text="所有改动都会自动写入 .env（位置见下方状态栏）—— 左侧预览的就是真实写入内容",
             font=FONT_UI,
             foreground="#5F5E5A",
         ).pack(anchor="w", pady=(2, 0))
@@ -417,25 +421,58 @@ class ConfigApp:
             box.grid(row=index // 4, column=index % 4, sticky="w", padx=(0, 14), pady=2)
             self.hitokoto_vars[option] = var
 
-        label("浏览器操作最长等待时间", "毫秒，默认即可")
+        label("浏览器操作最长等待时间", "秒，默认即可（单次导航/点击的等待上限）")
         self.var_timeout = tk.IntVar()
         ttk.Spinbox(
             form,
-            from_=BROWSER_TIMEOUT_RANGE[0],
-            to=BROWSER_TIMEOUT_RANGE[1],
-            increment=1000,
+            from_=BROWSER_ACTION_TIMEOUT_RANGE[0],
+            to=BROWSER_ACTION_TIMEOUT_RANGE[1],
+            increment=10,
             textvariable=self.var_timeout,
             font=FONT_UI,
         ).pack(fill="x")
 
-        label("好友列表等待时间", "毫秒，网络慢可调大")
+        label("扫描总预算", "秒，超时即停；未找到的目标不代表不存在")
+        self.var_scan_timeout = tk.IntVar()
+        ttk.Spinbox(
+            form,
+            from_=IM_SCAN_TIMEOUT_RANGE[0],
+            to=IM_SCAN_TIMEOUT_RANGE[1],
+            increment=10,
+            textvariable=self.var_scan_timeout,
+            font=FONT_UI,
+        ).pack(fill="x")
+
+        label("门禁等待上限", "秒，登录校验 + 会话列表就绪的等待上限")
+        self.var_ready_timeout = tk.IntVar()
+        ttk.Spinbox(
+            form,
+            from_=IM_READY_TIMEOUT_RANGE[0],
+            to=IM_READY_TIMEOUT_RANGE[1],
+            increment=5,
+            textvariable=self.var_ready_timeout,
+            font=FONT_UI,
+        ).pack(fill="x")
+
+        label("好友列表等待时间", "秒，网络慢可调大（会拖慢扫描）")
         self.var_friend_wait = tk.IntVar()
         ttk.Spinbox(
             form,
             from_=FRIEND_LIST_WAIT_RANGE[0],
             to=FRIEND_LIST_WAIT_RANGE[1],
-            increment=1000,
+            increment=1,
             textvariable=self.var_friend_wait,
+            font=FONT_UI,
+        ).pack(fill="x")
+
+        label("滚动步数上限", "步，步长 = 可视高度 40%")
+        self.var_max_steps = tk.IntVar()
+        ttk.Spinbox(
+            form,
+            from_=IM_MAX_STEPS_RANGE[0],
+            to=IM_MAX_STEPS_RANGE[1],
+            increment=50,
+            textvariable=self.var_max_steps,
             font=FONT_UI,
         ).pack(fill="x")
 
@@ -463,7 +500,10 @@ class ConfigApp:
             self.var_minute,
             self.var_second,
             self.var_timeout,
+            self.var_scan_timeout,
+            self.var_ready_timeout,
             self.var_friend_wait,
+            self.var_max_steps,
             self.var_retry,
         ):
             var.trace_add("write", self._on_field_changed)
@@ -716,8 +756,11 @@ class ConfigApp:
         self.template_text.edit_modified(False)
         for option, var in self.hitokoto_vars.items():
             var.set(option in config.hitokoto_types)
-        self.var_timeout.set(int(config.browser_timeout))
+        self.var_timeout.set(int(config.browser_action_timeout))
+        self.var_scan_timeout.set(int(config.im_scan_timeout))
+        self.var_ready_timeout.set(int(config.im_ready_timeout))
         self.var_friend_wait.set(int(config.friend_list_wait_time))
+        self.var_max_steps.set(int(config.im_max_steps))
         self.var_retry.set(int(config.task_retry_times))
         self.var_log_level.set(config.log_level)
 
@@ -742,11 +785,20 @@ class ConfigApp:
         config.tz = self.var_tz.get().strip() or "Asia/Shanghai"
         config.message_template = self.template_text.get("1.0", "end-1c")
         config.hitokoto_types = [name for name, var in self.hitokoto_vars.items() if var.get()]
-        config.browser_timeout = self._safe_int(
-            self.var_timeout, config.browser_timeout, *BROWSER_TIMEOUT_RANGE
+        config.browser_action_timeout = self._safe_int(
+            self.var_timeout, config.browser_action_timeout, *BROWSER_ACTION_TIMEOUT_RANGE
+        )
+        config.im_scan_timeout = self._safe_int(
+            self.var_scan_timeout, config.im_scan_timeout, *IM_SCAN_TIMEOUT_RANGE
+        )
+        config.im_ready_timeout = self._safe_int(
+            self.var_ready_timeout, config.im_ready_timeout, *IM_READY_TIMEOUT_RANGE
         )
         config.friend_list_wait_time = self._safe_int(
             self.var_friend_wait, config.friend_list_wait_time, *FRIEND_LIST_WAIT_RANGE
+        )
+        config.im_max_steps = self._safe_int(
+            self.var_max_steps, config.im_max_steps, *IM_MAX_STEPS_RANGE
         )
         config.task_retry_times = self._safe_int(
             self.var_retry, config.task_retry_times, *RETRY_TIMES_RANGE
@@ -1300,20 +1352,17 @@ class ConfigApp:
             messagebox.showinfo(
                 "校验结果",
                 "全部通过。\n\n"
-                f"把 {self.env_path.name} 放到主程序的运行目录即可生效：\n"
-                "  本地运行 → 项目根目录（与 main.py 同级）\n"
-                "  Docker  → ./config/.env",
+                f"{self.env_path.name} 就写在下面这个位置，主程序直接用：\n"
+                f"  {self.env_path}\n"
+                "  Docker → 复制 / 挂载为 ./config/.env",
             )
             return
         lines = [f"[{level}] {message}" for level, message in self.issues]
         messagebox.showinfo("校验结果", "\n\n".join(lines))
 
     def on_open_env_dir(self) -> None:
-        """打开程序目录（.env、profiles.json、profiles/ 都在这里）。
-
-        .env 需要复制到主程序的运行目录才会生效，所以给一个直达入口。
-        """
-        self._open_folder(self.env_path.parent, "程序目录")
+        """打开 .env 所在目录。"""
+        self._open_folder(self.env_path.parent, "配置所在目录")
 
     def on_open_profile_dir(self) -> None:
         """打开当前账号的浏览器配置目录。"""

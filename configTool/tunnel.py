@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-import paths
+from configTool import paths
 
 # 等待隧道就绪的最长时长（秒）：冷启动 + TLS 握手 + ws 升级都在这里
 READY_TIMEOUT = 20.0
