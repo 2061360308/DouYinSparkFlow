@@ -187,12 +187,24 @@
                                     </el-checkbox-group>
                                 </el-form-item>
                                 <el-form-item label="浏览器操作最长等待时间">
-                                    <el-input-number v-model="form.BROWSER_TIMEOUT" :step="1000" :precision="0"
-                                        :min="5000" :max="300000" />
+                                    <el-input-number v-model="form.BROWSER_ACTION_TIMEOUT" :step="10" :precision="0"
+                                        :min="5" :max="300" />
+                                </el-form-item>
+                                <el-form-item label="扫描总预算">
+                                    <el-input-number v-model="form.IM_SCAN_TIMEOUT" :step="10" :precision="0"
+                                        :min="10" :max="1800" />
+                                </el-form-item>
+                                <el-form-item label="门禁等待上限">
+                                    <el-input-number v-model="form.IM_READY_TIMEOUT" :step="5" :precision="0"
+                                        :min="5" :max="300" />
                                 </el-form-item>
                                 <el-form-item label="好友列表等待时间">
-                                    <el-input-number v-model="form.FRIEND_LIST_WAIT_TIME" :step="1000" :precision="0"
-                                        :min="1000" :max="120000" />
+                                    <el-input-number v-model="form.FRIEND_LIST_WAIT_TIME" :step="1" :precision="0"
+                                        :min="1" :max="120" />
+                                </el-form-item>
+                                <el-form-item label="滚动步数上限">
+                                    <el-input-number v-model="form.IM_MAX_STEPS" :step="50" :precision="0"
+                                        :min="10" :max="2000" />
                                 </el-form-item>
                                 <el-form-item label="任务重试次数">
                                     <el-input-number v-model="form.TASK_RETRY_TIMES" :step="1" step-strictly

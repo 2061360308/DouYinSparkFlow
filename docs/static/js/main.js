@@ -34,10 +34,13 @@ const app = createApp({
       MESSAGE_TEMPLATE:
         "[盖瑞]今日火花[加一]\n—— [右边] 每日一言 [左边] ——\n[API]",
       HITOKOTO_TYPES: ["文学", "影视", "诗词", "哲学"],
-      BROWSER_TIMEOUT: 120000,
-      FRIEND_LIST_WAIT_TIME: 2000,
+      BROWSER_ACTION_TIMEOUT: 120,
+      IM_SCAN_TIMEOUT: 120,
+      IM_READY_TIMEOUT: 120,
+      FRIEND_LIST_WAIT_TIME: 3,
+      IM_MAX_STEPS: 200,
       TASK_RETRY_TIMES: 3,
-      LOG_LEVEL: "Info",
+      LOG_LEVEL: "Debug",
       ACCOUNTS: [
         {
           username: "user1",
@@ -60,8 +63,11 @@ const app = createApp({
         TZ: form.TZ,
         MESSAGE_TEMPLATE: form.MESSAGE_TEMPLATE,
         HITOKOTO_TYPES: form.HITOKOTO_TYPES,
-        BROWSER_TIMEOUT: form.BROWSER_TIMEOUT,
+        BROWSER_ACTION_TIMEOUT: form.BROWSER_ACTION_TIMEOUT,
+        IM_SCAN_TIMEOUT: form.IM_SCAN_TIMEOUT,
+        IM_READY_TIMEOUT: form.IM_READY_TIMEOUT,
         FRIEND_LIST_WAIT_TIME: form.FRIEND_LIST_WAIT_TIME,
+        IM_MAX_STEPS: form.IM_MAX_STEPS,
         TASK_RETRY_TIMES: form.TASK_RETRY_TIMES,
         LOG_LEVEL: form.LOG_LEVEL,
         TASKS: form.ACCOUNTS.map((account) => ({

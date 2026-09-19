@@ -7,22 +7,16 @@ logs/
 usersData.json
 .env
 
+# 抓包取证目录：HAR 本身含 cookie（登录凭据）+ 好友昵称/备注/uid，
+# 同目录 <sha1>.dat 是配套的二进制报文体，_*.txt 是分析产物 —— 全都含个人信息。
+# 一律不入库（"har 不提交"）。需要复现就在本机跑 tools/record_har.py 重录。
+har_logs/
+
 # 账户登录态的浏览器配置目录：体积大且含敏感登录信息，绝不入库
 configTool/profiles/
-loginTool/browser_profile/
 
 # 抖音号 -> 配置目录 对照表（含昵称 / uid 等账号信息），不入库
 configTool/profiles.json
-
-# 登录工具生成的产物，里面是真实可用的 sessionid —— 入库等于把账号交出去
-loginTool/cookies.json
-loginTool/cookies_env.txt
-loginTool/storage_state.json
-
-# 自带的隐身 Chromium：单文件 chrome.dll 约 281 MB，超过 GitHub 单文件 100 MB 上限，
-# 提交上去也推不动。它属于「本地分发物」，跟着程序目录走，不入版本库。
-# 如果你确实要把它纳入仓库，删掉下面两行即可。
-loginTool/cloakbrowser-windows-x64/
 configTool/cloakbrowser-windows-x64/
 # 分发包本体（约 536 MB）同理，不入库
 configTool/cloakbrowser-windows-x64.zip
@@ -35,9 +29,7 @@ dist/
 # 工作目录（本地笔记与临时脚本）
 .workbuddy/
 
-# gost 隧道客户端：本地分发物（Windows 单文件 exe），不入版本库。
-# 需要时到 https://github.com/go-gost/gost/releases 下载 windows_amd64 包，
-# 解压出的 gost.exe 放到 configTool/gost/ 即可（configTool 会自动找到）。
+# gost 隧道客户端
 configTool/gost/
 
 # 工具自己的本地设置（local.json）：里面存着配套代理的隧道地址与账号密码，

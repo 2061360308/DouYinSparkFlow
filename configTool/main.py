@@ -40,9 +40,12 @@ import profile_store
 from conversation_dialog import ConversationDialog
 from login_dialog import LoginDialog
 from models import (
-    BROWSER_TIMEOUT_RANGE,
+    BROWSER_ACTION_TIMEOUT_RANGE,
     FRIEND_LIST_WAIT_RANGE,
     HITOKOTO_OPTIONS,
+    IM_MAX_STEPS_RANGE,
+    IM_READY_TIMEOUT_RANGE,
+    IM_SCAN_TIMEOUT_RANGE,
     LOG_LEVEL_OPTIONS,
     RETRY_TIMES_RANGE,
     TZ_OPTIONS,
@@ -417,25 +420,58 @@ class ConfigApp:
             box.grid(row=index // 4, column=index % 4, sticky="w", padx=(0, 14), pady=2)
             self.hitokoto_vars[option] = var
 
-        label("浏览器操作最长等待时间", "毫秒，默认即可")
+        label("浏览器操作最长等待时间", "秒，默认即可（单次导航/点击的等待上限）")
         self.var_timeout = tk.IntVar()
         ttk.Spinbox(
             form,
-            from_=BROWSER_TIMEOUT_RANGE[0],
-            to=BROWSER_TIMEOUT_RANGE[1],
-            increment=1000,
+            from_=BROWSER_ACTION_TIMEOUT_RANGE[0],
+            to=BROWSER_ACTION_TIMEOUT_RANGE[1],
+            increment=10,
             textvariable=self.var_timeout,
             font=FONT_UI,
         ).pack(fill="x")
 
-        label("好友列表等待时间", "毫秒，网络慢可调大")
+        label("扫描总预算", "秒，超时即停；未找到的目标不代表不存在")
+        self.var_scan_timeout = tk.IntVar()
+        ttk.Spinbox(
+            form,
+            from_=IM_SCAN_TIMEOUT_RANGE[0],
+            to=IM_SCAN_TIMEOUT_RANGE[1],
+            increment=10,
+            textvariable=self.var_scan_timeout,
+            font=FONT_UI,
+        ).pack(fill="x")
+
+        label("门禁等待上限", "秒，登录校验 + 会话列表就绪的等待上限")
+        self.var_ready_timeout = tk.IntVar()
+        ttk.Spinbox(
+            form,
+            from_=IM_READY_TIMEOUT_RANGE[0],
+            to=IM_READY_TIMEOUT_RANGE[1],
+            increment=5,
+            textvariable=self.var_ready_timeout,
+            font=FONT_UI,
+        ).pack(fill="x")
+
+        label("好友列表等待时间", "秒，网络慢可调大（会拖慢扫描）")
         self.var_friend_wait = tk.IntVar()
         ttk.Spinbox(
             form,
             from_=FRIEND_LIST_WAIT_RANGE[0],
             to=FRIEND_LIST_WAIT_RANGE[1],
-            increment=1000,
+            increment=1,
             textvariable=self.var_friend_wait,
+            font=FONT_UI,
+        ).pack(fill="x")
+
+        label("滚动步数上限", "步，步长 = 可视高度 40%")
+        self.var_max_steps = tk.IntVar()
+        ttk.Spinbox(
+            form,
+            from_=IM_MAX_STEPS_RANGE[0],
+            to=IM_MAX_STEPS_RANGE[1],
+            increment=50,
+            textvariable=self.var_max_steps,
             font=FONT_UI,
         ).pack(fill="x")
 
@@ -463,7 +499,10 @@ class ConfigApp:
             self.var_minute,
             self.var_second,
             self.var_timeout,
+            self.var_scan_timeout,
+            self.var_ready_timeout,
             self.var_friend_wait,
+            self.var_max_steps,
             self.var_retry,
         ):
             var.trace_add("write", self._on_field_changed)
@@ -716,8 +755,11 @@ class ConfigApp:
         self.template_text.edit_modified(False)
         for option, var in self.hitokoto_vars.items():
             var.set(option in config.hitokoto_types)
-        self.var_timeout.set(int(config.browser_timeout))
+        self.var_timeout.set(int(config.browser_action_timeout))
+        self.var_scan_timeout.set(int(config.im_scan_timeout))
+        self.var_ready_timeout.set(int(config.im_ready_timeout))
         self.var_friend_wait.set(int(config.friend_list_wait_time))
+        self.var_max_steps.set(int(config.im_max_steps))
         self.var_retry.set(int(config.task_retry_times))
         self.var_log_level.set(config.log_level)
 
@@ -742,11 +784,20 @@ class ConfigApp:
         config.tz = self.var_tz.get().strip() or "Asia/Shanghai"
         config.message_template = self.template_text.get("1.0", "end-1c")
         config.hitokoto_types = [name for name, var in self.hitokoto_vars.items() if var.get()]
-        config.browser_timeout = self._safe_int(
-            self.var_timeout, config.browser_timeout, *BROWSER_TIMEOUT_RANGE
+        config.browser_action_timeout = self._safe_int(
+            self.var_timeout, config.browser_action_timeout, *BROWSER_ACTION_TIMEOUT_RANGE
+        )
+        config.im_scan_timeout = self._safe_int(
+            self.var_scan_timeout, config.im_scan_timeout, *IM_SCAN_TIMEOUT_RANGE
+        )
+        config.im_ready_timeout = self._safe_int(
+            self.var_ready_timeout, config.im_ready_timeout, *IM_READY_TIMEOUT_RANGE
         )
         config.friend_list_wait_time = self._safe_int(
             self.var_friend_wait, config.friend_list_wait_time, *FRIEND_LIST_WAIT_RANGE
+        )
+        config.im_max_steps = self._safe_int(
+            self.var_max_steps, config.im_max_steps, *IM_MAX_STEPS_RANGE
         )
         config.task_retry_times = self._safe_int(
             self.var_retry, config.task_retry_times, *RETRY_TIMES_RANGE

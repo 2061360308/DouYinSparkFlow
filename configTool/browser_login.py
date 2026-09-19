@@ -306,8 +306,8 @@ def extract_self_profile(data) -> dict:
         {
           "status_code": 0,
           "status_msg": null,
-          "user": {"nickname": "卢瞳", "unique_id": "49709841077",
-                   "short_id": "49709841077", "uid": "108672188914", ...}
+          "user": {"nickname": "示例昵称", "unique_id": "12345678901",
+                   "short_id": "12345678901", "uid": "10000000000000001", ...}
         }
 
     nickname  -> 用户名
@@ -375,14 +375,17 @@ def detect_account_info(page) -> dict:
 # ---------------------------------------------------------------------------
 # 会话列表：滚动容器，收集全部会话名
 # ---------------------------------------------------------------------------
-# 类名与主程序 core/tasks.py 里的常量完全一致（改了要同步两边）：
-#     core/tasks.py::CONVERSATION_LIST_SELECTOR  = ".conversationConversationListwrapper"
-#     core/tasks.py::CONVERSATION_ITEM_SELECTOR  = ".conversationConversationItemwrapper"
-#     core/tasks.py::CONVERSATION_TITLE_SELECTOR = ".conversationConversationItemtitle"
-# 2026-09-16 用真实登录态实测确认：容器 overflow-y:scroll，标题文本就是会话名
-# （有备注名时是备注名，与主程序 checkTargetName() 的匹配口径一致）。
+# 真值来源是 core/douyin_im.py 的 SEL_* 常量（选择器统一收在库里，改一处全局生效）：
+#     SEL_LIST  = ".conversationConversationListwrapper"
+#     SEL_ITEM  = '[data-e2e="conversation-item"]'
+#     SEL_TITLE = ".conversationConversationItemtitle"
+# 这里**故意**不 import，避免 configTool（一个独立小工具）被主程序依赖链拖进来；
+# 代价是改名要同步，所以下面是「手动镜像」。两边漂移时以 core/douyin_im 为准。
+#
+# 现状：本文件目前只用到 LIST（拼提示语）；ITEM / TITLE 是历史遗留，
+# 若本工具要自己收会话名，请直接用 SEL_ITEM 那个官方挂点（比 CSS Module 类名稳）。
 CONVERSATION_LIST_SELECTOR = ".conversationConversationListwrapper"
-CONVERSATION_ITEM_SELECTOR = ".conversationConversationItemwrapper"
+CONVERSATION_ITEM_SELECTOR = '[data-e2e="conversation-item"]'
 CONVERSATION_TITLE_SELECTOR = ".conversationConversationItemtitle"
 
 # 会话列表等待/滚动节奏

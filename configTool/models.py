@@ -38,13 +38,24 @@ DEFAULT_RUN_TIME = "09:00:00"
 DEFAULT_TZ = "Asia/Shanghai"
 DEFAULT_MESSAGE_TEMPLATE = "[盖瑞]今日火花[加一]\n—— [右边] 每日一言 [左边] ——\n[API]"
 DEFAULT_HITOKOTO_TYPES = ["文学", "影视", "诗词", "哲学"]
-DEFAULT_BROWSER_TIMEOUT = 120000
-DEFAULT_FRIEND_LIST_WAIT_TIME = 2000
+DEFAULT_BROWSER_ACTION_TIMEOUT = 120
+DEFAULT_IM_SCAN_TIMEOUT = 120
+DEFAULT_IM_READY_TIMEOUT = 120
+DEFAULT_FRIEND_LIST_WAIT_TIME = 3
+DEFAULT_IM_MAX_STEPS = 200
 DEFAULT_TASK_RETRY_TIMES = 3
-DEFAULT_LOG_LEVEL = "Info"
+# ⚠️ 大小写与 LOG_LEVEL_OPTIONS 保持一致（"Debug" 而非 "DEBUG"）：
+# tkinter Combobox 对不在 values 里的值不会高亮匹配项 → 框看着是空的。
+# utils.logger.resolve_log_level 内部 level.lower()，所以两种写法日志行为相同，
+# 这里只为 GUI 显示正确。
+DEFAULT_LOG_LEVEL = "Debug"
 
-BROWSER_TIMEOUT_RANGE = (5000, 300000)
-FRIEND_LIST_WAIT_RANGE = (1000, 120000)
+# 单位统一为秒
+BROWSER_ACTION_TIMEOUT_RANGE = (5, 300)
+IM_SCAN_TIMEOUT_RANGE = (10, 1800)
+IM_READY_TIMEOUT_RANGE = (5, 300)
+FRIEND_LIST_WAIT_RANGE = (1, 120)
+IM_MAX_STEPS_RANGE = (10, 2000)
 RETRY_TIMES_RANGE = (1, 5)
 
 # 写进 .env 的键顺序：先基础变量，再按账户顺序追加 COOKIES_*
@@ -56,8 +67,11 @@ BASE_ENV_KEYS = [
     "TZ",
     "MESSAGE_TEMPLATE",
     "HITOKOTO_TYPES",
-    "BROWSER_TIMEOUT",
+    "BROWSER_ACTION_TIMEOUT",
+    "IM_SCAN_TIMEOUT",
+    "IM_READY_TIMEOUT",
     "FRIEND_LIST_WAIT_TIME",
+    "IM_MAX_STEPS",
     "TASK_RETRY_TIMES",
     "LOG_LEVEL",
     "TASKS",
@@ -175,8 +189,11 @@ class Config:
     # 内存里保存真实换行，写盘时才转成字面 \n
     message_template: str = DEFAULT_MESSAGE_TEMPLATE
     hitokoto_types: list = field(default_factory=lambda: list(DEFAULT_HITOKOTO_TYPES))
-    browser_timeout: int = DEFAULT_BROWSER_TIMEOUT
+    browser_action_timeout: int = DEFAULT_BROWSER_ACTION_TIMEOUT
+    im_scan_timeout: int = DEFAULT_IM_SCAN_TIMEOUT
+    im_ready_timeout: int = DEFAULT_IM_READY_TIMEOUT
     friend_list_wait_time: int = DEFAULT_FRIEND_LIST_WAIT_TIME
+    im_max_steps: int = DEFAULT_IM_MAX_STEPS
     task_retry_times: int = DEFAULT_TASK_RETRY_TIMES
     log_level: str = DEFAULT_LOG_LEVEL
     accounts: list = field(default_factory=list)
@@ -185,7 +202,18 @@ class Config:
     def to_env_map(self) -> dict:
         """生成 键 -> 值 的映射，值已经是能直接写进 .env 的形态。"""
         hour, minute, second = split_run_time(self.run_time)
-        template = (self.message_template or "").replace("\r", "").replace("\n", "\\n")
+        # 真换行 → 字面 \n 写进 .env，供 GUI 文本框里编辑。
+        # \r\n 必须先于孤立 \r 收掉：这两条**是**有顺序的（\r\n 里的 \r 会被
+        # 孤立 \r 规则单独吃掉，先跑后者就把 CRLF 拆成了两个 LF）。
+        # 但「真」与「字面」两类规则之间顺序无所谓（字符集不相交）。
+        # 字面 \r\n 不在这里收：那是磁盘上的形态，交由读取端（from_env_map）处理，
+        # 保证 to_env_map / from_env_map 往返对称。
+        template = (
+            (self.message_template or "")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .replace("\n", "\\n")
+        )
 
         env = {
             "PROXY_ADDRESS": self.proxy_address or "",
@@ -197,8 +225,11 @@ class Config:
             "HITOKOTO_TYPES": json.dumps(
                 self.hitokoto_types or [], ensure_ascii=False, separators=(",", ":")
             ),
-            "BROWSER_TIMEOUT": str(int(self.browser_timeout)),
+            "BROWSER_ACTION_TIMEOUT": str(int(self.browser_action_timeout)),
+            "IM_SCAN_TIMEOUT": str(int(self.im_scan_timeout)),
+            "IM_READY_TIMEOUT": str(int(self.im_ready_timeout)),
             "FRIEND_LIST_WAIT_TIME": str(int(self.friend_list_wait_time)),
+            "IM_MAX_STEPS": str(int(self.im_max_steps)),
             "TASK_RETRY_TIMES": str(int(self.task_retry_times)),
             "LOG_LEVEL": self.log_level or DEFAULT_LOG_LEVEL,
             # TASKS 不走 unicode_escape，保持中文可读（与 index.html / .env.example 一致）
@@ -278,14 +309,30 @@ class Config:
             proxy_address=text("PROXY_ADDRESS"),
             run_time=run_time,
             tz=text("TZ", DEFAULT_TZ) or DEFAULT_TZ,
-            # 磁盘上是字面 \n，换回真实换行方便在文本框里编辑
-            message_template=text("MESSAGE_TEMPLATE", DEFAULT_MESSAGE_TEMPLATE).replace(
-                "\\n", "\n"
-            ),
+            # 磁盘上是字面 \n，换回真实换行方便在文本框里编辑。
+            # 字面 \r\n 先收成字面 \n 再解 —— 但注意 `.replace("\\n","\n")` 对
+            # 字面 \r\n **匹配不到**（\r\n 里没有字面 \n），所以是那条 `\\r\\n` 规则
+            # 在干活；两条规则字符集不相交，顺序其实无所谓，这里按可读性排。
+            # ⚠️ 与 to_env_map() 成对：那边出的必须这边能读回来（往返幂等）。
+            message_template=text("MESSAGE_TEMPLATE", DEFAULT_MESSAGE_TEMPLATE)
+            .replace("\\r\\n", "\\n")
+            .replace("\\n", "\n"),
             hitokoto_types=[str(item) for item in hitokoto],
-            browser_timeout=number("BROWSER_TIMEOUT", DEFAULT_BROWSER_TIMEOUT, *BROWSER_TIMEOUT_RANGE),
+            browser_action_timeout=number(
+                "BROWSER_ACTION_TIMEOUT", DEFAULT_BROWSER_ACTION_TIMEOUT,
+                *BROWSER_ACTION_TIMEOUT_RANGE
+            ),
+            im_scan_timeout=number(
+                "IM_SCAN_TIMEOUT", DEFAULT_IM_SCAN_TIMEOUT, *IM_SCAN_TIMEOUT_RANGE
+            ),
+            im_ready_timeout=number(
+                "IM_READY_TIMEOUT", DEFAULT_IM_READY_TIMEOUT, *IM_READY_TIMEOUT_RANGE
+            ),
             friend_list_wait_time=number(
                 "FRIEND_LIST_WAIT_TIME", DEFAULT_FRIEND_LIST_WAIT_TIME, *FRIEND_LIST_WAIT_RANGE
+            ),
+            im_max_steps=number(
+                "IM_MAX_STEPS", DEFAULT_IM_MAX_STEPS, *IM_MAX_STEPS_RANGE
             ),
             task_retry_times=number(
                 "TASK_RETRY_TIMES", DEFAULT_TASK_RETRY_TIMES, *RETRY_TIMES_RANGE
