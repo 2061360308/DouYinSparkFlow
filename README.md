@@ -49,17 +49,7 @@
 
 ## 🚀 使用方法
 
-**材料准备：** 一个 GitHub 账号和可用浏览器即可，不设额外门槛。
-
-**编辑项目配置：** 保姆级教程见 [配置生成器使用](docs/配置生成器使用.md)
-
-**部署方法：**
-
-1. 服务器Docker部署（推荐👍），操作说明见 [Docker部署说明](docs/Docker部署说明.md)
-
-2. Github Action 部署，操作说明见 [Action部署说明](docs/Action部署说明.md)
-
-3. 源码部署 （更适合高级用户），操作说明见[源代码部署说明](docs/源代码部署说明.md)
+保姆级教程见 [项目文档-https://oilu.cn/DouYinSparkFlow](https://oilu.cn/DouYinSparkFlow)
 
 ## 📢交流讨论
 
