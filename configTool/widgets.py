@@ -29,6 +29,86 @@ def _unique_names(values) -> list:
     return out
 
 
+# ---------------------------------------------------------------------------
+# 滚轮保护：ttk 的 Spinbox / Combobox 在 Windows 上自带「滚轮改值」
+# ---------------------------------------------------------------------------
+# 这类控件的共同点：值会被 <MouseWheel> 直接改掉，而界面上没有任何提示。
+WHEEL_SENSITIVE = (ttk.Spinbox, ttk.Combobox)
+
+
+def _all_children(widget) -> list:
+    """整棵子树（不含自己）。"""
+    out: list = []
+    stack = list(widget.winfo_children())
+    while stack:
+        node = stack.pop()
+        out.append(node)
+        try:
+            stack.extend(node.winfo_children())
+        except Exception:
+            continue
+    return out
+
+
+def _find_scroller(widget):
+    """沿 master 链找最近的「会滚动的容器」，返回它的 _on_wheel。
+
+    靠「有没有 _on_wheel」认人，而不是 import main 里的 ScrollFrame ——
+    main 会 import 本模块，反向引用就成环了。
+    """
+    node = widget
+    hops = 0
+    while node is not None and hops < 30:
+        handler = getattr(node, "_on_wheel", None)
+        if callable(handler):
+            return handler
+        node = getattr(node, "master", None)
+        hops += 1
+    return None
+
+
+def disable_wheel_change(widget) -> None:
+    """禁止鼠标滚轮改这个控件的值，但**保留表单滚动**。
+
+    血泪教训：数值框指针路过就被滚轮改掉 —— 用户填完一屏参数、随手一滚，
+    数字全变了，界面上还没有任何提示（``var.trace_add`` 会照常把它自动存进 .env）。
+
+    为什么不能在 ``ScrollFrame._on_wheel`` 里加个判断就完事：Tk 的事件顺序是
+    widget → class → toplevel → all，而滚动挂在 **all** 上；等它跑到时，ttk 的类绑定
+    早就把值改完了。必须在 widget 这一级 ``return "break"``，中止后续 bindtag。
+
+    拦住之后滚轮本来会「什么都不做」，反倒不如原来顺手，所以这里自己把事件转交给
+    所属滚动容器：**值不变，页面照常滚**。
+
+    子控件也一并绑定：ttk.Spinbox 内部有真实的子窗口，滚轮事件可能落在子控件上。
+    """
+    def _handled(event):
+        scroller = _find_scroller(widget)
+        if scroller is not None:
+            try:
+                scroller(event)
+            except Exception:
+                pass
+        return "break"      # 中止 class / all 上的绑定，值不会被改
+
+    for target in [widget, *_all_children(widget)]:
+        target.bind("<MouseWheel>", _handled)
+
+
+def harden_wheel(root) -> int:
+    """把整棵控件树里所有「滚轮会改值」的控件保护起来，返回处理了几个。
+
+    遍历而不是逐处改调用点：这些框散在几个页签，其中三个还是在循环里建的，
+    逐个调用既啰嗦、下次新增字段时又会漏掉。
+    """
+    count = 0
+    for widget in [root, *_all_children(root)]:
+        if isinstance(widget, WHEEL_SENSITIVE):
+            disable_wheel_change(widget)
+            count += 1
+    return count
+
+
 class ConversationPicker(ttk.Frame):
     """可搜索的多选列表：从抓取到的会话列表里挑目标好友。
 

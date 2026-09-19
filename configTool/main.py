@@ -51,7 +51,13 @@ from configTool.models import (
     split_run_time,
     validate,
 )
-from configTool.widgets import FONT_MONO, FONT_UI, ConversationPicker, ScrolledText
+from configTool.widgets import (
+    FONT_MONO,
+    FONT_UI,
+    ConversationPicker,
+    ScrolledText,
+    harden_wheel,
+)
 
 AUTOSAVE_DELAY_MS = 1500
 
@@ -156,6 +162,10 @@ class ConfigApp:
         self._conversation_owner = None      # 选择器里现在装的是哪个账号
 
         self._build_ui()
+        # 建完控件再统一上滚轮保护：数值框 / 下拉框被滚轮路过就改值（ttk 在 Windows
+        # 上的自带行为），而 trace_add 会立刻把改后的值存进 .env —— 用户只是滚了一下
+        # 页面，配置就变了。见 widgets.disable_wheel_change。
+        self.wheel_guarded = harden_wheel(self.root)
         self._load_into_ui()
         self._loading = False
 
@@ -214,7 +224,7 @@ class ConfigApp:
         ttk.Label(header, text="DouYinSparkFlow 配置生成器", font=("Microsoft YaHei UI", 13, "bold")).pack(anchor="w")
         ttk.Label(
             header,
-            text="所有改动都会自动写入本目录下的 .env —— 左侧预览的就是真实写入内容",
+            text="所有改动都会自动写入 .env（位置见下方状态栏）—— 左侧预览的就是真实写入内容",
             font=FONT_UI,
             foreground="#5F5E5A",
         ).pack(anchor="w", pady=(2, 0))
@@ -1347,20 +1357,21 @@ class ConfigApp:
             messagebox.showinfo(
                 "校验结果",
                 "全部通过。\n\n"
-                f"把 {self.env_path.name} 放到主程序的运行目录即可生效：\n"
-                "  本地运行 → 项目根目录（与 main.py 同级）\n"
-                "  Docker  → ./config/.env",
+                f"{self.env_path.name} 就写在下面这个位置，主程序直接用：\n"
+                f"  {self.env_path}\n"
+                "  Docker → 复制 / 挂载为 ./config/.env",
             )
             return
         lines = [f"[{level}] {message}" for level, message in self.issues]
         messagebox.showinfo("校验结果", "\n\n".join(lines))
 
     def on_open_env_dir(self) -> None:
-        """打开程序目录（.env、profiles.json、profiles/ 都在这里）。
+        """打开 .env 所在目录。
 
-        .env 需要复制到主程序的运行目录才会生效，所以给一个直达入口。
+        .env 现在就写在主程序读它的位置（源码运行 = 仓库根，发布版 = 程序同级），
+        所以这里是「去看看配置」而不是「去取配置」—— 不再需要手工搬一次。
         """
-        self._open_folder(self.env_path.parent, "程序目录")
+        self._open_folder(self.env_path.parent, "配置所在目录")
 
     def on_open_profile_dir(self) -> None:
         """打开当前账号的浏览器配置目录。"""
