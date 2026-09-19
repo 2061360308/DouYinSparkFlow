@@ -215,7 +215,11 @@ class MatchTests(unittest.TestCase):
 
 class JoinTests(unittest.TestCase):
     class _MonStub:
+        """ImMonitor 的最小替身。`errors` 是它对外的诊断出口 ——
+        收尾日志会把它打出来，所以替身也得有（否则 _finish_scan 直接崩）。"""
+
         def __init__(self, sec):
+            self.errors = []
             self.peers = {
                 sec: {"sec_uid": sec, "uid": PEER_A, "nickname": "NickA",
                       "remark": "甲同学", "unique_id": "user_aaa"},
@@ -282,6 +286,10 @@ class _VListStub(_Stub):
         self.total = total
         self.top = 0
         self.page = _NoWaitPage()
+        # _finish_scan 的收尾日志会读 mon.errors；真身由 DouyinIM.__init__ 建立，
+        # 这个桩绕过了 __init__，所以要自己补一个。资料一律对不上，
+        # 让 _join 走「回退到 DOM 标题」那条分支（正是这里想覆盖的行为）。
+        self.mon = JoinTests._MonStub("sec-that-matches-nothing")
 
     def _scroll_probe(self):
         sh = self.total * self.ITEM_H

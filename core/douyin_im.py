@@ -42,6 +42,24 @@ from utils.logger import setup_logger
 # 所以 import 期调用是安全的（它自己的 config 也是这么读的）。
 logger = setup_logger("douyin_im", level=get_config().get("logLevel", "Info"))
 
+# 「慢调用」阈值（秒）。Playwright 的默认超时是 120s（由 utils.config 的
+# BROWSER_ACTION_TIMEOUT 换算而来），一次抖动就足以让日志看起来像卡死 ——
+# 实测过扫描开头凭空少了 120 秒、整段空白。慢到 3 秒就该留下痕迹，
+# 不必等到 120 秒之后才知道发生过什么。
+SLOW_CALL_SECONDS = 3.0
+
+
+def _brief(exc) -> str:
+    """异常压成一行。Playwright 的异常常带多行 Call log，原样进日志会刷屏。"""
+    return f"{type(exc).__name__}: {' '.join(str(exc).split())}"
+
+
+def _slow_warn(label: str, elapsed: float) -> None:
+    """一次调用慢到不像正常时就报警 —— 成功返回的慢调用同样要报。"""
+    if elapsed >= SLOW_CALL_SECONDS:
+        logger.warning(f"[SLOW] {label} 耗时 {elapsed:.1f}s")
+
+
 CHAT_URL = "https://www.douyin.com/chat"
 
 # 会话项行高（CSS 实测 height:67px），用于按 data-index 估算 scrollTop
@@ -1028,7 +1046,7 @@ class DouyinIM:
                 if not last or last["count"] != dom["count"]:
                     last = {"count": dom["count"], "at": now}
             try:
-                self.page.wait_for_timeout(300)
+                self._snooze(300, "等列表就绪")
             except Exception:
                 time.sleep(0.3)
 
@@ -1165,7 +1183,7 @@ class DouyinIM:
             return
 
         self._scroll_to(0)                              # 回到顶部，保证从头扫
-        self.page.wait_for_timeout(400)
+        self._snooze(400, "回到顶部后停顿")
 
         seen = dict(self._scan_cache)
         window = []
@@ -1189,7 +1207,7 @@ class DouyinIM:
                     if failed_windows >= 5:
                         stopped = "read-error"
                         break
-                    self.page.wait_for_timeout(500)
+                    self._snooze(500, "读窗口失败退避")
                     continue
                 failed_windows = 0
 
@@ -1212,7 +1230,7 @@ class DouyinIM:
                     break
 
                 if probe.get("atBottom"):
-                    self.page.wait_for_timeout(1000)    # 跨过前端 1000ms 防抖
+                    self._snooze(1000, "到底防抖")    # 跨过前端 1000ms 防抖
                     after = self._scroll_probe()
                     if after.get("scrollHeight", 0) <= probe.get("scrollHeight", 0):
                         logger.info("[SCAN] 🏁 已到底且高度不再增长，扫描结束")
@@ -1227,7 +1245,7 @@ class DouyinIM:
                           max(0, probe["scrollHeight"] - probe["clientHeight"]))
                 self._scroll_to(nxt)
                 steps += 1
-                self.page.wait_for_timeout(400)         # 等虚拟窗口换页
+                self._snooze(400, "等虚拟窗口换页")
 
                 moved = self._scroll_probe().get("scrollTop")
                 if moved == probe.get("scrollTop"):
@@ -1271,6 +1289,17 @@ class DouyinIM:
         logger.info(f"[SCAN] 结束：stopped={stopped} 步数={st['steps']} 访问={len(seen)} "
                     f"找到={len(found)} 未找到={len(missing)} scanned_all={scanned_all}")
 
+        # 监听层的响应读取失败从来没被打印过 —— 而「一次调用凭空吃掉 120 秒」
+        # 多半就出在这里（事件回调里同步读 body）。把 URL 点出来，卡顿才有据可查。
+        if self.mon.errors:
+            logger.warning(
+                f"[SCAN] ⚠️ 监听层有 {len(self.mon.errors)} 条响应读取失败（卡顿多半来自这里）："
+            )
+            for url, err in self.mon.errors[:5]:
+                logger.warning(f"        {url} → {err}")
+            if len(self.mon.errors) > 5:
+                logger.warning(f"        …另有 {len(self.mon.errors) - 5} 条")
+
     def iter_conversations(self):
         """从头滚到尾，逐个产出**全部**会话（任务二：采集会话）。
 
@@ -1294,10 +1323,16 @@ class DouyinIM:
         self._finish_scan({}, [])
 
     def _read_window(self):
+        t0 = time.monotonic()
         try:
             rows = self.page.evaluate(JS_COLLECT) or []
-        except Exception:
+        except Exception as e:
+            # 补上「等了多久」和「为什么失败」—— 原本调用方只说「读取窗口失败（n/5）」
+            logger.warning(
+                f"[SCAN] ⚠️ 读窗口失败（耗时 {time.monotonic() - t0:.1f}s）：{_brief(e)}"
+            )
             return None
+        _slow_warn("读窗口(JS_COLLECT)", time.monotonic() - t0)
         out = []
         for r in rows:
             out.append({
@@ -1356,7 +1391,7 @@ class DouyinIM:
         last_count = len(self.mon.peer_order)
         quiet_since = time.time()
         while time.time() < deadline:
-            self.page.wait_for_timeout(120)
+            self._snooze(120, "资料静默窗")
             now_count = len(self.mon.peer_order)
             if now_count != last_count:
                 last_count = now_count
@@ -1382,17 +1417,46 @@ class DouyinIM:
                 return n, "fuzzy"
         return None, None
 
-    def _scroll_probe(self):
+    def _snooze(self, ms: int, label: str = "等待") -> None:
+        """带计时的等待。
+
+        Playwright 的 `wait_for_timeout` 同样是驱动侧往返，卡住时一样会让日志一片
+        空白。原来这些调用散在各处、不留任何痕迹，「少了 120 秒」时连是哪个等待
+        都说不出来。行为与直接调用完全一致（异常照常抛出）。
+        """
+        t0 = time.monotonic()
         try:
-            return self.page.evaluate(JS_SCROLL_PROBE) or {"found": False}
-        except Exception:
+            self.page.wait_for_timeout(ms)
+        finally:
+            _slow_warn(f"{label} {ms}ms", time.monotonic() - t0)
+
+    def _scroll_probe(self):
+        t0 = time.monotonic()
+        try:
+            result = self.page.evaluate(JS_SCROLL_PROBE) or {"found": False}
+        except Exception as e:
+            # 不能静默：这里的失败往往就是「一次 Playwright 调用吃满了默认超时」。
+            # 一旦吞掉，日志上就是整段空白，事后完全查不出卡在哪。
+            logger.warning(
+                f"[SCAN] ⚠️ 读滚动状态失败（耗时 {time.monotonic() - t0:.1f}s）：{_brief(e)}"
+            )
             return {"found": False}
+        _slow_warn("读滚动状态", time.monotonic() - t0)
+        return result
 
     def _scroll_to(self, top):
+        t0 = time.monotonic()
         try:
-            return self.page.evaluate(JS_SCROLL_TO, top)
-        except Exception:
+            result = self.page.evaluate(JS_SCROLL_TO, top)
+        except Exception as e:
+            # 同上。而且调用方 `self._scroll_to(...)` 把返回值直接丢掉了 ——
+            # 这里是唯一能留下痕迹的地方。
+            logger.warning(
+                f"[SCAN] ⚠️ 滚动到 {top} 失败（耗时 {time.monotonic() - t0:.1f}s）：{_brief(e)}"
+            )
             return False
+        _slow_warn(f"滚动到 {top}", time.monotonic() - t0)
+        return result
 
     # ---------------------------------------------------- 对外：选中/输入
 

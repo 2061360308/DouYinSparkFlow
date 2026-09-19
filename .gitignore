@@ -35,3 +35,9 @@ configTool/gost/
 # 工具自己的本地设置（local.json）：里面存着配套代理的隧道地址与账号密码，
 # 入库等于把代理凭据交出去 —— 绝不提交。
 configTool/local.json
+
+# Playwright 的 API 调试日志（`DEBUG=pw:api` 重定向出来的，排查「卡很久」用）：
+# 里面是完整的请求 URL 与页面跳转序列，含 token、好友昵称等个人信息，
+# 与 har_logs/ 同一性质 —— 只在本机留，不入库。
+pw_api.log
+pw_*.log
