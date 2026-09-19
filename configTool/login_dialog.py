@@ -21,9 +21,9 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 
-import profile_store
-from browser_login import CHAT_URL, BrowserLoginWorker, cookies_to_json
-from widgets import FONT_MONO, FONT_UI, ScrolledText
+from configTool import profile_store
+from configTool.browser_login import BrowserLoginWorker, cookies_to_json
+from configTool.widgets import FONT_MONO, FONT_UI, ScrolledText
 
 # 自动流程的节奏
 POLL_INTERVAL_MS = 1500
@@ -91,6 +91,9 @@ class LoginDialog(tk.Toplevel):
         self._grabbed = False
         self._attempts = 0
         self._logged_since = None
+        # 上一次探到的登录态，用来只在**状态变化**时打日志（探针 1.5 秒一次，
+        # 每次都写会把日志刷满）
+        self._last_login_state = ""
         self._poll_job = None
         # 一次会话里只通知主窗口/只排一次自动关窗（万一用户又点了一次「立即抓取」，
         # 字段照常刷新，但不要重复写盘、重复倒计时）
@@ -252,15 +255,25 @@ class LoginDialog(tk.Toplevel):
             return
         self._grabbed = False
         self._attempts = 0
-        self._grab()
+        # 手动点：允许刷新页面 —— 用户本人就在浏览器前面，知道自己在干什么
+        self._grab(manual=True)
 
-    def _grab(self) -> None:
+    def _grab(self, *, manual: bool = False) -> None:
         if self._grabbed or self._closing:
             return
         self._grabbed = True
         self.btn_grab.config(state="disabled")
         self._set_status("正在读取登录信息…")
-        self.worker.send("grab")
+        # 自动流程**不允许**刷新页面：用户可能正在浏览器里扫码 / 等验证码，
+        # 一次刷新就把他的登录流程打断了（真实踩过）。要刷新让他自己按 F5。
+        self.worker.send(
+            "grab",
+            {
+                "allow_reload": manual,
+                # add 模式下页面级信号不可信，只有「刷新登录信息」才做完整判定
+                "deep_login": self.mode == "refresh",
+            },
+        )
 
     # -- 轮询 ---------------------------------------------------------------
     def _start_poll(self) -> None:
@@ -303,8 +316,28 @@ class LoginDialog(tk.Toplevel):
         if detected.get("unique_id"):
             self.var_unique_id.set(detected["unique_id"])
 
-        if not payload.get("logged_in"):
+        # 两个口径分开看，别混成一句（曾经同时打印出「已登录 ✔」和
+        # 「未检测到登录态」，就是这么来的）：
+        #   logged_in   本地 Cookie 有没有 sessionid —— 唯一的抓取门禁
+        #   login_state core.douyin_im 的判定 —— **只在「刷新登录信息」模式下采信**：
+        #               add 模式从头到尾是一份空配置目录，首屏那份 SSR 不会随页面内
+        #               登录而更新；拿它判「已失效」，会把用户正在进行的登录误判成过期
+        logged_in = bool(payload.get("logged_in"))
+        state = (payload.get("login_state") or "") if self.mode == "refresh" else ""
+        changed = state != self._last_login_state
+        self._last_login_state = state
+
+        if not logged_in or state == "EXPIRED":
             self._logged_since = None
+            if state == "EXPIRED":
+                self.var_login.set("已失效")
+                if changed:
+                    self._log(
+                        "服务端已经不认这个登录态了（本地还留着 sessionid）——"
+                        "请在浏览器窗口里重新扫码 / 短信登录"
+                    )
+                self._set_status("登录已失效 —— 请在浏览器里重新登录", RED)
+                return
             self.var_login.set("未登录")
             if self.auto_var.get():
                 self._set_status("等待登录 —— 请在浏览器里扫码或短信登录")
@@ -336,11 +369,29 @@ class LoginDialog(tk.Toplevel):
         cookies = info.get("cookies") or []
         logged_in = bool(info.get("logged_in"))
         detected = info.get("detected") or {}
+        # 「抓到的 Cookie 里有没有 sessionid」与「服务端认不认」是两件事，
+        # 必须分开说 —— 合成一句就会出现自相矛盾的提示（曾经出现过）。
+        # state 只在 refresh 模式可信，理由见 _on_probe。
+        state = (info.get("login_state") or "") if self.mode == "refresh" else ""
 
         self._log(f"共取得 {len(cookies)} 项 Cookie（原始 {info.get('total', 0)} 项）")
-        self._log("登录状态：" + ("已登录 ✔" if logged_in else "未检测到登录态 ✘"))
+        self._log(
+            "Cookie 登录态：" + ("有 sessionid ✔" if logged_in else "没有 sessionid ✘")
+        )
+        if state:
+            self._log(
+                "服务端判定："
+                + {
+                    "LOGGED_IN": "认可 ✔",
+                    "EXPIRED": "已失效 ✘（本地有 sessionid，但服务端不认）",
+                    "NOT_LOGGED_IN": "未登录 ✘",
+                    "UNKNOWN": "未能判定",
+                }.get(state, state)
+            )
+        if info.get("login_log"):
+            self._log(f"  {info['login_log']}")
 
-        nickname = str(detected.get("nickname") or "")
+        nickname = str(detected.get("nickname") or info.get("login_nickname") or "")
         unique_id = str(detected.get("unique_id") or "")
 
         if nickname or unique_id:
@@ -371,6 +422,16 @@ class LoginDialog(tk.Toplevel):
             self.var_unique_id.set(unique_id)
 
         # -- 逐项校验，不合格就退回去继续等 -------------------------------
+        # 「已失效」要排在前面：这种情况下 cookie 里**有** sessionid，
+        # 只看 logged_in 会误判成成功，把一份用不了的登录态写进 .env。
+        # （state 在 add 模式下恒为空 —— 那份判定不可信，见 _on_probe 的说明）
+        if state == "EXPIRED":
+            self._retry(
+                "登录已失效",
+                "本地还留着 sessionid，但服务端已经不认了。\n"
+                "请在浏览器窗口里重新扫码 / 短信登录，登录成功后会自动重试",
+            )
+            return
         if not logged_in:
             self._retry("未检测到登录态", "请在浏览器窗口里确认已登录抖音，登录成功后会自动重试")
             return
@@ -381,7 +442,8 @@ class LoginDialog(tk.Toplevel):
             self._retry(
                 "没能识别抖音号",
                 "抖音号决定 .env 里的 COOKIES_ 键名，不能为空。\n"
-                "请在浏览器里刷新一次页面（F5），会自动重试",
+                "请在浏览器窗口里按 F5 刷新一次页面，之后会自动重试\n"
+                "（工具不会替你刷新 —— 怕打断你正在进行的登录）",
             )
             return
 
@@ -467,6 +529,9 @@ class LoginDialog(tk.Toplevel):
             self._set_status(f"{title} —— 已停止自动重试，请点『立即抓取』", RED)
             self._log(f"自动重试已到 {MAX_AUTO_ATTEMPTS} 次上限，改为手动")
             return
+        # 既然告诉用户「稍后自动重试」，就得保证探针真的在跑 —— 它可能因为
+        # _open 提前退场而压根没启动过，那这句提示就是骗人的。
+        self._start_poll()
         self._set_status(f"{title}，稍后自动重试（{self._attempts}/{MAX_AUTO_ATTEMPTS}）", AMBER)
 
     def _auto_close(self) -> None:
@@ -507,9 +572,18 @@ class LoginDialog(tk.Toplevel):
 
         elif kind == "error":
             self._log(f"错误：{payload}")
-            self._set_status("出错了，请看下方日志", RED)
             self.btn_open.config(state="normal")
-            self.btn_grab.config(state="normal" if self.worker.is_running() else "disabled")
+            alive = self.worker.is_running()
+            self.btn_grab.config(state="normal" if alive else "disabled")
+            if alive:
+                # ★ 浏览器还活着就必须把探针接回去。探针原本只在 `opened` 事件里启动，
+                # 而 `_open` 可能提前退场（首屏超时、异常……）导致那个事件压根没发出 ——
+                # 后果是用户随后在浏览器里登录成功了，程序却永远看不见，只能手动
+                # 点「重新打开浏览器」才能恢复。探针很廉价，宁可多跑。
+                self._start_poll()
+                self._set_status("出错了，但浏览器仍在运行 —— 请看下方日志", AMBER)
+            else:
+                self._set_status("出错了，请看下方日志", RED)
             if not self._done:
                 messagebox.showerror("出错了", str(payload), parent=self)
 

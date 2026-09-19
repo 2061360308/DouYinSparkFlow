@@ -3,11 +3,13 @@
 流程 —— 用户不需要点任何按钮：
 
   1. 窗口一打开就用该账号**自己的浏览器配置目录**启动隐身浏览器，跳到抖音聊天页
-  2. 等会话列表容器 ``.conversationConversationListwrapper`` 渲染出来
-  3. 反复滚动这个容器，累计收集 ``.conversationConversationItemtitle`` 的文本，
-     直到连续若干轮没有新会话 → 认定已到底
-  4. 把名单交给主窗口（主窗口写进 profiles.json，并让用户直接点选目标好友）
+  2. 把剩下的事交给 core/douyin_im.DouyinIM：它自己再导航一次聊天页、挂只读监听、
+     跑门禁（登录态 + 会话列表就绪），然后滚动枚举全部会话（虚拟列表按 conv_id 去重，
+     合并 /im/user/info 的资料，所以拿到的是「备注 > 昵称 > 标题」口径的显示名）
+  3. 把名单交给主窗口（主窗口写进 profiles.json，并让用户直接点选目标好友）
      → 自动关窗、关浏览器
+
+  本窗口不再自己实现滚动 —— 「怎么把会话列表滚完」只有 core/douyin_im 那一份。
 
 为什么默认 headless（不开窗口）：
     这一步纯粹是「读数据」，让浏览器窗口弹出来只会给用户误操作的机会
@@ -23,14 +25,21 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 
-import profile_store
-from browser_login import BrowserLoginWorker
-from widgets import FONT_UI, ScrolledText
+from configTool import profile_store
+from configTool.browser_login import (
+    CONVERSATION_READY_TIMEOUT_SECONDS,
+    CONVERSATION_SCAN_TIMEOUT_SECONDS,
+    BrowserLoginWorker,
+)
+from configTool.widgets import FONT_UI, ScrolledText
 
 PUMP_INTERVAL_MS = 120
 AUTO_CLOSE_DELAY_MS = 1500
-# 工作线程自己也有超时（等容器 30s + 滚动 180s），这里再兜一层，防止界面永远转圈
-HARD_TIMEOUT_S = 330.0
+# 工作线程自己也有超时（门禁 + 滚动预算，见 browser_login 的两个常量），这里再兜一层，
+# 防止界面永远转圈；多出来的余量留给启动浏览器与配套代理隧道。
+HARD_TIMEOUT_S = (
+    CONVERSATION_READY_TIMEOUT_SECONDS + CONVERSATION_SCAN_TIMEOUT_SECONDS + 120.0
+)
 
 GREY = "#888780"
 BLUE = "#185FA5"
@@ -268,10 +277,12 @@ class ConversationDialog(tk.Toplevel):
         self.fetched = names
 
         self._log(
-            f"滚动 {stats.get('rounds', '?')} 轮、耗时 {stats.get('elapsed', '?')} 秒，"
+            f"滚动 {stats.get('rounds', '?')} 步、耗时 {stats.get('elapsed', '?')} 秒，"
             f"共读到 {len(names)} 个会话"
             + ("（已到底）" if stats.get("hit_bottom") else "（可能还有更多）")
         )
+        if stats.get("stopped"):
+            self._log(f"  停止原因：{stats['stopped']}")
 
         if not names:
             self._fail(

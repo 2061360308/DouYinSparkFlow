@@ -1,28 +1,26 @@
 """DouYinSparkFlow 本地配置生成器（tkinter）。
 
 把 docs/index.html 的功能搬到本地：左侧环境变量预览，右侧「基础配置 / 账户配置」，
-所有改动自动写回程序目录下的 .env，启动时自动载入。
+所有改动自动写回项目根目录的 .env，启动时自动载入。
 
 账户信息全部自动化：
   - 用户名 / 抖音号 / Cookies 都由浏览器登录后自动抓取，界面上只读（手填只会填错）
   - 每个账号用自己独立的浏览器配置目录，对照关系记在 profiles.json
   - 「刷新登录信息」用该账号原来的配置目录重开浏览器，不必重新扫码
+  - 登录态判定与会话扫描都借主程序的 core/douyin_im.py（见 browser_login.py）
 
 目标好友：
   - 手填之外，多了一条「拉取会话列表」——用该账号自己的浏览器配置（无头）打开抖音，
-    自动滚动会话列表容器、收全部会话名，存进 profiles.json，之后直接在界面里点选
+    由 core.douyin_im 滚动枚举全部会话名，存进 profiles.json，之后直接在界面里点选
   - 抓到的名单存在 profiles.json（本工具自己的元数据），**不写进 .env**
 
-运行：
-    cd configTool
-    python main.py
+运行（**从仓库根**，唯一入口）：
+    python run_configtool.py
 
-本目录完全自包含（打包成 exe 后同样成立）：
-  - .env、profiles/、profiles.json 都生成在本目录，跟着程序走
-  - 只依赖同目录内的模块与第三方包，不引用仓库里其他目录
-
-生成好的 .env 需要放到主程序的运行目录才会生效：
-  本地运行 → 项目根目录（与 main.py 同级）；Docker → ./config/.env
+文件位置：
+  - .env                     → 项目根（与仓库根的 main.py 同级），由 paths.py 决定
+  - profiles/ profiles.json → 本目录（工具自己的数据）
+  - local.json              → 本目录（工具私有设置，不进 .env）
 """
 
 from __future__ import annotations
@@ -34,12 +32,10 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 
-import env_store
-import local_settings
-import profile_store
-from conversation_dialog import ConversationDialog
-from login_dialog import LoginDialog
-from models import (
+from configTool import env_store, local_settings, profile_store
+from configTool.conversation_dialog import ConversationDialog
+from configTool.login_dialog import LoginDialog
+from configTool.models import (
     BROWSER_ACTION_TIMEOUT_RANGE,
     FRIEND_LIST_WAIT_RANGE,
     HITOKOTO_OPTIONS,
@@ -55,7 +51,7 @@ from models import (
     split_run_time,
     validate,
 )
-from widgets import FONT_MONO, FONT_UI, ConversationPicker, ScrolledText
+from configTool.widgets import FONT_MONO, FONT_UI, ConversationPicker, ScrolledText
 
 AUTOSAVE_DELAY_MS = 1500
 

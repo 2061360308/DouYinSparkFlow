@@ -59,7 +59,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-import paths
+from configTool import paths
 
 # 允许测试替换成临时路径（函数里每次都重新读这个模块级变量）
 INDEX_FILE = paths.PROFILES_INDEX

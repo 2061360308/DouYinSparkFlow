@@ -3,17 +3,14 @@
 只测 `models.Config` 的序列化往返 —— 尤其是 MESSAGE_TEMPLATE 的换行编码，
 这是 GUI（真换行）与 `.env`（字面 `\\n`）之间的桥，两侧必须严格对称。
 
-⚠️ 这些测试要 import configTool/models.py，所以把该目录临时加进 sys.path。
-   models.py 是纯数据层，不 import tkinter，可以安全在无 GUI 环境跑。
+⚠️ configTool 已经是包，直接 `from configTool import models` 即可
+   （从仓库根跑测试时仓库根就在 sys.path 上）。models.py 是纯数据层，
+   不 import tkinter，可以安全在无 GUI 环境跑。
 """
-import sys
 import unittest
 from pathlib import Path
 
-# configTool 不是包（没有 __init__.py），只能加目录进 path 后 flat import
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "configTool"))
-
-import models  # noqa: E402
+from configTool import models
 
 
 def _roundtrip(gui_text: str) -> tuple:

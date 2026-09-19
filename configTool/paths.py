@@ -9,9 +9,11 @@
 项目根目录这些全都不存在，凡是从它们推导出来的路径都会失效。
 
 约定：
-  - APP_DIR      程序所在目录。可写数据（.env、profiles/）都放这里，跟着程序走。
+  - APP_DIR      程序所在目录。工具自己的数据（profiles/、profiles.json、
+                 local.json）都放这里，跟着程序走。
   - RESOURCE_DIR 只读资源目录。PyInstaller onefile 模式下是临时解包目录，
                  用 sys._MEIPASS 取；源码运行时就等于 APP_DIR。
+  - ROOT_DIR     项目根。**只有 .env 放这里** —— 见 project_root()。
 """
 
 from __future__ import annotations
@@ -44,8 +46,33 @@ def resource_dir() -> Path:
 
 APP_DIR = app_dir()
 
-# 用户数据一律写在程序旁边，不依赖项目仓库结构
-ENV_FILE = APP_DIR / ".env"
+
+def project_root() -> Path:
+    """写 .env 的目录（项目根）。
+
+    .env 是给主程序 / 云函数吃的配置，生成完就该待在主程序读它的位置上，
+    别让用户再手工搬一次，所以它单独跟项目走，不和工具的其他数据放一起：
+        源码运行 → 仓库根（configTool/ 的上一层，与 main.py 同级）
+        打包运行 → 程序自己所在目录（发布版没有仓库可言，跟着 exe 走）
+
+    父目录不像个项目（既没 main.py 也没 core/）时退回程序目录 ——
+    万一有人把 configTool/ 单独拷出去，宁可在它自己旁边生成，
+    也不要在上一层乱写一个 .env。
+    """
+    if FROZEN:
+        return APP_DIR
+    parent = APP_DIR.parent
+    if (parent / "main.py").is_file() or (parent / "core").is_dir():
+        return parent
+    return APP_DIR
+
+
+ROOT_DIR = project_root()
+
+# 主程序读的那份配置（见 project_root 的说明）
+ENV_FILE = ROOT_DIR / ".env"
+
+# 以下都是本工具自己的元数据，一律写在程序旁边，不依赖项目仓库结构
 PROFILE_ROOT = APP_DIR / "profiles"
 # 抖音号 -> 配置目录名 的对照表，由 profile_store.py 读写
 PROFILES_INDEX = APP_DIR / "profiles.json"
