@@ -264,8 +264,7 @@ class LoginDialog(tk.Toplevel):
         self._grabbed = True
         self.btn_grab.config(state="disabled")
         self._set_status("正在读取登录信息…")
-        # 自动流程**不允许**刷新页面：用户可能正在浏览器里扫码 / 等验证码，
-        # 一次刷新就把他的登录流程打断了（真实踩过）。要刷新让他自己按 F5。
+        # 自动流程不刷新页面：用户可能正在扫码 / 等验证码，刷新会打断他
         self.worker.send(
             "grab",
             {
@@ -316,12 +315,9 @@ class LoginDialog(tk.Toplevel):
         if detected.get("unique_id"):
             self.var_unique_id.set(detected["unique_id"])
 
-        # 两个口径分开看，别混成一句（曾经同时打印出「已登录 ✔」和
-        # 「未检测到登录态」，就是这么来的）：
-        #   logged_in   本地 Cookie 有没有 sessionid —— 唯一的抓取门禁
-        #   login_state core.douyin_im 的判定 —— **只在「刷新登录信息」模式下采信**：
-        #               add 模式从头到尾是一份空配置目录，首屏那份 SSR 不会随页面内
-        #               登录而更新；拿它判「已失效」，会把用户正在进行的登录误判成过期
+        # logged_in（本地 Cookie 有无 sessionid）是抓取门禁；login_state 只在
+        # 「刷新登录信息」模式采信 —— add 模式的配置目录是空的，首屏 SSR 不随
+        # 页面内登录更新，用它判「已失效」会把正在进行的登录误判成过期。
         logged_in = bool(payload.get("logged_in"))
         state = (payload.get("login_state") or "") if self.mode == "refresh" else ""
         changed = state != self._last_login_state
@@ -369,9 +365,7 @@ class LoginDialog(tk.Toplevel):
         cookies = info.get("cookies") or []
         logged_in = bool(info.get("logged_in"))
         detected = info.get("detected") or {}
-        # 「抓到的 Cookie 里有没有 sessionid」与「服务端认不认」是两件事，
-        # 必须分开说 —— 合成一句就会出现自相矛盾的提示（曾经出现过）。
-        # state 只在 refresh 模式可信，理由见 _on_probe。
+        # Cookie 口径与服务端口径分开显示（合成一句会自相矛盾）；state 只在 refresh 可信
         state = (info.get("login_state") or "") if self.mode == "refresh" else ""
 
         self._log(f"共取得 {len(cookies)} 项 Cookie（原始 {info.get('total', 0)} 项）")
@@ -576,10 +570,8 @@ class LoginDialog(tk.Toplevel):
             alive = self.worker.is_running()
             self.btn_grab.config(state="normal" if alive else "disabled")
             if alive:
-                # ★ 浏览器还活着就必须把探针接回去。探针原本只在 `opened` 事件里启动，
-                # 而 `_open` 可能提前退场（首屏超时、异常……）导致那个事件压根没发出 ——
-                # 后果是用户随后在浏览器里登录成功了，程序却永远看不见，只能手动
-                # 点「重新打开浏览器」才能恢复。探针很廉价，宁可多跑。
+                # 浏览器还活着就把探针接回去：探针只在 opened 事件里启动，
+                # _open 提前退场时那个事件不会发出，登录成功也就检测不到
                 self._start_poll()
                 self._set_status("出错了，但浏览器仍在运行 —— 请看下方日志", AMBER)
             else:

@@ -14,13 +14,10 @@
     由 core.douyin_im 滚动枚举全部会话名，存进 profiles.json，之后直接在界面里点选
   - 抓到的名单存在 profiles.json（本工具自己的元数据），**不写进 .env**
 
-运行（**从仓库根**，唯一入口）：
+运行（从仓库根，唯一入口）：
     python run_configtool.py
 
-文件位置：
-  - .env                     → 项目根（与仓库根的 main.py 同级），由 paths.py 决定
-  - profiles/ profiles.json → 本目录（工具自己的数据）
-  - local.json              → 本目录（工具私有设置，不进 .env）
+文件位置见 paths.py：.env 在项目根，profiles/ 等在本目录。
 """
 
 from __future__ import annotations
@@ -162,9 +159,7 @@ class ConfigApp:
         self._conversation_owner = None      # 选择器里现在装的是哪个账号
 
         self._build_ui()
-        # 建完控件再统一上滚轮保护：数值框 / 下拉框被滚轮路过就改值（ttk 在 Windows
-        # 上的自带行为），而 trace_add 会立刻把改后的值存进 .env —— 用户只是滚了一下
-        # 页面，配置就变了。见 widgets.disable_wheel_change。
+        # 数值框 / 下拉框被滚轮路过就改值（ttk 自带行为），而 trace_add 会立刻存进 .env
         self.wheel_guarded = harden_wheel(self.root)
         self._load_into_ui()
         self._loading = False
@@ -1366,11 +1361,7 @@ class ConfigApp:
         messagebox.showinfo("校验结果", "\n\n".join(lines))
 
     def on_open_env_dir(self) -> None:
-        """打开 .env 所在目录。
-
-        .env 现在就写在主程序读它的位置（源码运行 = 仓库根，发布版 = 程序同级），
-        所以这里是「去看看配置」而不是「去取配置」—— 不再需要手工搬一次。
-        """
+        """打开 .env 所在目录。"""
         self._open_folder(self.env_path.parent, "配置所在目录")
 
     def on_open_profile_dir(self) -> None:

@@ -215,8 +215,7 @@ class MatchTests(unittest.TestCase):
 
 class JoinTests(unittest.TestCase):
     class _MonStub:
-        """ImMonitor 的最小替身。`errors` 是它对外的诊断出口 ——
-        收尾日志会把它打出来，所以替身也得有（否则 _finish_scan 直接崩）。"""
+        """ImMonitor 的最小替身（errors 是 _finish_scan 会读的字段）。"""
 
         def __init__(self, sec):
             self.errors = []

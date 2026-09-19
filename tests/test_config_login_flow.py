@@ -1,22 +1,10 @@
-"""configTool 登录流程的两条硬约束（纯逻辑，不依赖 tkinter / 浏览器）。
+"""configTool 登录流程的两条约束（纯逻辑，不依赖 tkinter / 浏览器）。
 
-钉住的是 2026-09-19 那次真实事故的根因 —— 当时「添加账号」在用户扫码后、
-**还没提交短信验证码**的时候把页面刷新了，登录状态直接丢掉。两个原因：
+  · 抓取门禁只看 Cookie（`_has_login_cookie`），页面级信号不当门禁 ——
+    check_login 的 DOM 兜底在登录过程中就成立，据此抓取会打断用户登录；
+  · 自动流程（allow_reload=False）绝不调用 page.reload。
 
-  ① `check_login` 的页面级信号（SSR / DOM 兜底）被当成了「可以开始抓取」的
-     门禁。它会在本地还没有可用登录态时说「已登录」，于是触发了抓取；
-  ② 抓不到账号信息时 `read_account_info` 会刷新页面重试，而这一刷恰好
-     打断用户正在进行的登录。
-
-所以这里钉两条不变量：
-  · 抓取门禁只看 Cookie（`_has_login_cookie`），页面级信号不当门禁；
-  · 自动流程（allow_reload=False）**绝不**调用 page.reload。
-
-另外钉住 `_login_verdict` 的两个细节：`logged_in` 必须带 user_id 才算数
-（与 core.douyin_im.check_login 对齐），以及浅判定不许序列化整页 DOM
-（探针 1.5 秒一次，落进 check_login 的 page.content() 会明显拖慢浏览器）。
-
-用假的 page/ctx 顶替 Playwright —— 只验证分支，不开浏览器。
+用假的 page/ctx 顶替 Playwright，只验证分支。
 """
 
 import unittest
@@ -78,11 +66,7 @@ class LoginVerdictTests(unittest.TestCase):
     """`_login_verdict` 的结论口径。"""
 
     def test_ssr_logged_in_needs_user_id(self):
-        """★ `logged_in` 但缺 user_id 不算数 —— 与 check_login 的口径一致。
-
-        少这一个条件，「页面认为已登录」就会被当成真的已登录，
-        白白触发一次抓取。
-        """
+        """`logged_in` 但缺 user_id 不算数（与 check_login 对齐），否则会白触发抓取。"""
         w, _ = _worker(ssr={"verdict": "logged_in", "user_id": "10000000000000001"})
         self.assertEqual(w._login_verdict()["state"], "LOGGED_IN")
 
@@ -99,18 +83,14 @@ class LoginVerdictTests(unittest.TestCase):
         self.assertEqual(w._login_verdict()["state"], "NOT_LOGGED_IN")
 
     def test_shallow_verdict_never_serializes_the_dom(self):
-        """★ 浅判定不许碰 page.content()。
-
-        探针 1.5 秒跑一次，而 page.content() 是整页 DOM 序列化 ——
-        落进去会让用户正在操作的浏览器明显发顿。
-        """
+        """浅判定不许碰 page.content()（整页 DOM 序列化，探针 1.5 秒跑一次）。"""
         w, page = _worker((), ssr={})
         self.assertEqual(w._login_verdict()["state"], "UNKNOWN")
         self.assertEqual(page.content_calls, 0, "浅判定不该序列化 DOM")
 
 
 class AutoFlowNeverReloadsTests(unittest.TestCase):
-    """★ 自动流程绝不刷新页面（本次事故的直接原因）。"""
+    """自动流程绝不刷新页面。"""
 
     def test_auto_grab_does_not_reload(self):
         w, page = _worker((), ssr={})
@@ -118,11 +98,7 @@ class AutoFlowNeverReloadsTests(unittest.TestCase):
         self.assertEqual(page.reloads, 0, "自动流程刷新了页面 —— 会打断用户的登录")
 
     def test_manual_grab_may_reload(self):
-        """手动「立即抓取」是例外：用户本人在浏览器前面，知道自己在干什么。
-
-        这里只钉「决策」—— 把 _reload_for_profile 换成记录器，不去真跑它
-        （真跑要等满 PROFILE_WAIT_SECONDS，测试会白等 15 秒）。
-        """
+        """手动「立即抓取」是例外。只钉决策：把 _reload_for_profile 换成记录器。"""
         w, _ = _worker((), ssr={})
         calls = []
         w._reload_for_profile = lambda: calls.append(1)

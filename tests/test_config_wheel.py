@@ -1,14 +1,6 @@
-"""滚轮保护的单测（需要可用显示；没有就整类 skip）。
+"""滚轮保护的单测：滚轮不得改数值框/下拉框的值，但仍要能滚表单。
 
-钉住的问题是真实的：Windows 上 ttk 的 Spinbox / Combobox 自带「滚轮改值」的类绑定，
-指针路过就把数字改了 —— 而 main.py 里每个数值框都挂了 `trace_add(write)`，
-改完立刻自动写进 .env。用户只是滚了一下页面，配置就变了，且毫无提示。
-
-两条不变量：
-  · `disable_wheel_change` 之后，滚轮**不得**改值；
-  · 但滚轮也不能就此失效 —— 要把它转交给所属滚动容器，页面照常滚。
-
-⚠️ 这些测试要真的建 Tk 窗口。CI/容器里没有显示时跳过，不算失败。
+这些测试要真的建 Tk 窗口；没有显示时整类 skip。
 """
 
 import unittest
@@ -63,10 +55,9 @@ class WheelGuardTests(unittest.TestCase):
         return box, var
 
     def test_baseline_wheel_does_change_value(self):
-        """先钉住前提：不保护的话，滚轮确实会改值。
+        """不保护时滚轮会改值（前提）；加上保护后必须不变。
 
-        这条**不是为了失败**：万一某个 Tk 版本没有这个类绑定，它会 skip ——
-        那也说明我们不需要这层保护，而不是保护写错了。
+        某些 Tk 版本没有这个类绑定，那就 skip —— 是不需要保护，不是保护写错了。
         """
         box, var = self._spinbox(self.root, 5)
         box.event_generate("<MouseWheel>", delta=-120)
@@ -74,7 +65,6 @@ class WheelGuardTests(unittest.TestCase):
         if var.get() == 5:
             self.skipTest("这个 Tk 版本的 Spinbox 没有滚轮改值行为")
 
-        # 带保护时必须纹丝不动
         box2, var2 = self._spinbox(self.root, 5)
         widgets.disable_wheel_change(box2)
         box2.event_generate("<MouseWheel>", delta=-120)
@@ -82,7 +72,7 @@ class WheelGuardTests(unittest.TestCase):
         self.assertEqual(var2.get(), 5, "滚轮把数值改了 —— 保护没生效")
 
     def test_wheel_is_forwarded_to_the_scroller(self):
-        """★ 值不变，但滚轮不能就此失效：要转交给所属滚动容器。"""
+        """值不变，但滚轮要转交给所属滚动容器，不能就此失效。"""
         scroller = _FakeScroller(self.root)
         scroller.pack()
         box, var = self._spinbox(scroller, 5)

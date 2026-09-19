@@ -42,20 +42,17 @@ from utils.logger import setup_logger
 # 所以 import 期调用是安全的（它自己的 config 也是这么读的）。
 logger = setup_logger("douyin_im", level=get_config().get("logLevel", "Info"))
 
-# 「慢调用」阈值（秒）。Playwright 的默认超时是 120s（由 utils.config 的
-# BROWSER_ACTION_TIMEOUT 换算而来），一次抖动就足以让日志看起来像卡死 ——
-# 实测过扫描开头凭空少了 120 秒、整段空白。慢到 3 秒就该留下痕迹，
-# 不必等到 120 秒之后才知道发生过什么。
+# 单次调用超过这么多秒就告警（Playwright 默认超时 120s，静默等到那时日志会一片空白）
 SLOW_CALL_SECONDS = 3.0
 
 
 def _brief(exc) -> str:
-    """异常压成一行。Playwright 的异常常带多行 Call log，原样进日志会刷屏。"""
+    """异常压成一行（Playwright 的异常常带多行 Call log）。"""
     return f"{type(exc).__name__}: {' '.join(str(exc).split())}"
 
 
 def _slow_warn(label: str, elapsed: float) -> None:
-    """一次调用慢到不像正常时就报警 —— 成功返回的慢调用同样要报。"""
+    """慢调用告警。成功返回的慢调用同样要报。"""
     if elapsed >= SLOW_CALL_SECONDS:
         logger.warning(f"[SLOW] {label} 耗时 {elapsed:.1f}s")
 
@@ -1289,8 +1286,7 @@ class DouyinIM:
         logger.info(f"[SCAN] 结束：stopped={stopped} 步数={st['steps']} 访问={len(seen)} "
                     f"找到={len(found)} 未找到={len(missing)} scanned_all={scanned_all}")
 
-        # 监听层的响应读取失败从来没被打印过 —— 而「一次调用凭空吃掉 120 秒」
-        # 多半就出在这里（事件回调里同步读 body）。把 URL 点出来，卡顿才有据可查。
+        # 监听层的响应读取失败此前从不打印，卡顿排查没有线索
         if self.mon.errors:
             logger.warning(
                 f"[SCAN] ⚠️ 监听层有 {len(self.mon.errors)} 条响应读取失败（卡顿多半来自这里）："
@@ -1418,12 +1414,7 @@ class DouyinIM:
         return None, None
 
     def _snooze(self, ms: int, label: str = "等待") -> None:
-        """带计时的等待。
-
-        Playwright 的 `wait_for_timeout` 同样是驱动侧往返，卡住时一样会让日志一片
-        空白。原来这些调用散在各处、不留任何痕迹，「少了 120 秒」时连是哪个等待
-        都说不出来。行为与直接调用完全一致（异常照常抛出）。
-        """
+        """带计时的等待（异常照常抛出，行为与直接调用一致）。"""
         t0 = time.monotonic()
         try:
             self.page.wait_for_timeout(ms)
@@ -1435,8 +1426,6 @@ class DouyinIM:
         try:
             result = self.page.evaluate(JS_SCROLL_PROBE) or {"found": False}
         except Exception as e:
-            # 不能静默：这里的失败往往就是「一次 Playwright 调用吃满了默认超时」。
-            # 一旦吞掉，日志上就是整段空白，事后完全查不出卡在哪。
             logger.warning(
                 f"[SCAN] ⚠️ 读滚动状态失败（耗时 {time.monotonic() - t0:.1f}s）：{_brief(e)}"
             )
@@ -1449,8 +1438,7 @@ class DouyinIM:
         try:
             result = self.page.evaluate(JS_SCROLL_TO, top)
         except Exception as e:
-            # 同上。而且调用方 `self._scroll_to(...)` 把返回值直接丢掉了 ——
-            # 这里是唯一能留下痕迹的地方。
+            # 调用方丢掉了返回值，这里是唯一能留痕的地方
             logger.warning(
                 f"[SCAN] ⚠️ 滚动到 {top} 失败（耗时 {time.monotonic() - t0:.1f}s）：{_brief(e)}"
             )

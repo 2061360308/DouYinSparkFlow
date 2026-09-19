@@ -5,19 +5,15 @@
     完成全部调用。因此本模块把浏览器操作封在一个后台线程里，外部只通过
     「命令队列 + 事件队列」与它交互，绝不跨线程直接碰 page / context。
   - 每个账户传入自己的 profile 目录，登录态相互隔离，可分别重新登录。
-  - **「抖音页面长什么样、该怎么滚」不在本文件里定义**：登录态判定
-    （`core.douyin_im.check_login`）与会话枚举（`DouyinIM.iter_conversations`）
-    都借主程序的 core/douyin_im.py。本模块只负责浏览器 / 线程 / 配套代理隧道的
-    生命周期，以及把库给出的结论翻译成界面事件；**刻意不再**镜像库里的选择器或
-    页面脚本 —— 那样两边必然漂移，工具抓到的名单会和主程序实际能操作的对不上。
+  - 登录态判定与会话枚举都借主程序的 core/douyin_im.py，不在这里镜像其选择器。
 
 用法：
     worker = BrowserLoginWorker(profile_dir, fingerprint="73841")
     worker.start()
     worker.send("open")           # 启动浏览器并跳转抖音聊天页
     worker.send("probe")          # 廉价探一次：登录了吗 / 账号信息截到了吗（供自动流程轮询）
-    worker.send("grab")           # 抓取登录态（自动流程：不刷新、不深判定）
-    worker.send("grab", {"allow_reload": True, "deep_login": True})   # 手动「立即抓取」
+    worker.send("grab")           # 抓取登录态（自动流程）
+    worker.send("grab", {"allow_reload": True, "deep_login": True})  # 手动「立即抓取」
     worker.send("conversations")  # 枚举全部会话（交给 core.douyin_im 完成）
     worker.send("shutdown")       # 关闭浏览器并结束线程
 
@@ -25,20 +21,8 @@
     ("log"|"status"|"opened"|"probe"|"grabbed"|"conversations"|
      "conversation_progress"|"error"|"done", payload)
 
-    probe / grabbed 的 payload 同时给**两个口径**，由界面决定信哪个（见 login_dialog）：
-      logged_in   本地 Cookie 里有没有 sessionid —— 唯一可靠的「可以开始抓」门禁。
-                  要写进 .env 的东西就是它，没有它就没有可保存的登录态。
-      login_state core.douyin_im 的判定（LOGGED_IN / NOT_LOGGED_IN / EXPIRED /
-                  UNKNOWN）—— 只用来回答「这份登录态服务端还认不认」和写提示。
-    两者不是一回事，**不能混成一句**（混过，日志里同时出现「已登录 ✔」和
-    「未检测到登录态」）；页面级信号也不能当门禁，详见 _login_verdict。
-
-    grab 的两个开关，默认都关（只有手动「立即抓取」才打开）：
-      allow_reload  截不到账号信息时允许刷新页面重试。默认**不允许** ——
-                    刷新会打断用户正在进行的扫码 / 短信验证流程（真实踩过：
-                    扫码后等验证码时被工具刷新，登录状态直接丢掉）。
-      deep_login    允许跑到 check_login 的完整判定（页面 HTML → DOM → cookie），
-                    代价是一次整页 DOM 序列化。默认只做廉价判定。
+    probe / grabbed 的 payload 给两个口径：logged_in 是本地有没有 sessionid
+    （抓取门禁只看它），login_state 是 core.douyin_im 的判定（只管提示与拦截）。
 
 指纹与配置目录都取自 profiles.json（见 profile_store.py）。fingerprint 传空则退回
 cloakbrowser 的默认行为 —— 每次启动随机一个新指纹。
@@ -78,14 +62,7 @@ FINGERPRINT_FLAG = "--fingerprint="
 PROFILE_GRACE_SECONDS = 5.0
 PROFILE_WAIT_SECONDS = 15.0
 
-# 打开抖音聊天页时，愿意等首屏多久（毫秒）。
-#
-# 给得宽是因为这一跳常常是**走配套代理**的：浏览器 → 本地 gost → wss 隧道 →
-# 云函数 → 抖音，抖音首屏又要拉几百个静态资源，链路一抖就是几十秒。
-# 实测过一次整整 90s 没出来（原来的值），而页面在超时后约 40s 自己好了。
-#
-# 注意 goto 超时**不是**「导航失败」：Playwright 只中止「等待」，请求还在继续，
-# 页面通常随后就绪 —— 所以 _open 里把它降级成一条日志，继续往下走。
+# 打开抖音聊天页时愿意等首屏多久（毫秒）。走配套代理时链路抖动很大，给宽些。
 GOTO_TIMEOUT_MS = 180_000
 
 # 只保留这些域下的 Cookie，避免把无关站点的 Cookie 灌进任务
@@ -409,12 +386,8 @@ def detect_account_info(page) -> dict:
 # ---------------------------------------------------------------------------
 # 会话列表：整体委托给 core/douyin_im.py
 # ---------------------------------------------------------------------------
-# 「怎么把会话列表滚完」的权威实现只有一份 —— 主程序的 core/douyin_im
-# （虚拟列表滚动、conv_id 去重、群聊判定、资料合并、「到底」的三重信号叠加）。
-# 本文件**不再**镜像它的选择器，也不自己写页面脚本：这里曾经手抄过一份滚动用的
-# 页面表达式，两边一旦漂移，工具抓到的名单就和主程序实际能操作的对不上。
-#
-# 下面几个常量只是喂给 DouyinIM 的入参（语义与 utils/config.py 里同名项一致）。
+# 滚动逻辑只在主程序的 core/douyin_im 里实现一份，本文件不镜像它的选择器。
+# 下面几个常量是喂给 DouyinIM 的入参（语义与 utils/config.py 里同名项一致）。
 CONVERSATION_READY_TIMEOUT_SECONDS = 45.0  # 门禁等待：登录态 + 会话列表就绪
 CONVERSATION_SCAN_TIMEOUT_SECONDS = 180.0  # 滚动扫描总预算（秒）
 CONVERSATION_SETTLE_MS = 800               # 每批新会话等的资料静默窗（毫秒）
@@ -424,12 +397,7 @@ CONVERSATION_HEARTBEAT_SECONDS = 10.0      # 长时间没有新会话时的心�
 
 
 def _display_name(item: dict) -> str:
-    """把 DouyinIM 给出的会话项折成一个显示名。
-
-    ``display`` 由库里按「备注 > 昵称 > 列表标题」定好，与主程序匹配目标好友时的
-    优先级一致 —— 用户给好友起过备注的话，这里显示的就是备注，选目标时不用再去
-    猜哪个昵称对应谁。
-    """
+    """把 DouyinIM 给出的会话项折成显示名（display 已是「备注 > 昵称 > 标题」）。"""
     return str(item.get("display") or item.get("title") or "").strip()
 
 
@@ -558,20 +526,11 @@ class BrowserLoginWorker(threading.Thread):
     def _login_verdict(self, *, deep: bool = False) -> dict:
         """登录态判定，复用 ``core.douyin_im.check_login``。
 
-        **它不参与「能不能开始抓取」这个决定** —— 那个门禁是
-        ``_has_login_cookie()``，由界面拿着判断（见 login_dialog._on_probe）。
-        这里只回答两件事：这份登录态服务端还认不认、该怎么跟用户说。
+        不参与「能不能开始抓」的决定（那个门禁是 ``_has_login_cookie``）：
+        check_login 的 DOM 兜底只要求页面上有 ``[data-e2e="msg-input"]``，
+        登录过程中的壳页面也满足，据此触发抓取会打断用户正在进行的登录。
 
-        为什么不能当门禁：`check_login` 的第 ③ 层是 DOM 兜底 ——
-        页面上有 ``[data-e2e="msg-input"]`` 就算已登录（core/douyin_im.py），
-        而 chat 页的壳在**登录过程中**也会渲染出这个输入框。拿它当门禁，就会在
-        用户还没输完验证码时以为「已登录」，进而触发抓取、刷新页面，把用户正在
-        进行的登录流程刷掉 —— 这个坑真实踩过。
-
-        廉价路径优先：绝大多数时候根本不用进 check_login。导航前挂好的 ImMonitor
-        已经在收 /chat 的 SSR，登录态就写在那份 HTML 里，读一次内存字段即可；
-        探针 1.5 秒一次，不该每次都去序列化整页 DOM。只有 ``deep=True``
-        （一次性场景：手动抓取、刷新登录信息）才允许落到完整判定。
+        默认只读 ImMonitor 已收到的 SSR；``deep=True`` 才允许序列化整页 DOM。
         """
         ssr = dict(getattr(self.mon, "login", None) or {})
 
@@ -775,13 +734,11 @@ class BrowserLoginWorker(threading.Thread):
 
         第 1 层：拦截 `/aweme/v1/web/user/profile/self` 的响应
         第 2 层：原地等一小会儿（请求通常只比 goto 晚几百毫秒）
-        第 3 层：刷新页面，等抖音自己再请求一次 —— **受 allow_reload 控制**
+        第 3 层：刷新页面，等抖音自己再请求一次 —— 受 allow_reload 控制
         第 4 层：扫 localStorage
 
-        默认 allow_reload=True 是给手动场景留的（用户点了按钮、人就在浏览器前面）。
-        自动流程必须传 False：用户可能正在扫码 / 等验证码，一次刷新就把他的登录
-        流程打断了 —— 而这一层刷新本身并不保证换来账号信息（实测刷了两次
-        都没拿到），付出与收益完全不对等。要刷新让用户自己按 F5。
+        自动流程必须传 allow_reload=False：用户可能正在扫码 / 等验证码，
+        刷新会打断他的登录流程。
         """
         result = self._collect_captured()
         if result["nickname"] or result["unique_id"]:
@@ -823,9 +780,6 @@ class BrowserLoginWorker(threading.Thread):
         只读不改：不刷新页面、不等待、不抓 Cookie，所以 1.5 秒探一次也不会
         打扰用户。顺带读一次 Python 侧缓存，把排队中的响应回调派发掉
         （工作线程平时阻塞在 Queue.get 上，Playwright 事件不会自己跑）。
-
-        两个口径都给出去，但**门禁只认 Cookie**（见 _login_verdict 的说明）；
-        结论走廉价路径，绝不在这里落到 check_login 的整页 DOM 判定。
         """
         if not self.is_running():
             self._reset()
@@ -842,16 +796,14 @@ class BrowserLoginWorker(threading.Thread):
             )
             return
 
-        # 门禁：要保存进 .env 的东西就是 Cookie，没有 sessionid 就没有可保存的，
-        # 而这是唯一「宁可漏、不会错」的信号 —— 页面级信号会说谎（见 _login_verdict）
+        # 门禁只看 Cookie（要存进 .env 的就是它），页面级信号可能说谎（见 _login_verdict）
         logged_in = self._has_login_cookie()
         verdict = self._login_verdict()
 
         detected = (
             self._collect_captured() if logged_in else extract_self_profile(None)
         )
-        # 抖音号只有 self profile 接口给得出来（SSR 里没有）；昵称则可以先拿库的
-        # 结论兜底，界面能早点显示「登的是谁」。
+        # 抖音号只有接口给得出来；昵称可先用库的结论兜底
         if not detected.get("nickname") and verdict.get("nickname"):
             detected["nickname"] = verdict["nickname"]
 
@@ -877,12 +829,9 @@ class BrowserLoginWorker(threading.Thread):
     def _conversations(self) -> None:
         """枚举会话列表（工作线程内执行）。
 
-        打开聊天页、门禁、滚动枚举**全部**交给 core.douyin_im.DouyinIM；
-        本方法只做三件事：把进度翻译成界面事件、把会话项折成显示名、把结论发出去。
-
-        注意 DouyinIM 会自己再导航一次聊天页 —— 它的契约是「挂钩子 → 导航 → 跑门禁」，
-        钩子必须早于导航才不会漏首屏响应。这一趟重复加载是有意为之：换来的是完整的
-        监听覆盖，而且不必为了工具在库里加任何开关。
+        打开聊天页、门禁、滚动枚举都交给 core.douyin_im.DouyinIM，本方法只把进度
+        翻译成界面事件、把结论发出去。DouyinIM 会自己再导航一次聊天页（它的契约是
+        先挂钩子再导航），这一趟重复加载是有意的。
         """
         if not self.is_running():
             self._reset()
@@ -925,8 +874,7 @@ class BrowserLoginWorker(threading.Thread):
                     seen.add(name)
                     names.append(name)
 
-                # 进度节流：攒够 CONVERSATION_PROGRESS_EVERY 个报一次；长时间没有
-                # 新会话时按心跳报，否则界面在一轮几分钟的扫描里看着像卡死了。
+                # 进度节流：攒够 N 个报一次，长时间无新增时按心跳报，避免界面像卡死
                 now = time.monotonic()
                 grew = len(names) != reported
                 if (grew and len(names) - reported >= CONVERSATION_PROGRESS_EVERY) or (
@@ -944,8 +892,7 @@ class BrowserLoginWorker(threading.Thread):
         elapsed = round(time.monotonic() - started, 1)
         scan = im.last_scan or {}
 
-        # 折叠组 / 陌生人组是独立滚动容器，主列表扫不到 —— 主程序在同样的地方也会
-        # 提醒一次（core/tasks.py）。不提示的话用户只会以为「人少了」。
+        # 折叠组 / 陌生人组是独立滚动容器，主列表扫不到（core/tasks.py 也会提醒）
         try:
             folds = im.fold_groups() or {}
             hidden = sum(len(v or []) for v in folds.values())
@@ -1040,10 +987,8 @@ class BrowserLoginWorker(threading.Thread):
             raise
         self.log("隐身 Chromium 已启动" + ("（无头模式）" if self.headless else ""))
 
-        # 导航超时统一放宽：走配套代理时首屏可能要好几分钟。这里设默认值是为了让
-        # **所有**导航都受益 —— 尤其是「拉取会话列表」那条路上 DouyinIM 内部自己
-        # 发起的 goto（它不传 timeout，会继承这个默认值；Playwright 自带的默认只有
-        # 30s，在隧道场景下几乎必超时）。
+        # 统一放宽导航超时，让 DouyinIM 内部不传 timeout 的 goto 也受益
+        # （Playwright 默认只有 30s，走代理时几乎必超）
         try:
             self.ctx.set_default_navigation_timeout(GOTO_TIMEOUT_MS)
         except Exception as exc:
@@ -1068,11 +1013,8 @@ class BrowserLoginWorker(threading.Thread):
                 target_url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS
             )
         except Exception as exc:
-            # ★ 超时 ≠ 导航失败：Playwright 只中止「等待」，请求仍在继续。
-            # 实测 90s 超时之后约 40s 页面自己就绪、用户也顺利登录了 —— 那时若按
-            # 致命错误收场，`opened` 事件就发不出去，探针（登录检测）永远不会启动，
-            # 用户登录成功了程序也看不见，只能手动点「重新打开浏览器」来救。
-            # 所以这里只记一条日志、继续往下走，把「等页面可用」交给探针。
+            # 超时 ≠ 导航失败：Playwright 只中止「等待」，请求仍在继续，页面随后可能就绪。
+            # 这里按致命错误收场的话 opened 事件发不出去，探针就永远不启动。
             reason = " ".join(str(exc).split())      # 异常里带多行 Call log，压成一行
             self.log(
                 f"首屏加载等待超时（{GOTO_TIMEOUT_MS // 1000}s）——"
@@ -1102,10 +1044,8 @@ class BrowserLoginWorker(threading.Thread):
     def _grab(self, payload=None) -> None:
         """抓取登录信息。
 
-        payload 支持两个开关，**默认都关**，由 login_dialog 按场景打开：
-          allow_reload  截不到账号信息时允许刷新页面 —— 只给手动「立即抓取」
-          deep_login    允许跑 check_login 的完整判定 —— 只给「刷新登录信息」
-                        （add 模式下页面级信号不可信，见 _login_verdict）
+        payload 两个开关默认都关，由 login_dialog 按场景打开：
+        allow_reload 允许刷新页面；deep_login 允许跑 check_login 的完整判定。
         """
         options = payload if isinstance(payload, dict) else {}
         allow_reload = bool(options.get("allow_reload"))
