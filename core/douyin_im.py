@@ -284,7 +284,7 @@ JS_SEL_DIAG = """((p) => {
     editor: !!document.querySelector('.public-DraftStyleDefault-block, [contenteditable="true"]'),
     chat: !!document.querySelector('[data-e2e="message-list"], .messageList, [data-e2e="chat-content"]'),
     fromPoint: fromPoint,
-    titles: items.slice(0, 8).map(e => (e.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 18)),
+    titles: items.slice(0, 8).map(e => (e.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 18)),
   };
 })"""
 
@@ -295,29 +295,59 @@ JS_EDITOR_EXISTS = """(() => {
          || document.querySelector('[data-e2e="msg-input"] [contenteditable="true"]'));
 })()"""
 
-JS_TYPE_TEXT = """((p) => {
-  const ed = document.querySelector('[data-e2e="msg-input"] .public-DraftEditor-content')
+# 合成输入：**一次只处理一行**，由 Python 侧逐行调用、行间留出重渲染时间。
+#
+# 为什么不能在一个 JS 循环里插完：Draft.js 每收到一次 beforeinput 都会重渲染
+# contenteditable，DOM 选区随之失效。连插多行时第 2 行起 execCommand 会静默
+# no-op —— 症状就是「只发出去第一行，后面全是空行」。所以这里做成单行原语：
+# 每次重新取节点、把光标强制移到末尾、再用 textContent 长度自校验插入是否真的发生。
+JS_TYPE_LINE = """((p) => {
+  const pick = () => document.querySelector('[data-e2e="msg-input"] .public-DraftEditor-content')
           || document.querySelector('.DraftEditor-root [contenteditable="true"]')
           || document.querySelector('.messageMsgInput [contenteditable="true"]')
           || document.querySelector('[data-e2e="msg-input"] [contenteditable="true"]')
           || document.querySelector('[contenteditable="true"]');
-  if (!ed) return 'no-editor';
-  ed.focus();
-  const lines = p.lines || [];
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i]) document.execCommand('insertText', false, lines[i]);
-    if (i !== lines.length - 1) {
-      ed.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-        shiftKey: true, bubbles: true, cancelable: true,
-      }));
-      ed.dispatchEvent(new KeyboardEvent('keyup', {
+  const caretToEnd = (ed) => {
+    ed.focus();
+    try {
+      const r = document.createRange();
+      r.selectNodeContents(ed);
+      r.collapse(false);
+      const s = window.getSelection();
+      s.removeAllRanges();
+      s.addRange(r);
+    } catch (e) {}
+    return ed;
+  };
+  const softBreak = (ed) => {
+    for (const t of ['keydown', 'keyup']) {
+      ed.dispatchEvent(new KeyboardEvent(t, {
         key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
         shiftKey: true, bubbles: true, cancelable: true,
       }));
     }
+  };
+  let ed = pick();
+  if (!ed) return { err: 'no-editor' };
+  const res = { ins: true, grew: 0, retry: false };
+  if (p.text) {
+    ed = caretToEnd(ed);
+    const before = (ed.textContent || '').length;
+    let ok = document.execCommand('insertText', false, p.text);
+    let after = (ed.textContent || '').length;
+    if (!ok || after <= before) {
+      // 选区被重渲染吃掉时再补一次：重取节点 + 重设光标
+      const e2 = caretToEnd(pick() || ed);
+      ok = document.execCommand('insertText', false, p.text);
+      after = (e2.textContent || '').length;
+      res.retry = true;
+    }
+    res.ins = ok;
+    res.grew = after - before;
   }
-  return 'ok:' + (ed.textContent || '').length;
+  if (p.enter) softBreak(pick() || ed);
+  res.len = ((pick() || ed).textContent || '').length;
+  return res;
 })"""
 
 JS_CLICK_SEND = """(() => {
@@ -1795,13 +1825,28 @@ class DouyinIM:
                     pass
                 self.page.wait_for_timeout(200)
             logger.debug(f"[SEND] 编辑器就绪={ready}")
-            r = self.page.evaluate(JS_TYPE_TEXT, {"lines": lines})
-            self.page.wait_for_timeout(500)
+            # ★ 逐行调用、行间留 250ms：Draft.js 每收一次 beforeinput 都会重渲染
+            # contenteditable 并丢掉 DOM 选区，在一个 JS 循环里连插会让第 2 行起
+            # 静默 no-op（症状：只有第一行 + 后面全空行）。详见 JS_TYPE_LINE 的注释。
+            steps = []
+            for i, line in enumerate(lines):
+                steps.append(self.page.evaluate(JS_TYPE_LINE, {
+                    "text": line,
+                    "enter": i != len(lines) - 1,
+                }))
+                self.page.wait_for_timeout(250)
             try:
                 empty_now = self.page.evaluate(JS_EDITOR_EMPTY)
             except Exception:
                 empty_now = None
-            logger.debug(f"[SEND] 合成输入={r}  输入框为空={empty_now}")
+            typed = sum(int(s.get("grew", 0)) for s in steps if isinstance(s, dict))
+            want_len = sum(len(l) for l in lines)
+            logger.debug(f"[SEND] 合成输入={steps}  已键入={typed}/{want_len}  输入框为空={empty_now}")
+            if typed < want_len:
+                logger.warning(f"[SEND] ⚠️ 合成输入缺行：已键入 {typed} 字，应为 {want_len} 字"
+                               f"（lines={lines}）")
+                if typed == 0:
+                    raise RuntimeError("合成输入一行都没进去，拒绝发送空消息")
         else:
             editor = self._editor()
             if editor is None:
