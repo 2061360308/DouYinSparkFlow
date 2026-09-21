@@ -256,6 +256,112 @@ JS_CURRENT_CONV = """(() => {
   return { index: idx, title, convId };
 })()"""
 
+JS_SEL_DIAG = """((p) => {
+  const items = [...document.querySelectorAll('[data-e2e="conversation-item"]')];
+  let anyCur = 0, curSample = null;
+  for (const e of document.querySelectorAll('*')) {
+    const cn = e.className;
+    if (typeof cn === 'string' && cn.indexOf('curConversation') >= 0) {
+      anyCur++;
+      if (!curSample) curSample = e.tagName + '|' + cn.slice(0, 80);
+    }
+  }
+  let fromPoint = null;
+  try {
+    const px = (p && p.px) || 0, py = (p && p.py) || 0;
+    const el = document.elementFromPoint(px, py);
+    fromPoint = (el ? el.tagName + '#' + (el.getAttribute('data-e2e') || '') + '|' + String(el.className).slice(0, 60) : 'null') + ' @' + px + ',' + py;
+  } catch (e) { fromPoint = 'err:' + e; }
+  return {
+    viewport: [window.innerWidth, window.innerHeight],
+    dpr: window.devicePixelRatio,
+    itemCount: items.length,
+    curCount: document.querySelectorAll('.conversationConversationItemcurConversation').length,
+    anyCurClass: anyCur,
+    curSample: curSample,
+    listBox: !!document.querySelector('[data-e2e="conversation-list"]'),
+    msgInput: !!document.querySelector('[data-e2e="msg-input"]'),
+    editor: !!document.querySelector('.public-DraftStyleDefault-block, [contenteditable="true"]'),
+    chat: !!document.querySelector('[data-e2e="message-list"], .messageList, [data-e2e="chat-content"]'),
+    fromPoint: fromPoint,
+    titles: items.slice(0, 8).map(e => (e.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 18)),
+  };
+})"""
+
+JS_EDITOR_EXISTS = """(() => {
+  return !!(document.querySelector('[data-e2e="msg-input"] .public-DraftEditor-content')
+         || document.querySelector('.DraftEditor-root [contenteditable="true"]')
+         || document.querySelector('.messageMsgInput [contenteditable="true"]')
+         || document.querySelector('[data-e2e="msg-input"] [contenteditable="true"]'));
+})()"""
+
+# 合成输入：**一次只处理一行**，由 Python 侧逐行调用、行间留出重渲染时间。
+#
+# 为什么不能在一个 JS 循环里插完：Draft.js 每收到一次 beforeinput 都会重渲染
+# contenteditable，DOM 选区随之失效。连插多行时第 2 行起 execCommand 会静默
+# no-op —— 症状就是「只发出去第一行，后面全是空行」。所以这里做成单行原语：
+# 每次重新取节点、把光标强制移到末尾、再用 textContent 长度自校验插入是否真的发生。
+JS_TYPE_LINE = """((p) => {
+  const pick = () => document.querySelector('[data-e2e="msg-input"] .public-DraftEditor-content')
+          || document.querySelector('.DraftEditor-root [contenteditable="true"]')
+          || document.querySelector('.messageMsgInput [contenteditable="true"]')
+          || document.querySelector('[data-e2e="msg-input"] [contenteditable="true"]')
+          || document.querySelector('[contenteditable="true"]');
+  const caretToEnd = (ed) => {
+    ed.focus();
+    try {
+      const r = document.createRange();
+      r.selectNodeContents(ed);
+      r.collapse(false);
+      const s = window.getSelection();
+      s.removeAllRanges();
+      s.addRange(r);
+    } catch (e) {}
+    return ed;
+  };
+  const softBreak = (ed) => {
+    for (const t of ['keydown', 'keyup']) {
+      ed.dispatchEvent(new KeyboardEvent(t, {
+        key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+        shiftKey: true, bubbles: true, cancelable: true,
+      }));
+    }
+  };
+  let ed = pick();
+  if (!ed) return { err: 'no-editor' };
+  const res = { ins: true, grew: 0, retry: false };
+  if (p.text) {
+    ed = caretToEnd(ed);
+    const before = (ed.textContent || '').length;
+    let ok = document.execCommand('insertText', false, p.text);
+    let after = (ed.textContent || '').length;
+    if (!ok || after <= before) {
+      // 选区被重渲染吃掉时再补一次：重取节点 + 重设光标
+      const e2 = caretToEnd(pick() || ed);
+      ok = document.execCommand('insertText', false, p.text);
+      after = (e2.textContent || '').length;
+      res.retry = true;
+    }
+    res.ins = ok;
+    res.grew = after - before;
+  }
+  if (p.enter) softBreak(pick() || ed);
+  res.len = ((pick() || ed).textContent || '').length;
+  return res;
+})"""
+
+JS_CLICK_SEND = """(() => {
+  const b = document.querySelector('.messageMsgInputpublishBtn.messageMsgInputpublishRedBtn')
+         || document.querySelector('[data-e2e="msg-send"]')
+         || document.querySelector('.messageMsgInputpublishBtn');
+  if (!b) return null;
+  for (const t of ['mousedown', 'mouseup', 'click']) {
+    b.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
+  }
+  return 'js';
+})()"""
+
+
 JS_MSG_STATE = """(() => {
   const items = document.querySelectorAll('[data-e2e="msg-item-content"]');
   const last = items[items.length - 1];
@@ -1448,41 +1554,97 @@ class DouyinIM:
 
     # ---------------------------------------------------- 对外：选中/输入
 
-    def _select_and_verify(self, item, attempts=3):
-        """选中并校验 conv_id。虚拟化下 nth 会漂，所以每轮都重新定位。"""
+    MODES = ("focusmouse", "cdp", "jsclick")
+
+    def _select_and_verify(self, item, attempts=None):
+        """选中并校验 conv_id。虚拟化下 nth 会漂，所以每轮都重新定位。
+
+        实验版：每轮换一种点击方式，并同时监听网络信号，
+        用来区分「点击没生效」和「选中了但检测不到」。
+        """
         want = item.get("conv_id")
-        for i in range(attempts):
-            idx = self._dom_index_of(want)
-            if idx is None:
-                logger.debug(f"[SEL] 第 {i+1} 次：目标不在当前窗口，先滚回来")
-                self._scroll_to(item.get("data_index", 0) * ROW_HEIGHT)
-                self.page.wait_for_timeout(400)
+        modes = (("jsclick", "cdp", "mouse") if self._input_mode() == "synth"
+                 else ("mouse", "elclick", "jsclick"))
+        if attempts is not None:
+            modes = modes[:attempts]
+
+        # 网络信号探针：点开会话一定会打 /v1/message/get_by_conversation
+        probe = {"n": 0, "hit": False, "t": 0.0}
+
+        def _on_resp(resp):
+            try:
+                u = resp.url
+            except Exception:
+                return
+            if "get_by_conversation" not in u:
+                return
+            probe["n"] += 1
+            try:
+                b = resp.body() or b""
+            except Exception:
+                b = b""
+            if b and want.encode() in b:
+                probe["hit"] = True
+                probe["t"] = time.time()
+
+        self.page.on("response", _on_resp)
+        try:
+            for i, mode in enumerate(modes, 1):
+                t0 = time.time()
                 idx = self._dom_index_of(want)
                 if idx is None:
+                    self._scroll_to(item.get("data_index", 0) * ROW_HEIGHT)
+                    self.page.wait_for_timeout(1200)
+                    idx = self._dom_index_of(want)
+                    if idx is None:
+                        logger.warning(f"[SEL] 第 {i} 次[{mode}]：定位不到 conv_id={want}")
+                        continue
+                box_info = None
+                try:
+                    box_info = self._mouse_select(idx, mode)
+                except Exception as e:
+                    logger.warning(f"[SEL] 第 {i} 次[{mode}] 点击异常：{_brief(e)}")
                     continue
-            try:
-                self._mouse_select(idx)
-            except Exception as e:
-                logger.warning(f"[SEL] 第 {i+1} 次点击异常：{e}")
-                continue
-            self.page.wait_for_timeout(600)
 
-            cur = self._current_conv()
-            if not cur:
-                continue
-            if want and cur.get("convId") and cur["convId"] != want:
-                logger.warning(f"[SEL] 第 {i+1} 次选中了 {cur.get('title')}（conv_id 不符）")
-                continue
-            logger.debug(f"[SEL] ✅ 已选中 {cur.get('title')}  conv_id={cur.get('convId')}")
-            return True
+                cur = None
+                for _ in range(12):          # 最多 ~2.4s，出现即退出
+                    cur = self._current_conv()
+                    if cur and (not want or not cur.get("convId") or cur["convId"] == want):
+                        break
+                    if probe["hit"] and probe["t"] >= t0:
+                        break
+                    self.page.wait_for_timeout(200)
+                net = probe["hit"] and probe["t"] >= t0
+
+                if cur and (not want or not cur.get("convId") or cur["convId"] == want):
+                    logger.warning(f"[SEL] ✅ 成功 方式={mode}  网络信号={net}  "
+                                   f"conv_id={cur.get('convId')}  title={cur.get('title')}")
+                    return True
+                if net:
+                    logger.warning(f"[SEL] ✅ 成功（仅网络信号，DOM 无选中态）方式={mode}  conv_id={want}")
+                    return True
+
+                try:
+                    diag = self.page.evaluate(JS_SEL_DIAG, {
+                        "px": (box_info or {}).get("x", -1),
+                        "py": (box_info or {}).get("y", -1),
+                    })
+                except Exception as e:
+                    diag = f"diag失败 {_brief(e)}"
+                logger.warning(f"[SEL] 第 {i} 次[{mode}] 未确认  目标={want}  耗时={time.time()-t0:.1f}s")
+                logger.warning(f"[SEL]   点击={box_info}")
+                logger.warning(f"[SEL]   当前={cur}")
+                logger.warning(f"[SEL]   页面={diag}")
+        finally:
+            try:
+                self.page.remove_listener("response", _on_resp)
+            except Exception:
+                pass
+        logger.warning(f"[SEL] ❌ 放弃 conv_id={want}（{len(modes)} 种方式都未确认，301={probe['n']}）")
         return False
 
     def _dom_index_of(self, conv_id):
-        """在**当前窗口内**查 conv_id 对应的 DOM 下标。
-
-        关键：查询与点击必须紧邻，中间不能被别的 evaluate 打断，
-        否则虚拟列表重排后 nth 会指到别人身上。
-        """
+        """在**当前窗口内**查 conv_id 对应的 DOM 下标。"""
         try:
             rows = self.page.evaluate(JS_COLLECT) or []
         except Exception:
@@ -1492,9 +1654,38 @@ class DouyinIM:
                 return r.get("index")
         return None
 
-    def _mouse_select(self, index):
-        """真实鼠标选中。选中逻辑挂在 onMouseDown 上，click 也能触发，
-        但 cloakbrowser 已开 humanize，这里走原生鼠标保证时序可控。"""
+    JS_INPUT_HOOK = """(() => {
+      if (window.__imevHooked) return;
+      window.__imevHooked = true;
+      window.__imev = [];
+      for (const t of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click']) {
+        document.addEventListener(t, e => {
+          try {
+            const tgt = e.target;
+            const item = tgt && tgt.closest ? tgt.closest('[data-e2e="conversation-item"]') : null;
+            const all = document.querySelectorAll('[data-e2e="conversation-item"]');
+            window.__imev.push({
+              t: t, trusted: e.isTrusted,
+              tag: tgt ? tgt.tagName : null,
+              cls: tgt ? String(tgt.className).slice(0, 60) : null,
+              itemIdx: item ? [...all].indexOf(item) : -1,
+              xy: [Math.round(e.clientX), Math.round(e.clientY)],
+              prevented: e.defaultPrevented,
+            });
+          } catch (err) { window.__imev.push({t: t, err: String(err)}); }
+        }, true);
+      }
+      return 'hooked:' + String(!!window.__imevHooked);
+    })()"""
+
+    def _mouse_select(self, index, mode="mouse"):
+        """按指定方式选中第 index 个会话。"""
+        try:
+            hook_state = self.page.evaluate(self.JS_INPUT_HOOK)
+            logger.warning(f"[SEL][HOOK] 安装={hook_state}")
+        except Exception as e:
+            logger.warning(f"[SEL][HOOK] 安装失败：{_brief(e)}")
+
         handle = self.page.evaluate_handle(
             "(i) => document.querySelectorAll('[data-e2e=\"conversation-item\"]')[i]", index)
         el = handle.as_element()
@@ -1506,15 +1697,80 @@ class DouyinIM:
             raise RuntimeError(f"下标 #{index} 的元素不可见")
         x = box["x"] + box["width"] / 2
         y = box["y"] + min(box["height"] / 2, 26)
-        self.page.mouse.move(x, y)
-        self.page.mouse.down()
-        self.page.mouse.up()
-        return True
+
+        if mode == "elclick":
+            el.click()
+        elif mode == "focusmouse":
+            try:
+                self.page.bring_to_front()
+            except Exception as e:
+                logger.warning(f"[SEL] bring_to_front 失败：{_brief(e)}")
+            self.page.mouse.move(x, y)
+            self.page.mouse.down()
+            self.page.mouse.up()
+        elif mode == "jsclick":
+            self.page.evaluate(
+                "(i) => { const e = document.querySelectorAll('[data-e2e=\"conversation-item\"]')[i];"
+                " if(e){ e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));"
+                " e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));"
+                " e.dispatchEvent(new MouseEvent('click',{bubbles:true})); } }", index)
+        elif mode == "cdp":
+            cdp = self.page.context.new_cdp_session(self.page)
+            try:
+                for typ, buttons in (("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 0)):
+                    cdp.send("Input.dispatchMouseEvent", {
+                        "type": typ, "x": x, "y": y, "button": "left",
+                        "buttons": buttons, "clickCount": 1,
+                    })
+            finally:
+                try:
+                    cdp.detach()
+                except Exception:
+                    pass
+        else:
+            self.page.mouse.move(x, y)
+            self.page.mouse.down()
+            self.page.mouse.up()
+
+        self.page.wait_for_timeout(400)
+        probe = None
+        return {"x": x, "y": y, "box": dict(box), "mode": mode}
+
+    def _input_mode(self):
+        """探测真实输入事件能否送达页面。
+
+        抖音在某些环境（本次是 Linux 容器 / 无头）下会在 document 捕获阶段吞掉
+        所有 trusted 输入事件：CDP 的 mouse/keyboard 全部石沉大海，页面 0 事件。
+        探测一次即可决定后续走 real 还是 synth（JS 合成事件）。
+        """
+        mode = getattr(self, "_input_mode_cache", None)
+        if mode:
+            return mode
+        try:
+            self.page.evaluate(self.JS_INPUT_HOOK)
+            self.page.evaluate("() => { window.__imev = []; }")
+            self.page.mouse.move(2, 2)
+            self.page.wait_for_timeout(300)
+            ev = self.page.evaluate("() => (window.__imev || []).splice(0)") or []
+            mode = "real" if ev else "synth"
+        except Exception:
+            mode = "synth"
+        self._input_mode_cache = mode
+        logger.warning(f"[IM] 输入模式探测结果 = {mode}"
+                       + ("（真实输入被页面吞掉，改用 JS 合成事件）" if mode == "synth" else ""))
+        return mode
+
+    def _js_click_send(self):
+        try:
+            return self.page.evaluate(JS_CLICK_SEND)
+        except Exception:
+            return None
 
     def _current_conv(self):
         try:
             return self.page.evaluate(JS_CURRENT_CONV)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[SEL] _current_conv 异常：{_brief(e)}")
             return None
 
     def _make_reselect(self, item):
@@ -1553,25 +1809,60 @@ class DouyinIM:
                 pass
 
         # ② 输入。用 contenteditable 本体，humanize 的「可编辑」检查能过
-        editor = self._editor()
-        if editor is None:
-            raise RuntimeError("找不到聊天输入框")
-        editor.click()
         # 两种换行都认（口径见 split_message_lines 的文档）
         lines = split_message_lines(text)
         if text != "\n".join(lines):
             logger.debug(f"[SEND] 换行归一：{text!r} → {lines!r}")
-        for i, line in enumerate(lines):
-            if line:
-                self.page.keyboard.type(line)
-            if i != len(lines) - 1:
-                self.page.keyboard.press("Shift+Enter")
+        if self._input_mode() == "synth":
+            ready = False
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                try:
+                    if self.page.evaluate(JS_EDITOR_EXISTS):
+                        ready = True
+                        break
+                except Exception:
+                    pass
+                self.page.wait_for_timeout(200)
+            logger.debug(f"[SEND] 编辑器就绪={ready}")
+            # ★ 逐行调用、行间留 250ms：Draft.js 每收一次 beforeinput 都会重渲染
+            # contenteditable 并丢掉 DOM 选区，在一个 JS 循环里连插会让第 2 行起
+            # 静默 no-op（症状：只有第一行 + 后面全空行）。详见 JS_TYPE_LINE 的注释。
+            steps = []
+            for i, line in enumerate(lines):
+                steps.append(self.page.evaluate(JS_TYPE_LINE, {
+                    "text": line,
+                    "enter": i != len(lines) - 1,
+                }))
+                self.page.wait_for_timeout(250)
+            try:
+                empty_now = self.page.evaluate(JS_EDITOR_EMPTY)
+            except Exception:
+                empty_now = None
+            typed = sum(int(s.get("grew", 0)) for s in steps if isinstance(s, dict))
+            want_len = sum(len(l) for l in lines)
+            logger.debug(f"[SEND] 合成输入={steps}  已键入={typed}/{want_len}  输入框为空={empty_now}")
+            if typed < want_len:
+                logger.warning(f"[SEND] ⚠️ 合成输入缺行：已键入 {typed} 字，应为 {want_len} 字"
+                               f"（lines={lines}）")
+                if typed == 0:
+                    raise RuntimeError("合成输入一行都没进去，拒绝发送空消息")
+        else:
+            editor = self._editor()
+            if editor is None:
+                raise RuntimeError("找不到聊天输入框")
+            editor.click()
+            for i, line in enumerate(lines):
+                if line:
+                    self.page.keyboard.type(line)
+                if i != len(lines) - 1:
+                    self.page.keyboard.press("Shift+Enter")
 
         sends_before = len(self.mon.sends)
         msg_before = self._msg_state()
 
         # ③ 发送：按钮优先（有内容时变红可点），退化到回车
-        how = self._click_send()
+        how = self._js_click_send() if self._input_mode() == 'synth' else self._click_send()
         logger.debug(f"[SEND] 发送方式={how}  conv_id={hit.get('conv_id')}")
 
         if not wait_receipt:
