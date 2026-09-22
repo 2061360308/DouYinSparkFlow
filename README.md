@@ -51,6 +51,8 @@
 
 保姆级教程见 [项目文档-https://oilu.cn/DouYinSparkFlow](https://oilu.cn/DouYinSparkFlow)
 
+4. Cloudflare Workers 部署（无需服务器，Cron 定时执行），操作说明见 [cloudflare-worker/README.md](cloudflare-worker/README.md)
+
 ## 📢交流讨论
 
 已开放讨论区，有疑问或展示相关成果，发布话题需求的可以加入讨论
