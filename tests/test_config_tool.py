@@ -3,7 +3,7 @@
 只测 `models.Config` 的序列化往返 —— 尤其是 MESSAGE_TEMPLATE 的换行编码，
 这是 GUI（真换行）与 `.env`（字面 `\\n`）之间的桥，两侧必须严格对称。
 
-⚠️ configTool 已经是包，直接 `from configTool import models` 即可
+注意：configTool 已经是包，直接 `from configTool import models` 即可
    （从仓库根跑测试时仓库根就在 sys.path 上）。models.py 是纯数据层，
    不 import tkinter，可以安全在无 GUI 环境跑。
 """
@@ -38,11 +38,11 @@ class MessageTemplateRoundTripTests(unittest.TestCase):
         self.assertEqual(back, gui)
 
     def test_real_crlf_is_normalized_not_doubled(self):
-        """★ 真 CRLF 必须收成**一个**字面 \\n，不能变成两个（空一行）。
+        """真 CRLF 必须收成一个字面 \\n，不能变成两个（空一行）。
 
         这是唯一真正依赖 replace 顺序的地方：
           正确 = replace("\\r\\n","\\n") 再 replace("\\r","\\n")
-          写反 = 先 replace("\\r","\\n")，CRLF 里的 \\r 被单独吃掉 → "\\n\\n"
+          写反 = 先 replace("\\r","\\n")，CRLF 里的 \\r 被单独替换 → "\\n\\n"
         若顺序写反，GUI 里一个回车会变成空行。
         """
         disk, back = _roundtrip("甲\r\n乙")
@@ -97,18 +97,18 @@ class EnvKeysTests(unittest.TestCase):
 
 
 class DefaultsAlignmentTests(unittest.TestCase):
-    """★ 四处默认值必须一致（2026-09-19 对齐过一轮）。
+    """四处默认值必须一致（2026-09-19 对齐过一轮）。
 
     同一个键有四个"默认"来源，历史上已经漂移过一次：
         configTool/models.py  DEFAULT_*        —— GUI 新建配置的初始值
         .env.example                            —— 给人抄的示例值
         docs/static/js/main.js  form            —— 网页版初始值
-        utils/config.py  os.getenv(..., 兜底)   —— 程序无 .env 时的底裤
+        utils/config.py  os.getenv(..., 兜底)   —— 程序无 .env 时的备用默认值
 
     漂移不会报错，只会让"干净克隆"和"GUI 生成"两条路径行为不同 —— 极难排查。
-    这个测试把四处钉在一起。
+    这个测试把四处锁在一起。
 
-    ⚠️ docs/main.js 是手抄的、没有构建期联动，是最容易漏的一处。
+    注意：docs/main.js 是手抄的、没有构建期联动，是最容易漏的一处。
     """
 
     ROOT = Path(__file__).resolve().parent.parent
@@ -176,11 +176,11 @@ class DefaultsAlignmentTests(unittest.TestCase):
                 self._check(env_key, attr)
 
     def test_log_level_matches_dropdown_option(self):
-        """★ 默认日志级别必须**逐字**等于下拉框里的选项。
+        """默认日志级别必须逐字等于下拉框里的选项。
 
         tkinter Combobox 对不在 values 里的值不会高亮匹配项 → 框看着是空的，
         用户会以为没设置。`utils.logger` 内部 upper/lower 了，所以两种写法
-        日志行为**相同**，踩坑时不会报错、只会在 GUI 上显示异常。
+        日志行为相同，踩坑时不会报错、只会在 GUI 上显示异常。
         """
         self.assertIn(
             models.DEFAULT_LOG_LEVEL, models.LOG_LEVEL_OPTIONS,

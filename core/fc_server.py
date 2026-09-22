@@ -1,40 +1,23 @@
-r"""云函数（FC）模式下的 HTTP Server —— 只干一件事：接住定时触发器事件，跑一轮 runTasks。
+"""云函数(FC)模式的 HTTP Server：等定时触发器事件打进来，跑一轮 runTasks。
 
-为什么云函数也必须有 HTTP Server：
-    自定义镜像函数的运行形态是「容器里常驻一个 HTTP 服务」，平台的**所有**请求都是
-    通过 HTTP 打到容器监听的端口上，靠请求头 ``x-fc-control-path`` 区分来源：
+自定义镜像函数是容器内常驻的 HTTP 服务，平台请求靠请求头 x-fc-control-path
+区分来源：/invoke（定时触发器走这条）、/http-invoke、/initialize。
 
-        /invoke        事件函数调用 —— **定时触发器走的就是这条**
-        /http-invoke   HTTP 触发器调用 —— 本项目不配 HTTP 触发器，不会来
-        /initialize    Initializer 回调 —— 只在函数配置了 Initializer 时才会发
+FC 函数环境变量总上限 4KB，无法容纳 COOKIES_* 这类大值，所以配置放进定时触发
+消息的 payload 里（.env 全文），收到后解析写进 os.environ，覆盖镜像里的
+/app/.env；触发消息里没有时沿用进程已有的环境变量。
 
-    同时在容器里放 cron 是没意义的：函数实例按请求存在，没请求就没有实例。
+payload 是 JSON 字段，里面的 .env 必须转义：换行写两字「\\n」（到达时还原成
+真换行），反斜杠双写（COOKIES_* 的 \\uXXXX 写成 \\\\uXXXX）。若整段没有真
+换行，会按字面「\\n」再还原一次（见 _inject_env）。
 
-配置从哪来（重要）：
-    FC 函数环境变量总上限 4 KB，塞不下 COOKIES_* 这类 JSON 大值，所以本项目支持把
-    整个 .env 文本放进定时触发器的「触发消息」里，Server 收到后解析成环境变量再跑
-    任务。触发消息形如：
+平台硬性要求：监听 0.0.0.0:CAPort（默认 9000）、120 秒内启动完毕、连接
+Keep-Alive 且服务端超时 >= 15 分钟（见 Handler.timeout）。
 
-        {"triggerTime": "...", "triggerName": "...", "payload": "<.env 全文>"}
-
-    ⚠️ 触发消息本身是 JSON，所以往 payload 里写 .env 时要注意转义：
-        - 换行必须写成两个字符「\ n」，到达时会被 JSON 还原成真换行；若整段一个真
-          换行都没有（说明换行没转义），Server 会按字面「\ n」兜底还原一次。
-        - **所有反斜杠都要双写** —— COOKIES_* 里的 \uXXXX、MESSAGE_TEMPLATE 里的
-          \ n 分别是「\\uXXXX」「\\n」，少写一个反斜杠就会被 JSON 先吃掉，
-          变成真字符/真换行，配置就废了。
-    解析出来的键直接覆盖进程环境变量，因此 payload 的优先级高于镜像里 /app/.env。
-    若触发消息里没有 .env 内容，则沿用进程已有的环境变量（含 /app/.env），行为不变。
-
-平台硬性要求（不满足直接 FunctionNotStarted / 请求超时）：
-    1. 必须监听 0.0.0.0:CAPort（默认 9000），监听 127.0.0.1 会被判定启动失败；
-    2. Server 必须在 120 秒内启动完毕（纯 stdlib，秒起）；
-    3. 连接要 Keep-Alive，Server 端超时 ≥ 15 分钟（见 Handler.timeout）。
-
-本地自测（不需要任何 FC 环境）：
+本地自测：
     python main.py fc
     curl -X POST localhost:9000/invoke -d '{}'
-    curl -X POST localhost:9000/invoke -d '{"payload":"TASKS=[]\nFOO=bar"}'
+    curl -X POST localhost:9000/invoke -d '{"payload":"TASKS=[]\\nFOO=bar"}'
 """
 
 import io
@@ -45,13 +28,12 @@ import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# CAPort：函数配置里填 9000；平台运行时会注入 FC_SERVER_PORT / FC_CUSTOM_LISTEN_PORT
 PORT = int(os.getenv("FC_SERVER_PORT") or os.getenv("FC_CUSTOM_LISTEN_PORT") or 9000)
 
-# 同一实例内只允许跑一轮：单实例并发度建议配 1，这里只是兜底
+# 同一实例内只允许跑一轮：单实例并发度建议配 1，这里兜底
 _run_lock = threading.Lock()
 
-# 定时触发器事件体里会被透传的字段（FC 官方格式）
+# 定时触发器事件里会被透传的字段（FC 官方格式）
 EVENT_FIELDS = ("triggerTime", "triggerName", "payload")
 
 # 触发消息里可能承载 .env 文本的字段名，按优先级排列
@@ -68,7 +50,7 @@ def log(message):
 # ---------------------------------------------------------------------------
 
 def _try_json(text):
-    """文本长得像 JSON 就解析，否则返回 None（不抛异常）。"""
+    """长得像 JSON 就解析，否则返回 None（不抛异常）。"""
     stripped = text.lstrip()
     if not stripped or stripped[0] not in "{[":
         return None
@@ -81,9 +63,9 @@ def _try_json(text):
 def _extract_env_source(event):
     """把触发消息归一成 (.env 文本, 键值对字典)，两者至少一个为空。
 
-    控制台上手写 JSON 很容易把结构写歪，所以能认的形态都认下来：
+    控制台手写 JSON 结构容易写错，能认的形态都认下来：
         payload: "<.env 全文>"                        → 文本
-        payload: "{\\"env\\": \\"<.env 全文>\\"}"     → 文本（payload 里又套了一层 JSON 文本）
+        payload: "{\\"env\\": \\"<.env 全文>\\"}"     → 文本（payload 里再套一层 JSON 文本）
         payload: {"env"/".env"/"text"/...: "..."}     → 文本
         payload: {"TASKS": "...", ...}                → 键值对
         event 自己就是字符串                           → 当成 payload
@@ -109,10 +91,10 @@ def _extract_env_source(event):
 
 
 def _parse_env_text(text):
-    """用 python-dotenv 自带的解析器把文本读成 dict（只解析，不落盘、不碰 os.environ）。
+    """用 python-dotenv 的解析器把文本读成 dict（只解析，不落盘、不碰 os.environ）。
 
-    复用 dotenv 而不是自己 split("=")：引号、`export ` 前缀、`#` 注释这些边角都由它
-    兜住，和 main.py 读 /app/.env 走的是同一套语义。
+    复用 dotenv 而不是自己 split("=")：引号、`export ` 前缀、`#` 注释等边角
+    都由它兜住，与 main.py 读 /app/.env 是同一套语义。
     """
     from dotenv import dotenv_values
 
@@ -126,12 +108,10 @@ def _inject_env(text):
 
     parsed = _parse_env_text(text)
 
-    # 整段没有一个真换行、却含字面「\ n」，说明触发消息里的换行没被 JSON 转义，
-    # 整份配置挤成了一行，按字面还原一次再解析。
-    #
-    # 反过来，只要文本里已经有真换行，就**绝不能**再解转义：MESSAGE_TEMPLATE 必须
-    # 保留字面的「\ n」（core/tasks.py 靠它 split 逐行输入），解转义会把整份 .env
-    # 的行结构拆烂。所以这里只做「一行式」的兜底，用解析出的键数多者胜出来防误判。
+    # 整段没有真换行却含字面「\n」，说明触发消息里的换行没被 JSON 转义、挤成一
+    # 行，按字面还原一次再解析。只要有真换行就绝不能解转义：MESSAGE_TEMPLATE
+    # 要靠字面「\n」split 逐行输入，解转义会把行结构拆坏。
+    # 用解析出的键数多者胜出防误判。
     if "\n" not in text and "\\n" in text:
         restored = text.replace("\\r\\n", "\n").replace("\\n", "\n")
         restored_parsed = _parse_env_text(restored)
@@ -167,11 +147,11 @@ def _apply_event_env(event):
     log(f"已从触发消息注入 {len(keys)} 个环境变量: {', '.join(keys)}")
 
     if "core.tasks" in sys.modules:
-        # core.tasks 在模块顶层就把 config / userData 读死了，热实例里再改环境变量
-        # 它不会重读。FC 会复用实例，所以第二次触发拿到的可能仍是上一次的配置。
+        # core.tasks 在模块顶层就把 config / userData 读死了，热实例里改环境
+        # 变量它不会重读。FC 会复用实例，第二次触发拿到的可能仍是上次的配置。
         log(
             "警告: core.tasks 已在本实例内加载过，本次注入的新配置不会生效；"
-            "需要立即生效请发新版本或等实例回收"
+            "要立即生效请发新版本或等实例回收"
         )
 
     return keys
@@ -187,7 +167,7 @@ def _size_of(value):
 
 
 def _summarize(event):
-    """给日志用的摘要 —— payload 装的是 .env 全文（含 sessionid），绝不能整段打出去。"""
+    """给日志用的摘要：payload 装的是 .env 全文（含 sessionid），不能整段打印。"""
     if not isinstance(event, dict):
         return f"<非对象事件 {type(event).__name__}>"
     if not event:
@@ -208,11 +188,11 @@ def _summarize(event):
 def run_once(event=None):
     """跑一轮任务，返回 (HTTP 状态码, 响应体字典)。
 
-    event 是平台的触发消息；若其中带 .env 文本，会在 import core.tasks **之前**
-    注入 os.environ —— core.tasks 模块顶层就读环境变量，晚一步就白搭。
+    event 是平台的触发消息；其中若带 .env 文本，要在 import core.tasks 之前
+    注入 os.environ —— core.tasks 模块顶层就读环境变量，晚了就读不到了。
 
-    延迟 import core.tasks 的另一个原因：提前 import 会让「把 Server 起起来」强依赖
-    配置，配置缺失时连健康检查都过不去。
+    延迟 import core.tasks 的另一个原因：提前 import 会让「把 Server 起起来」
+    强依赖配置，配置缺失时连健康检查都过不去。
     """
     if not _run_lock.acquire(blocking=False):
         log("已有任务在跑，跳过本次触发")
@@ -227,7 +207,7 @@ def run_once(event=None):
         runTasks()
         log("runTasks 执行结束")
         return 200, {"ok": True, "env_keys": env_keys}
-    except Exception as exc:  # noqa: BLE001 —— 必须吞掉并回 5xx，否则平台只看到连接断开
+    except Exception as exc:  # noqa: BLE001 —— 必须拦截并回 5xx，否则平台只看到连接断开
         traceback.print_exc()
         log(f"runTasks 执行失败: {exc!r}")
         return 500, {"ok": False, "error": repr(exc)}
@@ -240,10 +220,9 @@ def run_once(event=None):
 # ---------------------------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"  # 平台要求 Keep-Alive；HTTP/1.0 默认每次都关连接
-    timeout = 1800  # 平台要求 Server 端超时 ≥ 15 分钟
+    protocol_version = "HTTP/1.1"  # 平台要求 Keep-Alive；HTTP/1.0 默认关连接
+    timeout = 1800  # 平台要求服务端超时 >= 15 分钟
 
-    # ---- 响应工具 ---------------------------------------------------------
     def _reply(self, status, payload):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -275,9 +254,8 @@ class Handler(BaseHTTPRequestHandler):
             return {"payload": event}
         return {k: event[k] for k in EVENT_FIELDS if k in event}
 
-    # ---- 路由 -------------------------------------------------------------
     def do_GET(self):
-        # 健康检查、平台探测、本地开浏览器看一眼，统统 200
+        # 健康检查、平台探测、本地浏览器访问，统一回 200
         self._reply(200, {"status": "ok", "mode": "fc", "port": PORT})
 
     def do_POST(self):
@@ -289,30 +267,29 @@ class Handler(BaseHTTPRequestHandler):
 
         path = self._control_path()
         if path.startswith("/initialize"):
-            # 只在函数配置了 Initializer 回调时平台才会发，不配就永远走不到这里
+            # 只在函数配置了 Initializer 回调时平台才会发，不配就永远到不了这里
             log("收到 /initialize")
             self._reply(200, {"ok": True})
         elif path.startswith("/invoke"):
             event = self._parse_event(raw)
-            # 只打摘要：payload 里是 .env 全文，直接打会把 cookie 写进日志
+            # 只打摘要：payload 里是 .env 全文，直接打印会把 cookie 写进日志
             log(f"收到定时触发器事件: {_summarize(event)}")
             status, payload = run_once(event)
             self._reply(status, payload)
         else:
-            # /http-invoke 之类：本项目不配 HTTP 触发器，明确拒绝，别误以为跑过了
+            # /http-invoke 之类：本项目不配 HTTP 触发器，明确拒绝
             self._reply(404, {"ok": False, "error": f"不支持的调用路径: {path}"})
 
     def log_message(self, fmt, *args):
-        # 默认往 stderr 写且不带前缀；统一搬到 stdout，方便和业务日志连起来看
+        # 默认往 stderr 写且不带前缀；统一改到 stdout，方便和业务日志连起来看
         log(f"{self.address_string()} {fmt % args}")
 
 
 class _QuietServer(ThreadingHTTPServer):
-    """吞掉「客户端连接被重置」这类噪音。
+    """屏蔽「客户端连接被重置」这类噪音。
 
-    FC 的健康检查探针每隔几秒连一次、拿到 200 就断开，偶尔以 RST 收场；
-    socketserver 默认会为这种断开打一整段 Traceback，把真正的业务日志淹掉 ——
-    排查问题时很容易被误当成故障。
+    FC 的健康检查探针每隔几秒连一次、拿到 200 就断开，偶尔以 RST 结束；
+    socketserver 默认会打一整段 Traceback 淹没业务日志，这里屏蔽。
     """
 
     daemon_threads = True
@@ -337,7 +314,3 @@ def serve():
         log("收到中断信号，退出")
     finally:
         server.server_close()
-
-
-if __name__ == "__main__":
-    serve()

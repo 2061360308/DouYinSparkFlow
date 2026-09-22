@@ -7,8 +7,7 @@ from utils.logger import setup_logger
 logger = setup_logger(level=logging.DEBUG)
 
 """
-是否启用调试模式
-更详细的日志打印，浏览器操作可视化等
+调试模式：更详细的日志打印、浏览器操作可视化等
 """
 DEBUG = True if os.environ.get("DEBUG", "").lower() == "true" else False
 config = None
@@ -34,7 +33,7 @@ def get_config():
         "hitokotoTypes": json.loads(
             os.getenv("HITOKOTO_TYPES", '["文学","影视","诗词","哲学"]')
         ),
-        # .env 里统一用**秒**，出口按消费方的单位给：
+        # .env 里统一用秒，出口按消费方的单位给：
         #   browserActionTimeout / friendListSettleMs 带单位后缀 → 已是毫秒，调用方直接用
         #   imScanTimeout / imReadyTimeout / imMaxSteps 原本就是秒/步
         "browserActionTimeout": int(

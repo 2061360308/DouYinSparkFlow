@@ -19,10 +19,7 @@ os.environ.setdefault("CLOAKBROWSER_AUTO_UPDATE", "false")
 
 
 def get_browser(fingerprint=None):
-    """
-    启动浏览器实例
-    :return: 浏览器实例
-    """
+    """启动浏览器实例。"""
     proxyAddress = get_config()["proxyAddress"]
     headless = not DEBUG
     
@@ -50,7 +47,6 @@ def get_browser(fingerprint=None):
             browser = launch(headless=headless, humanize=True, args=BASE_CHROME_ARGS)
         return browser
     except Exception as e:
-        # 捕获浏览器启动错误
         if "Executable doesn't exist" in str(e):
             print("浏览器可执行文件不存在！请安装CloakBrowser")
             sys.exit(1)

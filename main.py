@@ -1,44 +1,43 @@
-"""程序入口 —— 按启动模式分派。
+"""程序入口：按启动模式分派。
 
-一个镜像要同时支持两种定时部署形态，靠这里分流：
+    python main.py [task]          跑一轮任务（默认；GitHub Actions / Docker cron）
+    python main.py fc              云函数模式：起 HTTP Server 等定时触发器
+    python main.py configtool      本地配置生成器（configTool）
 
-    python main.py        跑一轮任务（= task）。GitHub Actions、服务器 cron 都走这条，
-                          不带参数，和以前完全一样。
-    python main.py task   同上，显式写法。
-    python main.py fc     云函数模式：起 HTTP Server，等定时触发器事件打进来才跑任务。
-                          为什么云函数也必须自备 HTTP Server，见 fc_server.py 顶部说明。
-
-也支持环境变量 RUN_MODE 指定模式（命令行参数优先）。
+命令行参数优先于环境变量 RUN_MODE；都不指定时默认 task。
+PyInstaller 打包的 exe（sys.frozen）不带参数时默认 configtool。
 """
 
 import os
 import sys
 
-# 尝试从 .env 文件加载环境变量
 if os.path.exists(".env"):
     from dotenv import load_dotenv
 
     load_dotenv(".env")
 
-# 优先级：argv 子命令 > RUN_MODE 环境变量 > 默认 task
-MODE = (sys.argv[1] if len(sys.argv) > 1 else os.getenv("RUN_MODE", "task")).strip().lower()
+_DEFAULT_MODE = "configtool" if getattr(sys, "frozen", False) else "task"
+MODE = (
+    sys.argv[1] if len(sys.argv) > 1 else os.getenv("RUN_MODE", _DEFAULT_MODE)
+).strip().lower()
 
 
 def main():
     if MODE in {"fc", "serve"}:
-        from fc_server import serve
+        from core.fc_server import serve
 
         serve()
-        return
-
-    if MODE in {"task", "run", "cli", ""}:
+    elif MODE in {"task", "run", "cli", ""}:
         from core.tasks import runTasks
 
         runTasks()
-        return
+    elif MODE in {"configtool", "config", "gui", "tool"}:
+        from configTool.main import main as configtool_main
 
-    print(f"未知启动模式: {MODE}（可选：task / fc）", file=sys.stderr)
-    sys.exit(2)
+        configtool_main()
+    else:
+        print(f"未知启动模式: {MODE}（可选：task / fc / configtool）", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

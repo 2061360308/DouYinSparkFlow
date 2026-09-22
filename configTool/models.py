@@ -44,7 +44,7 @@ DEFAULT_IM_READY_TIMEOUT = 120
 DEFAULT_FRIEND_LIST_WAIT_TIME = 3
 DEFAULT_IM_MAX_STEPS = 200
 DEFAULT_TASK_RETRY_TIMES = 3
-# ⚠️ 大小写与 LOG_LEVEL_OPTIONS 保持一致（"Debug" 而非 "DEBUG"）：
+# 大小写与 LOG_LEVEL_OPTIONS 保持一致（"Debug" 而非 "DEBUG"）：
 # tkinter Combobox 对不在 values 里的值不会高亮匹配项 → 框看着是空的。
 # utils.logger.resolve_log_level 内部 level.lower()，所以两种写法日志行为相同，
 # 这里只为 GUI 显示正确。
@@ -203,7 +203,7 @@ class Config:
         """生成 键 -> 值 的映射，值已经是能直接写进 .env 的形态。"""
         hour, minute, second = split_run_time(self.run_time)
         # 真换行 → 字面 \n 写进 .env，供 GUI 文本框里编辑。
-        # \r\n 必须先于孤立 \r 收掉：这两条**是**有顺序的（\r\n 里的 \r 会被
+        # \r\n 必须先于孤立 \r 收掉：这两条是有顺序的（\r\n 里的 \r 会被
         # 孤立 \r 规则单独吃掉，先跑后者就把 CRLF 拆成了两个 LF）。
         # 但「真」与「字面」两类规则之间顺序无所谓（字符集不相交）。
         # 字面 \r\n 不在这里收：那是磁盘上的形态，交由读取端（from_env_map）处理，
@@ -311,9 +311,9 @@ class Config:
             tz=text("TZ", DEFAULT_TZ) or DEFAULT_TZ,
             # 磁盘上是字面 \n，换回真实换行方便在文本框里编辑。
             # 字面 \r\n 先收成字面 \n 再解 —— 但注意 `.replace("\\n","\n")` 对
-            # 字面 \r\n **匹配不到**（\r\n 里没有字面 \n），所以是那条 `\\r\\n` 规则
+            # 字面 \r\n 匹配不到（\r\n 里没有字面 \n），所以是那条 `\\r\\n` 规则
             # 在干活；两条规则字符集不相交，顺序其实无所谓，这里按可读性排。
-            # ⚠️ 与 to_env_map() 成对：那边出的必须这边能读回来（往返幂等）。
+            # 与 to_env_map() 成对：那边出的必须这边能读回来（往返幂等）。
             message_template=text("MESSAGE_TEMPLATE", DEFAULT_MESSAGE_TEMPLATE)
             .replace("\\r\\n", "\\n")
             .replace("\\n", "\n"),

@@ -47,8 +47,8 @@ def request_hitokoto():
         if theFromWho is None or theFromWho.strip() == "":
             theFromWho = "未知作者"
         # 一言正文/来源/作者都可能带换行，直接拼进模板会把行结构拆散
-        # （模板靠 \n 分行发送）。这里统一拍平成单行：连续空白收成一个空格。
-        # 用 .get 而不是下标：缺字段时原样抛 KeyError 会被下面的 except 吞掉，
+        # （模板靠 \n 分行发送）。这里统一压成单行：连续空白收成一个空格。
+        # 用 .get 而不是下标：缺字段时抛 KeyError 会被下面的 except 捕获，
         # 退化成"[error] 无法获取一言内容"，问题被掩盖。
         quote = re.sub(r"\s+", " ", str(data.get("hitokoto", ""))).strip()
         theFrom = re.sub(r"\s+", " ", theFrom).strip()

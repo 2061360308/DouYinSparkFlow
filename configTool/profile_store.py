@@ -4,7 +4,7 @@
 
   - 每个账号要用自己独立的浏览器配置目录，目录名必须随机（不能拿抖音号当目录名，
     抖音号随时会改，而且大小写会被环境变量名吞掉）。
-  - `.env` 是给主程序吃的配置文件，不能往里塞工具自己的字段（多出来的键会污染
+  - `.env` 是供主程序读取的配置文件，不能往里放工具自己的字段（多出来的键会污染
     主程序的配置）。
   - 目录名又不能每次启动都重新随机 —— 那样登录态就找不回来了。
 
@@ -31,7 +31,7 @@
 值 = 该账号的浏览器配置目录名（``profiles/<folder>/``），外加抓取结果
 
 ``conversations`` 是「拉取会话列表」抓到的会话名，界面用它给用户直接点选目标好友。
-它属于本工具自己的元数据，**不写进 .env**（.env 里只该有主程序认识的键）。
+它属于本工具自己的元数据，不写进 .env（.env 里只该有主程序认识的键）。
 
 ``fingerprint`` 是该账号固定的浏览器指纹种子，打开浏览器时以
 ``--fingerprint=<种子>`` 传给隐身浏览器。cloakbrowser 默认每次启动都随机一个种子
@@ -45,7 +45,7 @@
 
 登录成功时写入目录绑定；界面加载 .env 后靠它找回每个账号该用哪个目录。
 
-账号从列表里移除时**不删**这里的条目 —— 配置目录留着，将来重新添加同一个账号
+账号从列表里移除时不删这里的条目 —— 配置目录留着，将来重新添加同一个账号
 可以复用原登录态。只有明确选择「同时删除配置目录」时才连条目一起忘掉。
 """
 
@@ -226,7 +226,7 @@ def ensure_fingerprint(unique_id: str = "", folder: str = "", fallback: str = ""
     record = accounts[target_key]
     existing = str(record.get("fingerprint") or "").strip()
     if existing and list(record)[:2] == ["folder", "fingerprint"]:
-        return existing  # 已经定好且顺序正常，不必白写一次文件
+        return existing  # 已固定且顺序正常，不必再写一次文件
 
     seed = existing or random_fingerprint()
     accounts[target_key] = _ordered_record(record, seed)
@@ -334,7 +334,7 @@ def touch(unique_id: str, **fields) -> dict | None:
 def set_conversations(unique_id: str, names, *, folder: str = "") -> dict:
     """保存某个账号抓到的会话名单（供界面直接选择目标好友）。
 
-    只动 ``conversations`` / ``conversations_at`` 两个字段，**不碰 updated_at** ——
+    只动 ``conversations`` / ``conversations_at`` 两个字段，不动 updated_at ——
     界面上的「最近刷新」说的是登录态刷新时间，抓会话列表不该让它看起来像重新登录过。
 
     条目不存在时（极少见：账号还没走过登录流程）用传入的 folder 补一条，
@@ -387,7 +387,7 @@ def remove_profile_dir(folder: str) -> tuple[bool, str]:
 
     这是唯一一处会删磁盘内容的地方，所以设了三道闸：
       1. 目录名必须匹配本工具的命名规则（随机十六进制）
-      2. 必须是 PROFILE_ROOT 的**直接**子目录（不允许任何路径跳转）
+      2. 必须是 PROFILE_ROOT 的直接子目录（不允许任何路径跳转）
       3. 目标必须真实存在且是目录
 
     任何一条不满足都直接拒绝，返回 (是否成功, 说明)。

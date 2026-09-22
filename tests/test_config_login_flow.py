@@ -98,7 +98,7 @@ class AutoFlowNeverReloadsTests(unittest.TestCase):
         self.assertEqual(page.reloads, 0, "自动流程刷新了页面 —— 会打断用户的登录")
 
     def test_manual_grab_may_reload(self):
-        """手动「立即抓取」是例外。只钉决策：把 _reload_for_profile 换成记录器。"""
+        """手动「立即抓取」是例外。只锁定决策：把 _reload_for_profile 换成记录器。"""
         w, _ = _worker((), ssr={})
         calls = []
         w._reload_for_profile = lambda: calls.append(1)

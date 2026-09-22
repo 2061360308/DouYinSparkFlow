@@ -7,7 +7,7 @@
 #      容器入口是 docker/entrypoint-fc.sh → python main.py fc, 常驻一个 HTTP Server
 #      监听 9000。定时触发器打进来的是 /invoke, 触发消息里的 payload 就是 .env 全文
 #      (FC 函数环境变量总上限 4KB, 装不下 COOKIES_*, 所以配置只能走触发消息,
-#       解析逻辑见 fc_server.py 顶部说明)。
+#       解析逻辑见 core/fc_server.py 顶部说明)。
 #
 #   ② DYSparkGost   镜像 gost:latest            + HTTP 触发器(http)
 #      容器里只跑 gost, 以 WebSocket 隧道形态提供代理出口。本地 configTool 抓 Cookie

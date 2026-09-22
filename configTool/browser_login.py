@@ -41,7 +41,7 @@ from configTool import local_settings, paths
 from configTool.tunnel import GostTunnel
 
 # 主程序的会话扫描 / 登录态判定实现 —— 「抖音页面怎么点、怎么滚」全项目只有这一份。
-# 顶层导入依赖「仓库根在 sys.path[0] 上」，由仓库根的入口 run_configtool.py 保证；
+# 顶层导入依赖「仓库根在 sys.path[0] 上」，由仓库根的入口 main.py configtool 保证；
 # 打包时 PyInstaller 会顺着这个 import 把它一起收进包（见 build-configtool.yml）。
 import core.douyin_im as douyin_im
 
@@ -151,7 +151,7 @@ def matches_target(domain: str) -> bool:
 def clean_cookie(cookie: dict):
     """把一条 cookie 裁剪成 Playwright add_cookies 需要的字段。
 
-    返回 None 表示这条**不可用**，调用方应丢弃：
+    返回 None 表示这条不可用，调用方应丢弃：
       - name 为空：站点确实会产生这种条目（实测抖音上就有一条 value="douyin.com"
         的空名 cookie），而 add_cookies 遇到空 name 会让整批注入失败；
       - domain 为空：没有归属域，Playwright 同样不接受。
@@ -796,7 +796,7 @@ class BrowserLoginWorker(threading.Thread):
             )
             return
 
-        # 门禁只看 Cookie（要存进 .env 的就是它），页面级信号可能说谎（见 _login_verdict）
+        # 门禁只看 Cookie（要存进 .env 的就是它），页面级信号可能不准（见 _login_verdict）
         logged_in = self._has_login_cookie()
         verdict = self._login_verdict()
 
@@ -830,7 +830,7 @@ class BrowserLoginWorker(threading.Thread):
         """枚举会话列表（工作线程内执行）。
 
         打开聊天页、门禁、滚动枚举都交给 core.douyin_im.DouyinIM，本方法只把进度
-        翻译成界面事件、把结论发出去。DouyinIM 会自己再导航一次聊天页（它的契约是
+        翻译成界面事件、把结论发出去。DouyinIM 会自己再导航一次聊天页（它的约定是
         先挂钩子再导航），这一趟重复加载是有意的。
         """
         if not self.is_running():
@@ -982,7 +982,7 @@ class BrowserLoginWorker(threading.Thread):
                 args=extra_args or None,
             )
         except Exception:
-            # 浏览器没起来，这条隧道的使命也就结束了，立刻释放
+            # 浏览器没起来，这条隧道也就不需要了，立刻释放
             self._stop_tunnel()
             raise
         self.log("隐身 Chromium 已启动" + ("（无头模式）" if self.headless else ""))
@@ -997,7 +997,7 @@ class BrowserLoginWorker(threading.Thread):
         pages = [p for p in self.ctx.pages if not p.is_closed()]
         self.page = pages[0] if pages else self.ctx.new_page()
 
-        # 下面两个钩子都**必须早于 goto**（这是 core/douyin_im 的契约）：
+        # 下面两个钩子都必须在 goto 之前挂好（这是 core/douyin_im 的约定）：
         #   ImMonitor           登录态就写在聊天页首屏的 SSR HTML 里，挂晚了就漏，
         #                       之后只能退回去序列化整个 DOM 才能判定
         #   _attach_interceptors 抖音自己的脚本在页面加载时就会请求账号信息接口
@@ -1105,7 +1105,7 @@ class BrowserLoginWorker(threading.Thread):
                 # 「抓到的 cookie 里有没有 sessionid」—— 决定这份 Cookie 存下来有没有用
                 "logged_in": any(c["name"] in LOGIN_COOKIE_NAMES for c in cookies),
                 # 「服务端认不认这个登录态」—— 决定这次抓取该不该算成功
-                # （两者都要满足：cookie 里没 sessionid 存了也白存；
+                # （两者都要满足：cookie 里没 sessionid 存了也没用；
                 #   有 sessionid 但已失效，存下去只会让主程序跑到一半掉登录）
                 "login_state": verdict.get("state") or "",
                 "login_log": verdict.get("log") or "",
@@ -1169,7 +1169,7 @@ class BrowserLoginWorker(threading.Thread):
         return url
 
     def _stop_tunnel(self) -> None:
-        """释放隧道（幂等）。浏览器关掉后立刻调用，别让云函数那边白烧实例时长。"""
+        """释放隧道（幂等）。浏览器关掉后立刻调用，避免云函数继续计费。"""
         tunnel = self.tunnel
         self.tunnel = None
         if tunnel is None:

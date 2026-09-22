@@ -13,7 +13,7 @@
                  local.json）都放这里，跟着程序走。
   - RESOURCE_DIR 只读资源目录。PyInstaller onefile 模式下是临时解包目录，
                  用 sys._MEIPASS 取；源码运行时就等于 APP_DIR。
-  - ROOT_DIR     项目根。**只有 .env 放这里** —— 见 project_root()。
+  - ROOT_DIR     项目根。只有 .env 放这里 —— 见 project_root()。
 """
 
 from __future__ import annotations
@@ -50,9 +50,9 @@ APP_DIR = app_dir()
 def project_root() -> Path:
     """写 .env 的目录（项目根）。
 
-    .env 是给主程序吃的配置，要直接生成在它读的位置上：源码运行 = 仓库根
-    （configTool/ 的上一层），打包运行 = exe 所在目录。父目录不像个项目时
-    退回程序目录，避免往上一层乱写。
+    .env 是供主程序读取的配置，要直接生成在它读的位置上：源码运行 = 仓库根
+    （configTool/ 的上一层），打包运行 = exe 所在目录。父目录不像项目根时
+    退回程序目录，避免把配置写到别处。
     """
     if FROZEN:
         return APP_DIR
@@ -73,7 +73,7 @@ PROFILE_ROOT = APP_DIR / "profiles"
 PROFILES_INDEX = APP_DIR / "profiles.json"
 
 # 本工具自己的设置（如抓取隧道），由 local_settings.py 读写。
-# 不进 .env：.env 是给主程序（以及云函数）吃的配置文件，工具私有键塞进去会污染它。
+# 不进 .env：.env 是供主程序（以及云函数）读取的配置文件，工具私有键放进去会污染它。
 LOCAL_SETTINGS = APP_DIR / "local.json"
 
 # 自带的隐身 Chromium 目录名

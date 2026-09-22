@@ -2,17 +2,19 @@
 
 ```
 DouYinSparkFlow/
-├── main.py                     # 主入口：python main.py [task|fc]
+├── main.py                     # 主入口：python main.py [task|fc|configtool]
 ├── core/
 │   ├── douyin_im.py            # 抖音 IM 核心：登录判定、会话扫描、发消息
+│   ├── fc_server.py            # 云函数(FC)模式：HTTP Server 等定时触发器
 │   ├── browser.py              # 浏览器启动（cloakbrowser / playwright）
+│   ├── msg_builder.py          # 消息模板 / 一言生成
 │   └── tasks.py                # 任务编排：跑一轮续火花
 ├── utils/
 │   ├── config.py               # 环境变量读取（.env → 配置字典）
 │   ├── logger.py               # 日志器
 │   └── export_github_env.py    # Action 场景：把 vars/secrets 注入进程环境
 ├── configTool/                 # 本地配置生成器（tkinter 桌面工具）
-│   ├── main.py                 # 主窗口（从根入口 run_configtool.py 启动）
+│   ├── main.py                 # 主窗口（由根入口 main.py configtool 启动）
 │   ├── browser_login.py        # 登录会话工作线程（借 core/douyin_im）
 │   ├── login_dialog.py         # 登录窗口
 │   ├── conversation_dialog.py  # 拉取会话列表窗口
@@ -28,17 +30,16 @@ DouYinSparkFlow/
 ├── docker/                     # 容器入口脚本（entrypoint / run-task）
 ├── docker-compose.yml          # 两容器编排（任务 + gost 代理）
 ├── aliyun-fc-ros-template.yaml # 云函数 ROS 模板（两函数）
-├── run_configtool.py           # configTool 的启动入口（唯一）
 └── docs/                       # 本套文档（docsify）
 ```
 
-## 两个入口
+## 三个入口
 
 | 入口 | 用途 |
 | --- | --- |
 | `python main.py task` | 跑一轮续火花任务 |
 | `python main.py fc` | 云函数模式，起 HTTP Server 等定时触发器 |
-| `python run_configtool.py` | 启动本地配置生成器 |
+| `python main.py configtool` | 启动本地配置生成器 |
 
 ## 核心约定
 

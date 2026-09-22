@@ -30,7 +30,6 @@ def do_user_task(browser, username, cookies, targets):
 
     page = context.new_page()
 
-    # 注入 Cookie
     context.add_cookies(cookies)
 
     im = None
@@ -47,7 +46,7 @@ def do_user_task(browser, username, cookies, targets):
 
         res = im.wait_ready()
         if res.get("status") != STATUS_READY:
-            # 终端态都要显式打印，方便从日志一眼看出是哪种失败
+            # 终端态都要显式打印，方便从日志分辨是哪种失败
             reason = {
                 "LOGGED_OUT": "未登录（没有 sessionid）",
                 "EXPIRED": "登录已失效（有 sessionid 但服务端不认）",
@@ -125,12 +124,10 @@ def do_user_task(browser, username, cookies, targets):
                 im.detach()
             except Exception:
                 pass
-        context.close()  # 任务完成后关闭上下文
+        context.close()
 
 
 def runTasks():
-    # 检查是否启用多任务和任务数量
-    # 创建信号量以限制并发任务数量
     logger.info("开始执行任务")
     logger.debug(f"当前配置如下：")
     logger.debug(f"消息模板: {config.get('messageTemplate', '未找到消息模板')}")
@@ -142,19 +139,17 @@ def runTasks():
 
     for user in userData:
         cookies = user["cookies"]
-        # 归一化在**这里**做（配置读取端不做）：DouyinIM._match 内部用同一套 norm，
-        # 两边都归过才谈得上相等 —— 否则配置里的「Ｌｕ瞳」永远匹配不上页面上的「Lu瞳」。
-        # 同时丢掉归一后变空的项：空串留在剩余名单里永远扣不掉，会白滚到底。
+        # 归一化只在这里做（配置读取端不做）：DouyinIM._match 内部也用同一套 norm，
+        # 两边都归过才谈得上相等，否则配置里的「Ｌｕ瞳」永远匹配不上页面上的「Lu瞳」。
+        # 同时丢掉归一后变空的项：空串留在剩余名单里扣不掉，会一直空转到底。
         targets = [t for t in map(norm, user["targets"]) if t]
         username = user.get("username", "未知用户")
         fingerprint = user.get("fingerprint", None)
         logger.info(f"开始处理账号 {username}")
-        # 创建任务
         try:
             browser = get_browser(fingerprint)
             do_user_task(browser, username, cookies, targets)
             logger.info(f"账号 {username} 任务完成")
         finally:
-            # 关闭浏览器实例
             browser.close()
     

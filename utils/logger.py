@@ -5,9 +5,9 @@ from pathlib import Path
 
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
 
-# 日志落盘位置固定为**仓库根目录**下的 logs/app.log。
+# 日志落盘位置固定为仓库根目录下的 logs/app.log。
 # 不能用相对路径 "logs/app.log"：那是相对 CWD 的，从别的目录导入本项目时
-# 会在那边凭空建一个 logs/，日志就散了。这里以本文件位置回推仓库根。
+# 会在那边新建 logs/，日志就与项目分开了。这里以本文件位置回推仓库根。
 LOG_FILE = str(Path(__file__).resolve().parent.parent / "logs" / "app.log")
 
 

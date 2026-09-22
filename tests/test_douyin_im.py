@@ -1,10 +1,10 @@
 """core.douyin_im 的纯逻辑单测（不依赖浏览器 / 不依赖 HAR / 不含任何真实身份）。
 
-这一段覆盖的是「判定与匹配」逻辑：滚动到底判据、步长守卫、归一化、匹配优先级、
+覆盖的是「判定与匹配」逻辑：滚动到底判据、步长守卫、归一化、匹配优先级、
 conv_id 拆 uid、群聊判定、资料 join、信封返回码。
 
 真实报文抽样在 tests/test_douyin_im_har.py（需要本机抓的 HAR，找不到就 skip）。
-另有 LoggingTests 钉住日志分级契约（改造后 `verbose` 开关已被 logger 级别取代）。
+另有 LoggingTests 锁定日志分级约定（改造后 `verbose` 开关已被 logger 级别取代）。
 身份数据一律由 core.douyin_im.fake_uid / fake_sec_uid 生成，
 固定种子 → 结果可复现，但不含任何真值，可以安全提交。
 """
@@ -150,7 +150,7 @@ class IsGroupTests(unittest.TestCase):
         self.assertIs(_is_group("7:9:1:2", None, 5), True)
 
     def test_0_1_beats_participant_count(self):
-        # `0:1:` 定义上就是 1:1，不该被 participant_count 翻案
+        # `0:1:` 定义上就是 1:1，不应因 participant_count 而改变结论
         self.assertIs(_is_group("0:1:a:b", None, 5), False)
 
     def test_returns_none_when_undecidable(self):
@@ -267,8 +267,8 @@ class _VListStub(_Stub):
 
     尺寸刻意按真实量级搭（clientHeight 670 / 条目 100px / 步长守卫 0.4）
     → step = 268px ≈ 2.7 条 < 窗口 7 条，不会整屏跳过。
-    若把尺寸改小（比如 total=7、clientHeight=3），step 会被抬到 120 的下限
-    从而一步跳到底、中间的人永久漏掉 —— 那时测出来的"通过"是假的。
+    若把尺寸改小（比如 total=7、clientHeight=3），step 会被抬到 120 的下限，
+    从而一步跳到底、中间的人被跳过 —— 那时的"通过"没有意义。
     """
 
     ITEM_H = 100
@@ -333,7 +333,7 @@ class WalkTests(unittest.TestCase):
         for new_items in self.s._walk():
             got.extend(new_items)
         ids = [i["conv_id"] for i in got]
-        self.assertEqual(len(ids), 50)          # 一条不多（重叠被吃掉）
+        self.assertEqual(len(ids), 50)          # 一条不多（重叠已去重）
         self.assertEqual(len(set(ids)), 50)     # 一条不少（没整屏跳过）
 
     def test_reaches_bottom(self):
@@ -458,11 +458,11 @@ class SplitMessageLinesTests(unittest.TestCase):
     """消息正文断行口径（`split_message_lines`）。
 
     链路上有两种 `\\n`，必须都认：
-      - **字面** `\\`+`n`：`.env` 的 MESSAGE_TEMPLATE，dotenv 读出来不做 unescape
-      - **真**换行 `U+000A`：一言正文、手写 .env 的引号多行值
+      - 字面 `\\`+`n`：`.env` 的 MESSAGE_TEMPLATE，dotenv 读出来不做 unescape
+      - 真换行 `U+000A`：一言正文、手写 .env 的引号多行值
 
-    历史 bug：只认字面 `\\n` → 真换行被 `keyboard.type` 静默吞掉，三行挤成一行。
-    反过来只认真换行 → `.env` 的默认模板整段变成一行。所以两个方向都要钉。
+    历史 bug：只认字面 `\\n` → 真换行被 `keyboard.type` 静默忽略，三行挤成一行。
+    反过来只认真换行 → `.env` 的默认模板整段变成一行。所以两个方向都要锁定。
     """
 
     def test_literal_backslash_n_splits(self):
@@ -474,9 +474,9 @@ class SplitMessageLinesTests(unittest.TestCase):
         self.assertEqual(split_message_lines("甲\n乙"), ["甲", "乙"])
 
     def test_literal_crlf_splits_without_leaking_cr(self):
-        """字面 \\r\\n：收成一段分隔，**绝不能漏下一个裸露的 \\r**。
+        """字面 \\r\\n：收成一段分隔，绝不能漏下一个裸露的 \\r。
 
-        注意这里用的是 Python 源码里的 `"\\r\\n"` —— 它是 **4 个字符**
+        注意这里用的是 Python 源码里的 `"\\r\\n"` —— 它是 4 个字符
         （反斜杠 r 反斜杠 n），正是 `dotenv` 从 .env 读出来的形态。
         别和真 CRLF 混了：那才 2 字符。
         """
@@ -499,7 +499,7 @@ class SplitMessageLinesTests(unittest.TestCase):
         """尾部空段不会多键入内容 —— 调用方的 `if line:` 负责挡掉。
 
         但段数仍是 2，意味着段间会按一次 Shift+Enter。这是既有的收尾行为，
-        测试把它钉住，免得日后被当成 bug"修"掉。
+        测试把它锁定，免得日后被当成 bug"修"掉。
         """
         self.assertEqual(split_message_lines("甲\\n"), ["甲", ""])
 
@@ -510,7 +510,7 @@ class SplitMessageLinesTests(unittest.TestCase):
     def test_normalization_invariant(self):
         """不变量：断完之后不该再残留【字面 \\n】或【真 \\r】。
 
-        这才是这个函数的**规格**——段数只是实现细节。
+        这才是这个函数的规格——段数只是实现细节。
         """
         samples = ["甲\\n乙", "甲\n乙", "甲\\n\n乙", "甲\\r\\n乙", "甲\r\n乙",
                    "甲\\r\n乙", "甲\n\\n乙", "甲\\r\\r\\n乙", "单行"]
@@ -526,7 +526,7 @@ class SplitMessageLinesTests(unittest.TestCase):
 
 
 class _FakePage:
-    """只实现 ImMonitor 用到的两个方法：on() 和（此处不需要的）其余一概不管。"""
+    """只实现 ImMonitor 用到的少数方法，其余一概不用。"""
 
     def __init__(self):
         self.listeners = {}
@@ -539,9 +539,9 @@ class _FakePage:
 
 
 class LoggingTests(unittest.TestCase):
-    """沉默期改造后的日志契约。
+    """沉默期改造后的日志约定。
 
-    这次改造把 `verbose` 开关换成了真正的 logger 分级，所以要有测试钉住：
+    这次改造把 `verbose` 开关换成了真正的 logger 分级，所以要有测试锁定：
     【1】模块级 logger 存在且名字固定；
     【2】`verbose` / `log_fn` / `log()` / `ImMonitor._log` 已彻底不存在
          （否则就是改造没做干净，旧开关会和新 logger 双重过滤）；
@@ -553,7 +553,7 @@ class LoggingTests(unittest.TestCase):
         self.assertEqual(douyin_im.logger.name, "douyin_im")
 
     def test_removed_log_plumbing(self):
-        """旧的四个日志开关/通道必须全没了。"""
+        """旧的四个日志开关/通道必须全部移除。"""
         self.assertFalse(hasattr(ImMonitor, "_log"))
         self.assertFalse(hasattr(DouyinIM, "log"))
         src = inspect.signature(ImMonitor.__init__)

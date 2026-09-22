@@ -29,7 +29,7 @@ ARG ENABLE_HEADED=false
 # pip 源(默认官方 PyPI; 也可通过构建参数 PIP_INDEX_URL 换镜像)
 ARG PIP_INDEX_URL=https://pypi.org/simple/
 # 是否预置 Windows 默认字体(防检测关键: 伪装成 Windows 却缺 Segoe UI/
-# 微软雅黑 等字体 = 明显的机器特征, 字体指纹一看就露馅, 见 README"字体"一节)。
+# 微软雅黑 等字体 = 明显的机器特征, 字体指纹一下就能被检测出来, 见 README"字体"一节)。
 # 默认从 GitHub 仓库 ErwinLiYH/all_win10_fonts(约 230MB/348 个文件, 与原
 # C:\Windows\Fonts 一致)下载并 fc-cache 打进镜像; 设 false 可跳过。
 ARG ENABLE_WINDOWS_FONTS=true
@@ -62,7 +62,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ---- 2. Windows 默认字体(Segoe UI/Calibri/微软雅黑/宋体/...) -----------------
 # 伪装成 Windows 却缺 Windows 字体, 是字体指纹(measureText / document.fonts /
-# 字体枚举)的明显破绽(FingerprintJS / CreepJS / Kasada 即以此判机器)。
+# 字体枚举)的明显异常特征(FingerprintJS / CreepJS / Kasada 即以此判机器)。
 # 构建期把全套 Windows 字体预置进镜像并 fc-cache, 让 Linux 上实际可检测到的
 # 字体集与 Windows persona 自洽。MS 字体为专有授权, 请仅用于私有镜像/自用。
 RUN set -eux; \

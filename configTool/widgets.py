@@ -52,7 +52,7 @@ def _all_children(widget) -> list:
 def _find_scroller(widget):
     """沿 master 链找最近的滚动容器，返回它的 _on_wheel。
 
-    靠「有没有 _on_wheel」认人，避免 import main 造成循环引用。
+    靠「有无 _on_wheel」判断，避免 import main 造成循环引用。
     """
     node = widget
     hops = 0
@@ -100,19 +100,19 @@ class ConversationPicker(ttk.Frame):
     为什么长成这样：
         「目标好友」只有一种来源（抖音「消息」页的会话列表），界面就应该只有
         一处能改它。早先是「手填标签框 + 会话列表」两套控件同时写着同一个字段，
-        用户改完自己都说不清哪个算数 —— 现在收敛成一个：拉取 → 勾选。
+        用户改完不好判断以哪个为准 —— 现在收敛成一个：拉取 → 勾选。
 
-    几个实现取舍（都不是随手写的）：
+    几个实现取舍：
 
-    - 用 Treeview 而不是 Listbox：Treeview 能整行改内容，勾选状态要逐行翻转；
-      Listbox 只能删了重插，一勾选就把滚动位置弹回顶部。
+    - 用 Treeview 而不是 Listbox：Treeview 能整行改内容，勾选状态逐行翻转；
+      Listbox 只能删了重插，一勾选滚动位置就弹回顶部。
     - 勾选自己画 ☑/☐，不用原生选中态（``selectmode="none"``）：
-      原生高亮和「已勾选」是两回事，两套颜色叠在一起会看糊。
+      原生高亮和「已勾选」是两回事，两套颜色叠在一起会看不清。
     - iid 用行号、另存 ``self._rows`` 做映射：会话名可能重名（两个好友同昵称），
-      拿名字当 iid 会互相顶掉。
+      拿名字当 iid 会互相覆盖。
     - 勾选既不重画列表、也不重排候选：否则每点一下列表就跳一次，没法连着挑人。
-    - 拖不出候选池：``_pool`` 只在 ``set_data`` 时重算，取消勾选的行先留着，
-      免得手一抖名单就从眼皮底下消失。
+    - 候选池不缩水：``_pool`` 只在 ``set_data`` 时重算，取消勾选的行先留着，
+      免得误点一次名单就从界面消失。
     """
 
     def __init__(self, master, on_change=None, on_fetch=None, height: int = 7) -> None:
@@ -189,7 +189,7 @@ class ConversationPicker(ttk.Frame):
         """重设候选池与已选（切账号 / 拉取完成后调用）。
 
         ``fetched`` 是本次抓到的会话名。``selected`` 里凡是 ``fetched`` 中没有的，
-        都是老版本手填留下的数据 —— 它们已经没有来源了，但也不能悄悄丢掉
+        都是手填时代留下的数据 —— 它们已没有来源，但不能直接丢弃
         （用户可能正靠它们发消息），所以照样列出来、标成琥珀色，
         让用户自己决定留还是删。
         """
@@ -293,7 +293,7 @@ class ConversationPicker(ttk.Frame):
         return f"{name}   （不在会话列表里）"
 
     def _refresh_row(self, name: str) -> None:
-        """只改这一行的勾选显示 —— 不重画整表，滚动位置才守得住。"""
+        """只改这一行的勾选显示 —— 不重画整表，滚动位置才能保持不变。"""
         try:
             index = self._rows.index(name)
         except ValueError:

@@ -913,18 +913,14 @@ def get_random_festival_quote():
     根据当前日期从 SPRING_FESTIVAL_QUOTES 中随机获取一条祝福语
     返回：str - 随机选中的祝福语；None - 当前日期无对应祝福语
     """
-    # 获取当前系统日期（年-月-日）
     today = date.today()
-    
-    # 1. 检查当前日期是否在祝福语字典中
+
     if today in SPRING_FESTIVAL_QUOTES:
-        # 2. 获取当日的所有祝福语列表
         daily_quotes = SPRING_FESTIVAL_QUOTES[today]
-        # 3. 随机选择一条祝福语
         random_quote = random.choice(daily_quotes)
         return random_quote
     else:
-        # 若当前日期无对应祝福语，返回提示（也可改为返回None）
+        # 无对应祝福语时返回提示（也可改为返回 None）
         return f"今日（{today.strftime('%Y年%m月%d日')}）暂无专属春节祝福语"
 
 # 测试调用示例

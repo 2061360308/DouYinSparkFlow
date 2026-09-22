@@ -24,7 +24,7 @@ TK_OK = _tk_available()
 
 
 class _FakeScroller(ttk.Frame):
-    """冒充 main.ScrollFrame：`_find_scroller` 就是靠 `_on_wheel` 认人的。"""
+    """冒充 main.ScrollFrame：`_find_scroller` 就是靠 `_on_wheel` 识别它的。"""
 
     def __init__(self, master):
         super().__init__(master)

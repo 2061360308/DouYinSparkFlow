@@ -12,10 +12,10 @@
 目标好友：
   - 手填之外，多了一条「拉取会话列表」——用该账号自己的浏览器配置（无头）打开抖音，
     由 core.douyin_im 滚动枚举全部会话名，存进 profiles.json，之后直接在界面里点选
-  - 抓到的名单存在 profiles.json（本工具自己的元数据），**不写进 .env**
+  - 抓到的名单存在 profiles.json（本工具自己的元数据），不写进 .env
 
 运行（从仓库根，唯一入口）：
-    python run_configtool.py
+    python main.py configtool
 
 文件位置见 paths.py：.env 在项目根，profiles/ 等在本目录。
 """
@@ -105,15 +105,14 @@ class ScrollFrame(ttk.Frame):
 
 
 def _wrap_to_width(label: ttk.Label, minimum: int = 220) -> None:
-    """让一段说明文字跟着**容器**宽度自动换行。
+    """让一段说明文字跟着容器宽度自动换行。
 
-    血泪教训：早先这里拿 label 自己的 ``event.width`` 算宽度并回写 wraplength，
-    而改 wraplength 会改变 Label 的**请求宽度**，于是 <Configure> 又带着新宽度回来，
-    形成「设 → 变 → 再设」的自激。平时布局稳定看不出来，一旦别的页签内容高度变化
-    （比如把一组控件搬到新页签），就会在 Tk 的几何循环里死转 —— 表现为窗口能显示、
-    标题栏按钮有反应，但点任何控件都卡死，调用栈停在 ``update`` 里出不来。
+    早先拿 label 自己的 ``event.width`` 算宽度并回写 wraplength，而改 wraplength
+    会改变 Label 的请求宽度，<Configure> 又带着新宽度回来，形成「设 → 变 → 再设」
+    的循环；平时布局稳定没事，一旦别的页签内容高度变化，就会卡在 Tk 的几何循环里
+    —— 窗口能显示，但点任何控件都卡死，调用栈停在 ``update`` 里出不来。
 
-    现在改成以 ``label.master``（容器）的宽度为基准：容器的宽度由外层布局决定，
+    现在改成以 ``label.master``（容器）的宽度为基准：容器宽度由外层布局决定，
     不随 Label 自身换行而变，回路就断了。再加两道闸：宽度未变直接返回、宽度 <= 1
     （还没完成首次布局）也跳过。
     """
@@ -174,12 +173,12 @@ class ConfigApp:
     def _attach_profile_folders(self) -> list:
         """把 .env 里的账号与 profiles.json 里的配置目录、指纹对应起来。
 
-        .env 的 TASKS 里也会带一份指纹（生成时抄进去的），但**权威来源是
-        profiles.json**：以它为先，只有它里面查不到时才退回来用 .env 里的值 ——
-        这样 profiles.json 万一丢了也不会让指纹白白漂移一次。
+        .env 的 TASKS 里也带一份指纹（生成时抄进去的），但权威来源是
+        profiles.json：以它为先，只有它里面查不到时才回退用 .env 里的值 ——
+        这样 profiles.json 万一丢了，指纹也不会漂移。
 
-        指纹缺失就**当场**分配并写回 —— 固定指纹的价值就在于「定下来之后永远
-        不变」，拖到打开浏览器那一刻才分配，中间任何一次失败都会让指纹漂移。
+        指纹缺失就现在分配并写回：指纹固定后必须保持不变，拖到打开浏览器时才
+        分配，中间任何一次失败都会让指纹漂移。
         """
         missing: list = []
         for account in self.config.accounts:
@@ -541,7 +540,7 @@ class ConfigApp:
         )
 
         # -- 有账号时显示的列表 + 详情 ---------------------------------------
-        # 详情区多了「会话列表」之后整体变高，窗口调小/缩放放大时容易顶出去，
+        # 详情区多了「会话列表」之后整体变高，窗口调小时内容容易超出可视区，
         # 所以套一层滚动容器承载。
         self.account_body = ScrollFrame(master)
         sheet = self.account_body.inner
@@ -579,12 +578,11 @@ class ConfigApp:
 
         # -- 目标好友：唯一的输入方式就是从会话列表里勾选 ---------------------
         # 早先是「手填标签框 + 会话列表」两套控件并排写着同一个字段，
-        # 用户改完自己都说不清哪个算数；现在合并成一个可搜索的勾选列表。
+        # 用户改完不好判断以哪个为准；现在合并成一个可搜索的勾选列表。
         #
-        # 位置放在「账号详情」**之前**，而且是它的兄弟节点：
+        # 放在「账号详情」之前并作它的兄弟节点：
         #   1. 这是每天真正要动的唯一一处，摆在账号列表正下方不用滚就能摸到；
-        #   2. 「账号详情」那个框写着「只读」，把可编辑的选择器塞进去语义不通 ——
-        #      截图核对时一眼就看出来了。
+        #   2. 「账号详情」框写着「只读」，把可编辑的选择器放进去语义不通。
         friends = ttk.LabelFrame(sheet, text=" 目标好友 —— 从会话列表里勾选 ", padding=10)
         friends.pack(fill="x", pady=(12, 0))
         hint = ttk.Label(
@@ -650,9 +648,9 @@ class ConfigApp:
             foreground="#888780",
             justify="left",
         )
-        # sticky 必须是 "ew" 而不是 "w"：_wrap_to_width 靠 <Configure> 拿宽度，
-        # 用 "w" 时 label 只占内容宽度、永远停在最小换行宽度上（截图核对才发现，
-        # 文字被挤成细长一列）。撑满跨列区域后，第一次事件里就是真实可用宽度。
+        # sticky 必须用 "ew"：_wrap_to_width 靠 <Configure> 拿宽度，用 "w" 时
+        # label 只占内容宽度，永远停在最小换行宽度上（文字变成细长一列）。
+        # 撑满跨列区域后，第一次事件里就是真实可用宽度。
         fp_hint.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(6, 0))
         _wrap_to_width(fp_hint)
 
@@ -689,10 +687,10 @@ class ConfigApp:
         self.btn_clean_orphans.pack(side="left", padx=(8, 0))
 
         # 「移除账户」单独一行、靠右：
-        #   1. 它是这里唯一的破坏性操作，跟上面几个「刷新 / 打开 / 复制」分开更不容易点错；
-        #   2. 原来五个挤一行，按钮请求宽度合计 657px 而详情区只有 542px ——
-        #      side="right" 的它会被整个挤出可视区（实测 winfo_ismapped() == False，
-        #      用户既看不到也点不到），连「清理旧 Cookie 变量」都被切掉半个字。
+        #   1. 它是这里唯一的破坏性操作，与「刷新 / 打开 / 复制」分开更不容易点错；
+        #   2. 原来五个按钮排一行，请求宽度合计 657px 而详情区只有 542px ——
+        #      side="right" 的按钮会整个超出可视区（winfo_ismapped() == False，
+        #      用户既看不到也点不到），旁边的按钮还会被切掉半个字。
         danger = ttk.Frame(detail)
         danger.pack(fill="x", pady=(8, 0))
         ttk.Button(danger, text="移除账户", width=10, command=self.on_remove_account).pack(
@@ -831,8 +829,8 @@ class ConfigApp:
     def _on_targets_changed(self) -> None:
         """选择器里勾选变化 → 写回 account.targets。
 
-        这是目标好友**唯一**的写入点。以前手填标签框和会话列表各写一次，
-        两边都要小心别把对方冲掉；现在只有一处，不用再对账。
+        这是目标好友唯一的写入点。以前手填标签框和会话列表各写一次，
+        两边都要小心别互相覆盖；现在只有一处。
         """
         if self._syncing or self._loading:
             return
@@ -1013,7 +1011,7 @@ class ConfigApp:
         self._refresh_conversation_list()
         if account is not None:
             # 模型可能被别处改过（比如重复抖音号合并账号时 targets 被覆盖），
-            # set_selected 内部有幂等判断，一致时不会白重画
+            # set_selected 内部有幂等判断，一致时不会多余重画
             self.picker.set_selected(list(account.targets))
 
     def current_account(self) -> Account | None:
@@ -1167,8 +1165,8 @@ class ConfigApp:
     def on_fetch_conversations(self) -> None:
         """用该账号的浏览器配置打开抖音，滚动收集全部会话名。
 
-        打开的是这个账号**自己**的配置目录（登录态在里面），所以不需要重新登录；
-        浏览器默认无头运行，用户碰不到它，也就不会误操作把列表滚乱。
+        打开的是这个账号自己的配置目录（登录态在里面），所以不需要重新登录；
+        浏览器默认无头运行，用户接触不到它，也就不会误操作把列表滚乱。
         """
         account = self.current_account()
         if account is None:

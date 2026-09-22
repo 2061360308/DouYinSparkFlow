@@ -7,7 +7,7 @@
   3. 一旦登录成功 → 自动抓 Cookie + 昵称 + 抖音号 → 回填 → 写入 profiles.json
      → 通知主窗口保存 .env → 自动关窗
 
-用户名和抖音号是**只读**的：它们来自抖音接口，手填只会填错，而抖音号直接决定
+用户名和抖音号是只读的：它们来自抖音接口，手填只会填错，而抖音号直接决定
 .env 里的 ``COOKIES_<抖音号>`` 键名 —— 填错了任务会被静默跳过。
 
 浏览器配置目录按抖音号记录在 profiles.json（见 profile_store.py），
@@ -91,7 +91,7 @@ class LoginDialog(tk.Toplevel):
         self._grabbed = False
         self._attempts = 0
         self._logged_since = None
-        # 上一次探到的登录态，用来只在**状态变化**时打日志（探针 1.5 秒一次，
+        # 上一次探到的登录态，用来只在状态变化时打日志（探针 1.5 秒一次，
         # 每次都写会把日志刷满）
         self._last_login_state = ""
         self._poll_job = None
@@ -416,7 +416,7 @@ class LoginDialog(tk.Toplevel):
             self.var_unique_id.set(unique_id)
 
         # -- 逐项校验，不合格就退回去继续等 -------------------------------
-        # 「已失效」要排在前面：这种情况下 cookie 里**有** sessionid，
+        # 「已失效」要排在前面：这种情况下 cookie 里有 sessionid，
         # 只看 logged_in 会误判成成功，把一份用不了的登录态写进 .env。
         # （state 在 add 模式下恒为空 —— 那份判定不可信，见 _on_probe 的说明）
         if state == "EXPIRED":
@@ -524,7 +524,7 @@ class LoginDialog(tk.Toplevel):
             self._log(f"自动重试已到 {MAX_AUTO_ATTEMPTS} 次上限，改为手动")
             return
         # 既然告诉用户「稍后自动重试」，就得保证探针真的在跑 —— 它可能因为
-        # _open 提前退场而压根没启动过，那这句提示就是骗人的。
+        # _open 提前退场而压根没启动过，那这句提示就不成立。
         self._start_poll()
         self._set_status(f"{title}，稍后自动重试（{self._attempts}/{MAX_AUTO_ATTEMPTS}）", AMBER)
 

@@ -17,7 +17,6 @@ on:
       # 构建期会 COPY 进镜像的内容 —— 镜像是 `COPY . /app` 全量打进，
       # 改了就必须重建，否则推上去的还是旧代码。此清单需与 detect-changes 的 PATTERNS 保持一致
       - main.py
-      - fc_server.py
       - core/**
       - utils/**
       - VERSION
@@ -80,7 +79,7 @@ jobs:
           echo "$CHANGED"
 
           # 改到这些就得重建镜像（与 on.push.paths 那份清单保持一致）
-          PATTERNS='^(Dockerfile|\.dockerignore|main\.py|fc_server\.py|VERSION|requirements\.txt|docker-compose\.yml|\.github/workflows/docker-publish\.yml)$|^(core|utils|docker)/'
+          PATTERNS='^(Dockerfile|\.dockerignore|main\.py|VERSION|requirements\.txt|docker-compose\.yml|\.github/workflows/docker-publish\.yml)$|^(core|utils|docker)/'
 
           if printf '%s\n' "$CHANGED" | grep -Eq "$PATTERNS"; then
             echo "needs_build=true" >> "$GITHUB_OUTPUT"

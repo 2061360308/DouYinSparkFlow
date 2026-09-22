@@ -13,9 +13,9 @@
 
 实现要点：
   - 本地监听端口每次随机挑一个空闲端口，避免固定端口被别的程序占用；
-  - 「就绪」判定为本地端口能连上；进程早退会立刻报错并把 gost 的最后一句话带出来；
+  - 「就绪」判定为本地端口能连上；进程早退会立刻报错并把 gost 最后一行输出带出来；
   - gost 的输出被后台线程读进 log 回调，排错时能看到「隧道连不上」这类原因；
-  - 进程登记在模块级表里，程序异常退出时由 atexit 兜底清理，不留野进程。
+  - 进程登记在模块级表里，程序异常退出时由 atexit 兜底清理，不留残留进程。
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ READY_POLL = 0.25
 STOP_TIMEOUT = 5.0
 # 启动尝试次数。gost 对单个节点有「失败即摘除」的行为：一旦某次拨号失败，节点会被
 # 打上不可用标记（failTimeout 内不再尝试），同一个进程里怎么重试都只会一路报
-# none node available —— 必须换一个新进程才谈得上重试。
+# none node available —— 必须换一个新进程才能重试。
 START_ATTEMPTS = 3
 # 预热目标：轻量、国内可达，用来确认隧道真的能出网
 WARMUP_TARGET = "https://www.baidu.com"
@@ -82,7 +82,7 @@ def build_forward_url(tunnel: str, user: str = "", password: str = "") -> str:
 
       - 地址里已经带了凭据（含 @）就原样用，不重复插；
       - 账号密码做 percent-encode，密码里出现 @ : / ? 也不会破坏 URL；
-      - **没写端口时按协议补默认端口（wss→443 / ws→80）**：gost 不会替 ws/wss 兜
+      - 没写端口时按协议补默认端口（wss→443 / ws→80）：gost 不会替 ws/wss 兜
         默认端口，少个端口就是拨号失败，而失败会被"节点摘除"放大成一片
         none node available —— 界面上只剩下 ERR_TUNNEL_CONNECTION_FAILED；
       - 没写 path 时补 ?path=/ws（必须与云函数里 gost 的监听参数一致）；
@@ -181,10 +181,10 @@ class GostTunnel:
         为什么不是"起来就用"：函数冷启动时第一次握手可能很慢（实测同一地址首次
         35 秒超时、紧接着第二次只要 4 秒），而 gost 对单个节点是"失败即摘除" ——
         一旦某次拨号被判失败，同一个进程里之后所有请求都只会报 none node available，
-        浏览器拿到的是一条已经残废的隧道（ERR_TUNNEL_CONNECTION_FAILED）。
+        浏览器拿到的是一条已经不可用的隧道（ERR_TUNNEL_CONNECTION_FAILED）。
 
-        所以这里自己先打一枪（预热）：通了才交给浏览器；不通就换一个新进程重来，
-        最多 START_ATTEMPTS 次。这样"慢一点"总比"打开就失败"强。
+        所以这里先自己预热一次：通了才交给浏览器；不通就换一个新进程重来，
+        最多 START_ATTEMPTS 次。慢一点总比打开就失败强。
         """
         if not Path(self.gost_path).is_file():
             raise RuntimeError(

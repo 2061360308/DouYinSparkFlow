@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # 云函数（FC）形态的入口：只负责把一个 HTTP Server 拉起来，
-# 具体「什么请求跑任务、什么请求只回 200」全部在 /app/fc_server.py 里。
+# 具体「什么请求跑任务、什么请求只回 200」全部在 /app/core/fc_server.py 里。
 # 背景：自定义镜像函数的所有请求都走 HTTP 打到容器端口，定时触发器也不例外。
 
 cd /app
