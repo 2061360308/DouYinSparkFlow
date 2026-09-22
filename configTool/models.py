@@ -1,6 +1,6 @@
 """配置数据模型与默认值。
 
-默认值全部对齐 docs/static/js/main.js 的 form 初值，键顺序与 .env.example 一致。
+默认值与 .env.example、utils/config.py 的兜底保持一致。
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ DEFAULT_FRIEND_LIST_WAIT_TIME = 3
 DEFAULT_IM_MAX_STEPS = 200
 DEFAULT_TASK_RETRY_TIMES = 3
 # 大小写与 LOG_LEVEL_OPTIONS 保持一致（"Debug" 而非 "DEBUG"）：
-# tkinter Combobox 对不在 values 里的值不会高亮匹配项 → 框看着是空的。
+# 默认值若不在下拉选项里，界面下拉框看着是空的。
 # utils.logger.resolve_log_level 内部 level.lower()，所以两种写法日志行为相同，
 # 这里只为 GUI 显示正确。
 DEFAULT_LOG_LEVEL = "Debug"

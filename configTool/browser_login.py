@@ -1044,7 +1044,7 @@ class BrowserLoginWorker(threading.Thread):
     def _grab(self, payload=None) -> None:
         """抓取登录信息。
 
-        payload 两个开关默认都关，由 login_dialog 按场景打开：
+        payload 两个开关默认都关，由调用方按场景打开：
         allow_reload 允许刷新页面；deep_login 允许跑 check_login 的完整判定。
         """
         options = payload if isinstance(payload, dict) else {}

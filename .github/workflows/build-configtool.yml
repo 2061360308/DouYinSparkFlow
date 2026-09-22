@@ -63,6 +63,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install --no-cache-dir pyinstaller python-dotenv cloakbrowser==0.5.10
 
+      - name: 构建前端界面（Vite -> singlefile）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+        working-directory: configTool/web/ui
+      - run: npm run build
+        working-directory: configTool/web/ui
+
       - name: 下载自带隐身浏览器（Windows x64）
         shell: pwsh
         run: |
@@ -112,6 +121,7 @@ jobs:
             --collect-all cloakbrowser `
             --collect-all playwright `
             --collect-all dotenv `
+            --add-data "configTool\web\dist;configTool\web\dist" `
             "main.py"
 
       - name: 把两个分发物放到 exe 同级

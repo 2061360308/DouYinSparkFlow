@@ -32,9 +32,9 @@ def main():
 
         runTasks()
     elif MODE in {"configtool", "config", "gui", "tool"}:
-        from configTool.main import main as configtool_main
+        from configTool.web.host import run as configtool_run
 
-        configtool_main()
+        raise SystemExit(configtool_run())
     else:
         print(f"未知启动模式: {MODE}（可选：task / fc / configtool）", file=sys.stderr)
         sys.exit(2)

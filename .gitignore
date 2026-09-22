@@ -32,6 +32,13 @@ dist/
 # gost 隧道客户端
 configTool/gost/
 
+# 界面窗口用的独立 Chromium profile（可能含站内登录态），不入库
+configTool/.ui-profile/
+configTool/web/dist/
+
+# 前端工程依赖与构建缓存（产物由 CI 现构建，不入库）
+configTool/web/ui/node_modules/
+
 # 工具自己的本地设置（local.json）：里面存着配套代理的隧道地址与账号密码，
 # 入库等于把代理凭据交出去 —— 绝不提交。
 configTool/local.json

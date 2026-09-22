@@ -16,7 +16,8 @@ python -m unittest discover -s tests -t .
 | `test_douyin_im_har.py` | 基于 HAR 录制的离线回归 |
 | `test_config_tool.py` | 配置键名、默认值、CRLF 归一 |
 | `test_config_login_flow.py` | 登录流程的门禁 / 刷新约束 |
-| `test_config_wheel.py` | 数值框滚轮保护 |
+| `test_web_bridge.py` | configTool 网页桥（$py）的纯逻辑 |
+| `test_web_host_integration.py` | 真实浏览器跑网页界面：读配置、保存回 .env |
 | `test_logger.py` | 日志器配置 |
 
 部分 GUI 相关测试需要可用的显示环境，没有时整类跳过（不算失败）。

@@ -13,11 +13,14 @@ DouYinSparkFlow/
 │   ├── config.py               # 环境变量读取（.env → 配置字典）
 │   ├── logger.py               # 日志器
 │   └── export_github_env.py    # Action 场景：把 vars/secrets 注入进程环境
-├── configTool/                 # 本地配置生成器（tkinter 桌面工具）
-│   ├── main.py                 # 主窗口（由根入口 main.py configtool 启动）
+├── configTool/                 # 本地配置生成器（Vite 前端 + 自带 Chromium 当 webview）
+│   ├── web/                    # 界面层
+│   │   ├── host.py             # 浏览器窗口壳（playwright 启动自带 Chromium）
+│   │   ├── bridge.py           # 桥：页面 ↔ Python 双向通信（window.$py / __pyOn）
+│   │   ├── service.py          # 业务封装（复用 core/ 与下方数据模块）
+│   │   ├── ui/                 # Vite 前端源码（worker 里构建，产物不入库）
+│   │   └── dist/               # vite build 单文件产物（CI 里生成）
 │   ├── browser_login.py        # 登录会话工作线程（借 core/douyin_im）
-│   ├── login_dialog.py         # 登录窗口
-│   ├── conversation_dialog.py  # 拉取会话列表窗口
 │   ├── models.py               # 配置项定义（键名、范围、默认值）
 │   ├── env_store.py            # 读写 .env
 │   ├── profile_store.py        # 读写 profiles.json（账号 ↔ 浏览器目录对照）
@@ -44,5 +47,5 @@ DouYinSparkFlow/
 ## 核心约定
 
 - `.env` 是主程序真正读的配置，`utils/config.py` 负责解析
-- 配置键名、范围、默认值以 `configTool/models.py` 为准（与网页版、`.env.example` 保持一致）
+- 配置键名、范围、默认值以 `configTool/models.py` 为准（与 `.env.example` 保持一致）
 - 登录态判定、会话扫描逻辑**只在** `core/douyin_im.py` 里有一份，configTool 直接复用，不自己镜像
