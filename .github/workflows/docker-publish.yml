@@ -4,18 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "调试模式：只构建，不推任何 registry（不污染 GHCR/ACR 的 tag）"
+        description: "调试模式：只构建，不推送到 GHCR（不产生任何 tag）"
         type: boolean
         default: false
   push:
     branches:
       - main
     paths:
-      # 构建上下文本身(Dockerfile 内容 / 忽略规则)
+      # 构建上下文本身（Dockerfile 内容 / 忽略规则）
       - Dockerfile
       - .dockerignore
-      # 构建期会 COPY 进镜像的东西 —— 镜像里是 `COPY . /app` 全量打进，改了就必须重建，
-      # 否则推上去镜像还是旧的。这份清单要与 detect-changes 里的 PATTERNS 保持一致:
+      # 构建期会 COPY 进镜像的内容 —— 镜像是 `COPY . /app` 全量打进，
+      # 改了就必须重建，否则推上去的还是旧代码。此清单需与 detect-changes 的 PATTERNS 保持一致
       - main.py
       - fc_server.py
       - core/**
@@ -32,25 +32,21 @@ permissions:
   contents: read
   packages: write
 
-# 两个 job 共用，避免各自重复定义
 env:
   GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/douyinsparkflow
-  ACR_REGISTRY: crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com
-  ACR_IMAGE: crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com/oilu/douyinsparkflow
   VERSION_FILE: VERSION
   CONTEXT_DIR: .
 
 jobs:
-  # ── 0. 变更判定: 决定构建 job 要不要跑 ────────────────────────────────────
-  # 为什么不干脆让 on.push.paths 一家说了算: workflow_dispatch 手动触发时 paths
-  # 不生效，需要一个 forced 开关兜底；把「本次要不要重建」在这里算一次，构建 job
-  # 只读结果，不各自重复判断。
+  # ── 0. 变更判定：决定 publish 要不要跑 ─────────────────────────────────
+  # 为什么不交给 on.push.paths 一家说了算：workflow_dispatch 手动触发时 paths 不生效，
+  # 需要一个 forced 兜底；把「本次要不要重建」在这里算一次，publish 只读结果。
   detect-changes:
     name: Detect changes
     runs-on: ubuntu-latest
     outputs:
       forced: ${{ steps.classify.outputs.forced }}
-      cloakbrowser: ${{ steps.classify.outputs.cloakbrowser }}
+      needs_build: ${{ steps.classify.outputs.needs_build }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -66,7 +62,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 手动触发 = 强制重建（dispatch 不受 paths 过滤影响，语义上就是「我现在就要它跑」）
+          # 手动触发 = 强制重建（dispatch 不受 paths 过滤影响，语义就是「我现在就要它跑」）
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "forced=true" >> "$GITHUB_OUTPUT"
           else
@@ -87,25 +83,23 @@ jobs:
           PATTERNS='^(Dockerfile|\.dockerignore|main\.py|fc_server\.py|VERSION|requirements\.txt|docker-compose\.yml|\.github/workflows/docker-publish\.yml)$|^(core|utils|docker)/'
 
           if printf '%s\n' "$CHANGED" | grep -Eq "$PATTERNS"; then
-            echo "cloakbrowser=true" >> "$GITHUB_OUTPUT"
+            echo "needs_build=true" >> "$GITHUB_OUTPUT"
           else
-            echo "cloakbrowser=false" >> "$GITHUB_OUTPUT"
+            echo "needs_build=false" >> "$GITHUB_OUTPUT"
           fi
 
-  # ── 1. 构建一次，只推 GHCR ───────────────────────────────────────────────
-  # 为什么只推 GHCR: GHCR 走 GitHub 自己的网络，最稳最快。ACR 走跨境公网经常十几
-  # 分钟推不完，放在同一个 buildx 调用里会把整个 job 拖到被取消，所以拆到下一个 job。
+  # ── 1. 构建一次，推送到 GHCR ───────────────────────────────────────────
+  # 只推 GHCR：走 GitHub 自己的网络，最稳最快。ACR 那边由阿里云自己的构建规则
+  # （海外机器构建）产出，本流水线不再碰 ACR，避免两个写入方互相覆盖 latest。
   # 三个 tag（latest / 分支名 / sha-xxx）合并成一次 output —— buildx 的 name 是
   # --output 里的 CSV 字段，多 tag 必须对完整 name 字段加引号，否则逗号会被解析成
   # KV 分隔符，命令直接报错。
   publish:
     name: Build → GHCR
     needs: detect-changes
-    if: ${{ needs.detect-changes.outputs.forced == 'true' || needs.detect-changes.outputs.cloakbrowser == 'true' }}
+    if: ${{ needs.detect-changes.outputs.forced == 'true' || needs.detect-changes.outputs.needs_build == 'true' }}
     runs-on: ubuntu-latest
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-      version: ${{ steps.version.outputs.value }}
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -135,35 +129,34 @@ jobs:
         run: echo "value=$(cat "$VERSION_FILE")" >> "$GITHUB_OUTPUT"
 
       - name: 构建一次并推送到 GHCR
-        id: build
         env:
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
-          DRY_RUN: ${{ inputs.dry_run }}
           IMAGE_VERSION: ${{ steps.version.outputs.value }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           cd "$CONTEXT_DIR"
 
           if [ "${DRY_RUN:-false}" = "true" ]; then
-            # 调试模式: 只构建 + 写 GHA 缓存，不产出任何镜像，绝不碰 registry
+            # 调试模式：只构建，不产出任何镜像，绝不碰 registry
             echo "==> 调试模式: 只构建，不推送"
             OUTPUT='type=cacheonly'
           else
             # metadata-action 输出是换行分隔的多行 tag → 合并成 CSV 列表
             TAGS="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | paste -sd, -)"
             echo "==> GHCR 推送目标: ${TAGS}"
-            # 注意 name 字段整体加双引号(CSV 语义)，否则逗号会被解析成 KV 分隔符
+            # buildx 的 name 是 --output 里的 CSV 字段，多 tag 必须对完整 name 加引号，
+            # 否则逗号会被解析成 KV 分隔符直接报错
             OUTPUT="type=image,\"name=${TAGS}\",push=true,oci-mediatypes=false"
           fi
 
-          # --provenance=false --sbom=false: 禁止 buildx 默认附加 SLSA attestation
-          #   (会生成 unknown/unknown 平台的 OCI index, 0.1.0/latest 曾因此异常)
-          # --output ...,oci-mediatypes=false: 强制导出 docker schema2 manifest
-          #   (而非 buildx 默认的 OCI), ACR 个人版控制台只认 schema2, 否则层/大小
-          #   显示空白。GHCR 同样吃 schema2，不受影响。
-          # --cache-to mode=min: 只缓存最终镜像的层。max 会把所有中间层塞进 GHA
-          #   cache，而本镜像含 230MB 字体 + 200MB Chromium，10GB 配额很容易被撑爆
-          #   驱逐，反而导致下次全量重建 + 全量重推。
+          # --provenance=false --sbom=false: 禁止 buildx 默认附加的 SLSA attestation
+          #   （会生成 unknown/unknown 平台的 OCI index，曾导致 latest 异常）
+          # --output ...,oci-mediatypes=false: 强制导出 docker schema2 manifest，
+          #   而非 buildx 默认的 OCI。schema2 通用兼容性最好，各类第三方拉取工具都认。
+          # --cache-to mode=min: 只缓存最终镜像的层。max 会把所有中间层塞进 GHA cache，
+          #   而本镜像含 ~230MB 字体 + ~200MB Chromium，10GB 配额很容易被撑爆驱逐，
+          #   反而导致下次全量重建。
           docker buildx build --provenance=false --sbom=false \
             -f Dockerfile \
             --build-arg IMAGE_VERSION="$IMAGE_VERSION" \
@@ -174,67 +167,8 @@ jobs:
             .
 
           if [ "${DRY_RUN:-false}" = "true" ]; then
-            echo "digest=" >> "$GITHUB_OUTPUT"
             echo "==> 调试模式结束: 未推送任何镜像"
           else
             DIGEST="$(jq -r '."containerimage.digest"' /tmp/build-meta.json)"
-            echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
             echo "==> GHCR 已推送: ${GHCR_IMAGE}@${DIGEST}"
           fi
-
-  # ── 2. 把 GHCR 上刚推好的镜像原样复制到阿里云 ACR ────────────────────────
-  # 拆成独立 job 的理由: GitHub 的 "Re-run failed jobs" 只重跑失败的 job。
-  # ACR 跨境推送失败/超时是常态，拆出来后点一次重跑只走这一步（几十秒），
-  # 不用重新构建、不用重推 GHCR。job 级 timeout-minutes 也能用了，超时报错明确
-  # ("exceeded the maximum execution time")，不会像 cancel 那样含糊。
-  mirror-acr:
-    name: Mirror GHCR → ACR
-    needs: publish
-    if: needs.publish.result == 'success' && needs.publish.outputs.digest != ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 30 # > 8m × 3 次尝试，留出余量
-    steps:
-      - name: 初始化 buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 登录 GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 登录阿里云 ACR
-        env:
-          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
-          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
-        run: echo "$ACR_PASSWORD" | docker login --username="$ACR_USERNAME" --password-stdin "$ACR_REGISTRY"
-
-      - name: 从 GHCR 转推到 ACR
-        env:
-          DIGEST: ${{ needs.publish.outputs.digest }}
-          IMAGE_VERSION: ${{ needs.publish.outputs.version }}
-        run: |
-          set -euo pipefail
-          SRC="${GHCR_IMAGE}@${DIGEST}"
-          echo "==> 源镜像: ${SRC}"
-          echo "==> 目标:   ${ACR_IMAGE}:${IMAGE_VERSION} , ${ACR_IMAGE}:latest"
-
-          # imagetools create 只复制 manifest 和缺失的层，不重新构建、不落盘。
-          # ACR 上若已有同 digest 的层，会走仓库内 cross-repo blob mount，零传输。
-          # 单次 8 分钟上限 + 最多 3 次，总耗时(8m×3+30s≈24.5m)控制在 job 超时之内。
-          for i in 1 2 3; do
-            echo "==> 第 ${i}/3 次尝试 (单次上限 8 分钟)"
-            if timeout 8m docker buildx imagetools create \
-                 -t "${ACR_IMAGE}:${IMAGE_VERSION}" \
-                 -t "${ACR_IMAGE}:latest" \
-                 "$SRC"; then
-              echo "==> ACR 转推成功"
-              docker buildx imagetools inspect "${ACR_IMAGE}:latest" | head -n 20
-              exit 0
-            fi
-            echo "==> 第 ${i} 次失败" >&2
-            sleep 15
-          done
-          echo "ACR 转推连续 3 次失败; GHCR 上的镜像正常，可单独重跑本 job" >&2
-          exit 1
