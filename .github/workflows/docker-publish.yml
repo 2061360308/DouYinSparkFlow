@@ -2,6 +2,11 @@ name: Publish Docker Image
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "调试模式：只构建，不推任何 registry（不污染 GHCR/ACR 的 tag）"
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -26,6 +31,14 @@ on:
 permissions:
   contents: read
   packages: write
+
+# 两个 job 共用，避免各自重复定义
+env:
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/douyinsparkflow
+  ACR_REGISTRY: crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com
+  ACR_IMAGE: crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com/oilu/douyinsparkflow
+  VERSION_FILE: VERSION
+  CONTEXT_DIR: .
 
 jobs:
   # ── 0. 变更判定: 决定构建 job 要不要跑 ────────────────────────────────────
@@ -79,21 +92,20 @@ jobs:
             echo "cloakbrowser=false" >> "$GITHUB_OUTPUT"
           fi
 
-  # ── 1. 只构建一次，同时推送到 GHCR 与阿里云 ACR ──────────────────────────
-  # 一次 buildx build 带多个 `--output type=image` —— buildx 会构建一遍，然后由
-  # 每个 exporter 各自 push 到目标仓库（多个 tag / 多个 registry 都只是多次导出，
-  # 不是重复构建）。Chromium(~200MB) + Windows 字体(~230MB) + pip 那几层只跑一遍。
+  # ── 1. 构建一次，只推 GHCR ───────────────────────────────────────────────
+  # 为什么只推 GHCR: GHCR 走 GitHub 自己的网络，最稳最快。ACR 走跨境公网经常十几
+  # 分钟推不完，放在同一个 buildx 调用里会把整个 job 拖到被取消，所以拆到下一个 job。
+  # 三个 tag（latest / 分支名 / sha-xxx）合并成一次 output —— buildx 的 name 是
+  # --output 里的 CSV 字段，多 tag 必须对完整 name 字段加引号，否则逗号会被解析成
+  # KV 分隔符，命令直接报错。
   publish:
-    name: Build once → GHCR + ACR
+    name: Build → GHCR
     needs: detect-changes
     if: ${{ needs.detect-changes.outputs.forced == 'true' || needs.detect-changes.outputs.cloakbrowser == 'true' }}
     runs-on: ubuntu-latest
-    env:
-      GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/douyinsparkflow
-      ACR_REGISTRY: crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com
-      ACR_IMAGE: crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com/oilu/douyinsparkflow
-      VERSION_FILE: VERSION
-      CONTEXT_DIR: .
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      version: ${{ steps.version.outputs.value }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -108,9 +120,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 登录阿里云 ACR
-        run: echo "${{ secrets.ACR_PASSWORD }}" | docker login --username="${{ secrets.ACR_USERNAME }}" --password-stdin "$ACR_REGISTRY"
-
       - name: 计算 GHCR 镜像 tag
         id: meta
         uses: docker/metadata-action@v5
@@ -121,38 +130,111 @@ jobs:
             type=ref,event=branch
             type=sha,prefix=sha-
 
-      - name: 构建一次并推送到 GHCR 与 ACR
+      - name: 读取镜像版本号
+        id: version
+        run: echo "value=$(cat "$VERSION_FILE")" >> "$GITHUB_OUTPUT"
+
+      - name: 构建一次并推送到 GHCR
+        id: build
         env:
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          IMAGE_VERSION: ${{ steps.version.outputs.value }}
         run: |
           set -euo pipefail
-          IMAGE_VERSION="$(cat "$VERSION_FILE")"
           cd "$CONTEXT_DIR"
 
-          ARGS=()
-
-          # GHCR: 沿用 metadata-action 算出来的 tag（latest / 分支名 / sha-xxxx）
-          while IFS= read -r tag; do
-            [ -n "$tag" ] || continue
-            ARGS+=(--output "type=image,name=${tag},push=true,oci-mediatypes=false")
-          done <<< "$GHCR_TAGS"
-
-          # ACR: 镜像版本号(取自 VERSION 文件) + latest
-          ARGS+=(--output "type=image,name=${ACR_IMAGE}:${IMAGE_VERSION},push=true,oci-mediatypes=false")
-          ARGS+=(--output "type=image,name=${ACR_IMAGE}:latest,push=true,oci-mediatypes=false")
-
-          echo "本次推送目标："
-          printf '  %s\n' "${ARGS[@]}"
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            # 调试模式: 只构建 + 写 GHA 缓存，不产出任何镜像，绝不碰 registry
+            echo "==> 调试模式: 只构建，不推送"
+            OUTPUT='type=cacheonly'
+          else
+            # metadata-action 输出是换行分隔的多行 tag → 合并成 CSV 列表
+            TAGS="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | paste -sd, -)"
+            echo "==> GHCR 推送目标: ${TAGS}"
+            # 注意 name 字段整体加双引号(CSV 语义)，否则逗号会被解析成 KV 分隔符
+            OUTPUT="type=image,\"name=${TAGS}\",push=true,oci-mediatypes=false"
+          fi
 
           # --provenance=false --sbom=false: 禁止 buildx 默认附加 SLSA attestation
           #   (会生成 unknown/unknown 平台的 OCI index, 0.1.0/latest 曾因此异常)
-          # --output type=image,push=true,oci-mediatypes=false: 强制导出 docker
-          #   schema2 manifest(而非 buildx 默认的 OCI), ACR 个人版控制台只认
-          #   schema2, 否则层/大小显示空白。GHCR 同样吃 schema2，不受影响。
+          # --output ...,oci-mediatypes=false: 强制导出 docker schema2 manifest
+          #   (而非 buildx 默认的 OCI), ACR 个人版控制台只认 schema2, 否则层/大小
+          #   显示空白。GHCR 同样吃 schema2，不受影响。
+          # --cache-to mode=min: 只缓存最终镜像的层。max 会把所有中间层塞进 GHA
+          #   cache，而本镜像含 230MB 字体 + 200MB Chromium，10GB 配额很容易被撑爆
+          #   驱逐，反而导致下次全量重建 + 全量重推。
           docker buildx build --provenance=false --sbom=false \
             -f Dockerfile \
             --build-arg IMAGE_VERSION="$IMAGE_VERSION" \
             --cache-from type=gha \
-            --cache-to type=gha,mode=max \
-            "${ARGS[@]}" \
+            --cache-to type=gha,mode=min \
+            --metadata-file /tmp/build-meta.json \
+            --output "$OUTPUT" \
             .
+
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            echo "digest=" >> "$GITHUB_OUTPUT"
+            echo "==> 调试模式结束: 未推送任何镜像"
+          else
+            DIGEST="$(jq -r '."containerimage.digest"' /tmp/build-meta.json)"
+            echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "==> GHCR 已推送: ${GHCR_IMAGE}@${DIGEST}"
+          fi
+
+  # ── 2. 把 GHCR 上刚推好的镜像原样复制到阿里云 ACR ────────────────────────
+  # 拆成独立 job 的理由: GitHub 的 "Re-run failed jobs" 只重跑失败的 job。
+  # ACR 跨境推送失败/超时是常态，拆出来后点一次重跑只走这一步（几十秒），
+  # 不用重新构建、不用重推 GHCR。job 级 timeout-minutes 也能用了，超时报错明确
+  # ("exceeded the maximum execution time")，不会像 cancel 那样含糊。
+  mirror-acr:
+    name: Mirror GHCR → ACR
+    needs: publish
+    if: needs.publish.result == 'success' && needs.publish.outputs.digest != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30 # > 8m × 3 次尝试，留出余量
+    steps:
+      - name: 初始化 buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 登录阿里云 ACR
+        env:
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+        run: echo "$ACR_PASSWORD" | docker login --username="$ACR_USERNAME" --password-stdin "$ACR_REGISTRY"
+
+      - name: 从 GHCR 转推到 ACR
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          IMAGE_VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          set -euo pipefail
+          SRC="${GHCR_IMAGE}@${DIGEST}"
+          echo "==> 源镜像: ${SRC}"
+          echo "==> 目标:   ${ACR_IMAGE}:${IMAGE_VERSION} , ${ACR_IMAGE}:latest"
+
+          # imagetools create 只复制 manifest 和缺失的层，不重新构建、不落盘。
+          # ACR 上若已有同 digest 的层，会走仓库内 cross-repo blob mount，零传输。
+          # 单次 8 分钟上限 + 最多 3 次，总耗时(8m×3+30s≈24.5m)控制在 job 超时之内。
+          for i in 1 2 3; do
+            echo "==> 第 ${i}/3 次尝试 (单次上限 8 分钟)"
+            if timeout 8m docker buildx imagetools create \
+                 -t "${ACR_IMAGE}:${IMAGE_VERSION}" \
+                 -t "${ACR_IMAGE}:latest" \
+                 "$SRC"; then
+              echo "==> ACR 转推成功"
+              docker buildx imagetools inspect "${ACR_IMAGE}:latest" | head -n 20
+              exit 0
+            fi
+            echo "==> 第 ${i} 次失败" >&2
+            sleep 15
+          done
+          echo "ACR 转推连续 3 次失败; GHCR 上的镜像正常，可单独重跑本 job" >&2
+          exit 1
