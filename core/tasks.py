@@ -55,7 +55,7 @@ def do_user_task(browser, username, cookies, targets):
                 "ERROR": "内部错误",
             }.get(res.get("status"), res.get("status"))
             logger.error(f"账号 {username} 操作前检查未通过：{reason}，跳过该账号")
-            return
+            return False
 
         logger.info(
             f"账号 {username} 门禁通过  user_id={res.get('user_id')} "
@@ -118,6 +118,7 @@ def do_user_task(browser, username, cookies, targets):
                 f"账号 {username} 注意：折叠组/陌生人组里有内容 {folds}，"
                 f"主列表扫不到，目标可能被折叠"
             )
+        return True
     finally:
         if im is not None:
             try:
@@ -128,6 +129,12 @@ def do_user_task(browser, username, cookies, targets):
 
 
 def runTasks():
+    """跑一轮所有账号的任务。
+
+    返回进程退出码：任一账号门禁失败或抛异常 → 1，否则 0。
+    「部分好友没找到 / 发送失败」不计入整体失败（可能只是改名），只记日志。
+    调度器靠这个退出码判断「今天是否算成功执行」。
+    """
     logger.info("开始执行任务")
     logger.debug(f"当前配置如下：")
     logger.debug(f"消息模板: {config.get('messageTemplate', '未找到消息模板')}")
@@ -137,6 +144,7 @@ def runTasks():
             f"用户: {user.get('username', '未知用户')}, 目标好友: {user['targets']}"
         )
 
+    failed = 0
     for user in userData:
         cookies = user["cookies"]
         # 归一化只在这里做（配置读取端不做）：DouyinIM._match 内部也用同一套 norm，
@@ -146,10 +154,25 @@ def runTasks():
         username = user.get("username", "未知用户")
         fingerprint = user.get("fingerprint", None)
         logger.info(f"开始处理账号 {username}")
+        browser = None
         try:
             browser = get_browser(fingerprint)
-            do_user_task(browser, username, cookies, targets)
-            logger.info(f"账号 {username} 任务完成")
+            if not do_user_task(browser, username, cookies, targets):
+                failed += 1
+                logger.error(f"账号 {username} 任务失败")
+            else:
+                logger.info(f"账号 {username} 任务完成")
+        except Exception:
+            failed += 1
+            logger.error(f"账号 {username} 任务异常：\n{traceback.format_exc()}")
         finally:
-            browser.close()
-    
+            if browser is not None:
+                try:
+                    browser.close()
+                except Exception:
+                    logger.warning(traceback.format_exc())
+
+    if failed:
+        logger.error(f"本轮共有 {failed} 个账号失败")
+        return 1
+    return 0

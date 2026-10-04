@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -39,14 +40,16 @@ def setup_logger(name="app", level="Info"):
     formatter = logging.Formatter(LOG_FORMAT)
 
     if not logger.handlers:
-        console_handler = logging.StreamHandler()
+        # 打包成 --windowed exe 时没有控制台，sys.stderr 为 None，
+        # 此时再加 StreamHandler 会在写日志时报错；只在有 stderr 时才加。
+        if sys.stderr is not None:
+            logger.addHandler(logging.StreamHandler())
         file_handler = RotatingFileHandler(
             LOG_FILE,
             maxBytes=5 * 1024 * 1024,
             backupCount=3,
             encoding="utf-8",
         )
-        logger.addHandler(console_handler)
         logger.addHandler(file_handler)
 
     for handler in logger.handlers:
