@@ -8,6 +8,7 @@ DouYinSparkFlow/
 │   ├── fc_server.py            # 云函数(FC)模式：HTTP Server 等定时触发器
 │   ├── browser.py              # 浏览器启动（cloakbrowser / playwright）
 │   ├── msg_builder.py          # 消息模板 / 一言生成
+│   ├── notify.py               # 任务完成后的消息通知（Bark/Telegram/企业微信…）
 │   └── tasks.py                # 任务编排：跑一轮续火花
 ├── utils/
 │   ├── config.py               # 环境变量读取（.env → 配置字典）
@@ -24,6 +25,7 @@ DouYinSparkFlow/
 │   ├── scheduler/              # 本机定时任务（常驻定时 / 开机执行，schtasks / cron）
 │   ├── browser_login.py        # 登录会话工作线程（借 core/douyin_im）
 │   ├── models.py               # 配置项定义（键名、范围、默认值）
+│   ├── notify_spec.py          # 通知方式规格（类型/字段，前后端共用）
 │   ├── env_store.py            # 读写 .env
 │   ├── profile_store.py        # 读写 profiles.json（账号 ↔ 浏览器目录对照）
 │   ├── local_settings.py       # 工具私有设置（local.json）

@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from app.config import env_store, profile_store, settings
+from app.config import env_store, notify_spec, profile_store, settings
 from app.config.models import (
     HITOKOTO_OPTIONS as HITOKOTO_OPTIONS_ALL,
     LOG_LEVEL_OPTIONS,
@@ -87,6 +87,7 @@ class ConfigService:
                 "hitokoto_options": list(HITOKOTO_OPTIONS_ALL),
                 "log_level_options": list(LOG_LEVEL_OPTIONS),
                 "ranges": {key: list(value) for key, value in RANGES.items()},
+                "notify_types": [dict(item) for item in notify_spec.NOTIFY_TYPES],
             },
             "proxy": settings.proxy_config(),
             "notes": list(self.notes),
@@ -111,6 +112,7 @@ class ConfigService:
             "im_max_steps": int(config.im_max_steps),
             "task_retry_times": int(config.task_retry_times),
             "log_level": config.log_level or "Info",
+            "notifications": [dict(item) for item in config.notifications],
             "accounts": [
                 {
                     "username": account.username,
@@ -178,6 +180,23 @@ class ConfigService:
                     fingerprint=str(raw.get("fingerprint") or "").strip(),
                 )
             )
+        notifications: list = []
+        for raw in data.get("notifications") or []:
+            if not isinstance(raw, dict):
+                continue
+            type_id = str(raw.get("type") or "").strip()
+            spec = notify_spec.spec_for(type_id)
+            if not spec:
+                continue
+            item = {"type": type_id, "enabled": bool(raw.get("enabled", True))}
+            for field in spec.get("fields", []):
+                key = field["key"]
+                value = raw.get(key)
+                if field.get("type") == "bool":
+                    item[key] = bool(value)
+                else:
+                    item[key] = "" if value is None else str(value)
+            notifications.append(item)
         return Config(
             proxy_address=str(data.get("proxy_address") or ""),
             run_time=str(data.get("run_time") or "09:00:00") or "09:00:00",
@@ -213,6 +232,7 @@ class ConfigService:
                 self.config.task_retry_times,
             ),
             log_level=str(data.get("log_level") or "Info") or "Info",
+            notifications=notifications,
             accounts=accounts,
         )
 
@@ -410,6 +430,18 @@ class Service:
     def open_external_url(self, payload) -> dict:
         return self.desktop.open_external_url(payload)
 
+    def notify_test(self, payload) -> dict:
+        """用页面当前填的参数发一条测试通知（不落盘）。"""
+        from core import notify as notify_mod
+
+        item = (payload or {}).get("notification") or {}
+        ok, message = notify_mod.send_one(
+            item, "这是一条测试通知：DouYinSparkFlow 通知配置成功。"
+        )
+        if not ok:
+            raise AppError(message)
+        return {"ok": True}
+
     def schedule_status(self, _payload=None) -> dict:
         return self.schedule.status()
 
@@ -445,6 +477,7 @@ def make_bridge(bridge, worker_factory=None) -> "AccountOperator":
         clean_orphans=service.clean_orphans,
         open_env_dir=service.open_env_dir,
         open_external_url=service.open_external_url,
+        notify_test=service.notify_test,
         schedule_status=service.schedule_status,
         schedule_set_mode=service.schedule_set_mode,
         schedule_cancel=service.schedule_cancel,

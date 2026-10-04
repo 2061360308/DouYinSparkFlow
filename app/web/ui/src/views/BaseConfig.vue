@@ -78,11 +78,18 @@
         </div>
       </el-collapse-item>
     </el-collapse>
+
+    <Notifications
+      :notifications="config.notifications || []"
+      :notify-types="options.notify_types || []"
+      @change="emitChange"
+    />
   </div>
 </template>
 
 <script setup>
 import { computed, ref } from 'vue'
+import Notifications from './Notifications.vue'
 
 const props = defineProps({
   config: { type: Object, required: true },
