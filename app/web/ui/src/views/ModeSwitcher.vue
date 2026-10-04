@@ -10,7 +10,6 @@
         <span class="mode-logo" v-html="icon(currentIcon)" />
         <span class="mode-text">
           <span class="mode-name">{{ currentLabel }}</span>
-          <span class="mode-sub">{{ subtitle }}</span>
         </span>
         <span class="mode-caret" v-html="icon('caret')" />
       </button>
@@ -72,13 +71,6 @@ const currentIcon = computed(() => current.value || 'scheduled')
 const currentLabel = computed(() => {
   const found = modes.find((m) => m.id === current.value)
   return found ? found.label : '未设置'
-})
-const subtitle = computed(() => {
-  const s = props.schedule || {}
-  if (s.mode === 'scheduled') return s.installed ? `已注册 · 每天 ${s.run_time || '--:--'}` : '未注册'
-  if (s.mode === 'boot') return s.installed ? '已注册 · 开机补跑' : '未注册'
-  if (s.mode === 'config') return '需隧道'
-  return '未设置'
 })
 
 const ICONS = {
@@ -182,14 +174,6 @@ async function onTunnelConfirm(draft) {
   font-weight: 600;
   color: var(--vg-fg);
   letter-spacing: -0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.mode-sub {
-  font-size: 11.5px;
-  color: var(--vg-fg-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
