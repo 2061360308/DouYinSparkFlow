@@ -14,6 +14,17 @@ def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def no_window_kwargs() -> dict:
+    """Windows 下让子进程不弹控制台窗口；其他平台返回空 dict。
+
+    打包成窗口模式（--windowed）后自身没有控制台，任何没带这个参数的
+    subprocess 调用都会闪出一个黑框，所以调度相关的调用都要带上。
+    """
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    return {}
+
+
 def find_binary(names, roots):
     """在若干目录里按顺序找第一个存在的文件；找不到返回 None。
 

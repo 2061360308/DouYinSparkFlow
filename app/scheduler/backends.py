@@ -17,10 +17,17 @@ from pathlib import Path
 
 from app import paths
 from app.scheduler import core
+from app.util import no_window_kwargs
 
 
 def _default_run(args, input_text=None):
-    return subprocess.run(args, capture_output=True, text=True, input=input_text)
+    return subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        input=input_text,
+        **no_window_kwargs(),
+    )
 
 
 # ---------------------------------------------------------------------------

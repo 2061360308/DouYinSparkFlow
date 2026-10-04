@@ -17,6 +17,7 @@ from pathlib import Path
 from app import paths
 from app.config import env_store
 from app.scheduler import state
+from app.util import no_window_kwargs
 
 # 计划任务名（Windows schtasks /TN；Linux cron 用它的注释 marker）
 DEFAULT_NAME = "DouYinSparkFlow"
@@ -232,6 +233,7 @@ def run_task(launcher: Launcher | None = None) -> int:
             cwd=str(launcher.root),
             stdout=fh,
             stderr=subprocess.STDOUT,
+            **no_window_kwargs(),
         )
     return int(proc.returncode)
 
