@@ -45,8 +45,33 @@ env:
   # （pip 会自己读这两个环境变量，这里不用显式映射）
 
 jobs:
+  # 前端只构建一次，Windows / Linux 各矩阵 job 共用（Vite singlefile 产物与平台无关）
+  build-frontend:
+    name: Build frontend (Vite)
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 构建前端界面（Vite -> singlefile）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+        working-directory: app/web/ui
+      - run: npm run build
+        working-directory: app/web/ui
+
+      - name: 上传前端产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: app/web/dist
+          if-no-files-found: error
+
   build-windows:
     name: Build & Release (Windows x64)
+    needs: build-frontend
     runs-on: windows-latest
 
     steps:
@@ -63,14 +88,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install --no-cache-dir pyinstaller python-dotenv "cloakbrowser[geoip]==0.5.10"
 
-      - name: 构建前端界面（Vite -> singlefile）
-        uses: actions/setup-node@v4
+      - name: 取回前端产物
+        uses: actions/download-artifact@v4
         with:
-          node-version: '20'
-      - run: npm ci
-        working-directory: app/web/ui
-      - run: npm run build
-        working-directory: app/web/ui
+          name: web-dist
+          path: app/web/dist
 
       - name: 下载自带隐身浏览器（Windows x64）
         shell: pwsh
@@ -117,6 +139,7 @@ jobs:
           #   driver 目录（含 node 运行时）必须一起带上，否则打包后启动浏览器会失败。
           pyinstaller --noconfirm --clean --onedir --windowed `
             --name "$env:APP_NAME" `
+            --icon "app\logo.ico" `
             --hidden-import cloakbrowser `
             --hidden-import geoip2 `
             --hidden-import geoip2.database `
@@ -174,8 +197,8 @@ jobs:
 
   build-linux-deb:
     name: Build Linux deb (${{ matrix.arch }})
-    # 等 Windows job 先把 Release 建好，避免两个 job 并发创建同一个 release
-    needs: build-windows
+    # 等前端构建 + Windows job（后者先把 Release 建好，避免并发创建同一个 release）
+    needs: [build-frontend, build-windows]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -211,14 +234,11 @@ jobs:
           pip install --no-cache-dir pyinstaller
           pip install --no-cache-dir -r requirements.txt
 
-      - name: 构建前端界面（Vite -> singlefile）
-        uses: actions/setup-node@v4
+      - name: 取回前端产物
+        uses: actions/download-artifact@v4
         with:
-          node-version: '20'
-      - run: npm ci
-        working-directory: app/web/ui
-      - run: npm run build
-        working-directory: app/web/ui
+          name: web-dist
+          path: app/web/dist
 
       - name: 下载自带隐身浏览器（${{ matrix.arch }}）
         env:
