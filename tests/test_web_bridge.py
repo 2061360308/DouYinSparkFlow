@@ -16,7 +16,8 @@ from pathlib import Path
 os.environ.setdefault("SCHEDULER_BACKEND", "noop")
 os.environ.setdefault("APP_SCHEDULE_AUTOREGISTER", "0")
 
-from app import local_settings
+from app.config import settings
+from app.errors import AppError
 from app.web.bridge import Bridge
 from app.web.service import Service
 
@@ -80,12 +81,12 @@ class ServiceTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.env_file = self.root / ".env"
         # 把 local.json 指到临时目录，别写进仓库
-        self._settings_backup = local_settings.SETTINGS_FILE
-        local_settings.SETTINGS_FILE = self.root / "local.json"
+        self._settings_backup = settings.SETTINGS_FILE
+        settings.SETTINGS_FILE = self.root / "local.json"
         self.service = Service(self.env_file)
 
     def tearDown(self):
-        local_settings.SETTINGS_FILE = self._settings_backup
+        settings.SETTINGS_FILE = self._settings_backup
         self.tmp.cleanup()
 
     def test_get_config_returns_defaults_when_no_env(self):
@@ -137,7 +138,7 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("COOKIES_ABC_123", env_text)
         # 代理进了 local.json，不污染 .env
         self.assertNotIn("tunnel", env_text)
-        self.assertEqual(local_settings.proxy_config()["user"], "u")
+        self.assertEqual(settings.proxy_config()["user"], "u")
 
     def test_orphan_after_account_removed(self):
         payload = {
@@ -170,7 +171,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(cleaned["removed"], 1)
 
     def test_open_external_url_requires_url(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaises(AppError):
             self.service.open_external_url({})
 
     def test_open_external_url_opens_system_browser(self):

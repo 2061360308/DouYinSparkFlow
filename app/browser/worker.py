@@ -37,8 +37,9 @@ import threading
 import time
 from pathlib import Path
 
-from app import local_settings, paths
-from app.tunnel import GostTunnel
+from app.config import settings
+from app import paths
+from app.browser.tunnel import GostTunnel
 
 # 主程序的会话扫描 / 登录态判定实现 —— 「抖音页面怎么点、怎么滚」全项目只有这一份。
 # 顶层导入依赖「仓库根在 sys.path[0] 上」，由仓库根的入口 main.py app 保证；
@@ -445,7 +446,7 @@ class BrowserLoginWorker(threading.Thread):
         self.headless = headless
         # 该账号固定的指纹种子；空串表示不干预，用 cloakbrowser 的默认随机种子
         self.fingerprint = str(fingerprint or "").strip()
-        # 云函数代理配置（local_settings.proxy_config() 那一份）；未启用表示直连
+        # 云函数代理配置（settings.proxy_config() 那一份）；未启用表示直连
         self.proxy = dict(proxy or {})
         # 本次会话的 gost 隧道：开浏览器前拉起，关浏览器后释放
         self.tunnel = None
@@ -1145,7 +1146,7 @@ class BrowserLoginWorker(threading.Thread):
         if not proxy.get("enabled"):
             return ""
 
-        ok, why = local_settings.proxy_ready(proxy)
+        ok, why = settings.proxy_ready(proxy)
         if not ok:
             self.emit("error", f"配套代理配置不可用：{why}")
             return ""

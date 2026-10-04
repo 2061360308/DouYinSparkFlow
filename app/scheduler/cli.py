@@ -1,9 +1,9 @@
 """scheduler 命令行入口。
 
-    python -m scheduler install --mode scheduled|boot [--time HH:MM] [--exe PATH|--python PATH]
-    python -m scheduler uninstall
-    python -m scheduler status
-    python -m scheduler run-if-due [--force]
+    python -m app.scheduler install --mode scheduled|boot [--time HH:MM] [--exe PATH|--python PATH]
+    python -m app.scheduler uninstall
+    python -m app.scheduler status
+    python -m app.scheduler run-if-due [--force]
 
 app 里通过 API 直接调用，不经过这里；无界面环境（Linux 服务器）用 CLI。
 """
@@ -15,7 +15,7 @@ import json
 import sys
 
 from app.scheduler import api
-from app.scheduler.launcher import Launcher
+from app.scheduler.core import Launcher
 
 
 def _launcher_from_args(args) -> Launcher:

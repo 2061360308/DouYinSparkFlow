@@ -2,7 +2,7 @@
 
 旧 tkinter 界面里这些动作由 LoginDialog / ConversationDialog 驱动（1.5 秒探一次、
 登录成功自动抓取、会话扫描进度等）。它们被删除后，逻辑仍全部收在
-app/browser_login.py 的 BrowserLoginWorker 里 —— 它天然就是
+app/browser/worker.py 的 BrowserLoginWorker 里 —— 它天然就是
 「命令队列 + 事件队列」的消息驱动设计，正适合接到桥（bridge）上。
 
 本模块不做任何「抖音页面怎么点怎么滚」，只做三件事：
@@ -42,8 +42,9 @@ import uuid
 from datetime import datetime
 from typing import Callable
 
-from app import local_settings, profile_store
-from app.browser_login import (
+from app import events
+from app.config import settings, profile_store
+from app.browser.worker import (
     CONVERSATION_READY_TIMEOUT_SECONDS,
     CONVERSATION_SCAN_TIMEOUT_SECONDS,
     BrowserLoginWorker,
@@ -63,17 +64,7 @@ CONVERSATION_HARD_TIMEOUT_S = (
 )
 
 # worker 只发这些 kind，其余一律不透传
-_WORKER_EVENTS = {
-    "log",
-    "status",
-    "opened",
-    "probe",
-    "grabbed",
-    "conversations",
-    "conversation_progress",
-    "error",
-    "done",
-}
+_WORKER_EVENTS = events.WORKER_KINDS
 
 # grabbed 里的大块数据（storage_state / local_storage）对前端没用，
 # 转发时剥掉，避免把一个 MB 级对象塞进页面
@@ -221,7 +212,7 @@ class AccountOperator:
         folder = profile["folder"]
         fingerprint = profile["fingerprint"]
         profile_dir = profile_store.profile_dir(folder)
-        proxy = local_settings.proxy_config()
+        proxy = settings.proxy_config()
 
         worker = self.worker_factory(
             profile_dir=profile_dir, fingerprint=fingerprint, proxy=proxy
@@ -280,7 +271,7 @@ class AccountOperator:
                 "这个账号还没有浏览器配置目录 —— 请先点「刷新登录信息」完成一次登录"
             )
         profile_dir = profile_store.profile_dir(folder)
-        proxy = local_settings.proxy_config()
+        proxy = settings.proxy_config()
 
         worker = self.worker_factory(
             profile_dir=profile_dir,
@@ -350,7 +341,7 @@ class AccountOperator:
         if data is not None and kind == "grabbed" and isinstance(data, dict):
             data = _trim_grabbed(data)
         self.bridge.emit(
-            "browser_event",
+            events.BROWSER_EVENT,
             {"session": session.session_id, "kind": kind, "data": data},
         )
 

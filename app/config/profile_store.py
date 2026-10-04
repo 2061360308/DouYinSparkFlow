@@ -46,38 +46,28 @@
 登录成功时写入目录绑定；界面加载 .env 后靠它找回每个账号该用哪个目录。
 
 账号从列表里移除时不删这里的条目 —— 配置目录留着，将来重新添加同一个账号
-可以复用原登录态。只有明确选择「同时删除配置目录」时才连条目一起忘掉。
+可以复用原登录态。
 """
 
 from __future__ import annotations
 
-import json
 import random
-import re
-import shutil
 import uuid
-from datetime import datetime
 from pathlib import Path
 
-from app import paths
+from app import jsonstore, paths
+from app.util import now_str
 
 # 允许测试替换成临时路径（函数里每次都重新读这个模块级变量）
 INDEX_FILE = paths.PROFILES_INDEX
 
 INDEX_VERSION = 1
 
-# 目录名白名单：本工具只会分配这两种形态，删除时用它兜底防误删
-_FOLDER_RE = re.compile(r"^(?:p)?[0-9a-f]{12}$")
-
 # 指纹种子的取值范围，与 cloakbrowser 内部的默认生成方式保持一致
 # （config.py::get_default_stealth_args 用 random.randint(10000, 99999)）。
 # 不自创格式，免得将来内核按范围校验时对不上。
 FINGERPRINT_MIN = 10000
 FINGERPRINT_MAX = 99999
-
-
-def _now() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def random_folder_name() -> str:
@@ -90,11 +80,6 @@ def random_fingerprint() -> str:
     return str(random.randint(FINGERPRINT_MIN, FINGERPRINT_MAX))
 
 
-def is_managed_folder(folder) -> bool:
-    """目录名是否是本工具分配的形态 —— 删除操作的前置校验。"""
-    return bool(_FOLDER_RE.match(str(folder or "")))
-
-
 # ---------------------------------------------------------------------------
 # 读写
 # ---------------------------------------------------------------------------
@@ -105,15 +90,15 @@ def load_with_notes() -> tuple[dict, list]:
     if not path.is_file():
         return {}, notes
 
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        notes.append(f"{path.name} 读取失败（{type(exc).__name__}: {exc}），本次按空表处理")
+    data = jsonstore.read_json(path, errors=notes)
+    if not isinstance(data, dict) or "accounts" not in data:
+        if not notes:  # 不是读取失败，就是结构不对
+            notes.append(f'{path.name} 结构不对（应为 {{"accounts": {{...}}}}），已忽略')
         return {}, notes
 
-    raw = data.get("accounts") if isinstance(data, dict) else None
+    raw = data.get("accounts")
     if not isinstance(raw, dict):
-        notes.append(f"{path.name} 结构不对（应为 {{\"accounts\": {{...}}}}），已忽略")
+        notes.append(f'{path.name} 结构不对（应为 {{"accounts": {{...}}}}），已忽略')
         return {}, notes
 
     clean: dict = {}
@@ -128,15 +113,8 @@ def load() -> dict:
 
 
 def save(accounts: dict) -> None:
-    """整表写回（先写临时文件再替换，避免中途崩掉留下半个文件）。"""
-    path = Path(INDEX_FILE)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"version": INDEX_VERSION, "accounts": accounts}
-    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-
-    temp = path.with_name(path.name + ".tmp")
-    temp.write_text(text, encoding="utf-8")
-    temp.replace(path)
+    """整表写回（原子替换，避免中途崩掉留下半个文件）。"""
+    jsonstore.write_json(INDEX_FILE, {"version": INDEX_VERSION, "accounts": accounts})
 
 
 # ---------------------------------------------------------------------------
@@ -261,14 +239,6 @@ def describe(folder: str) -> str:
     return f"profiles/{folder}" if folder else "（未分配）"
 
 
-def allocated() -> list:
-    """已经落在磁盘上的配置目录名（用于找出无用目录）。"""
-    root = Path(paths.PROFILE_ROOT)
-    if not root.is_dir():
-        return []
-    return sorted(p.name for p in root.iterdir() if p.is_dir())
-
-
 # ---------------------------------------------------------------------------
 # 写入
 # ---------------------------------------------------------------------------
@@ -303,30 +273,14 @@ def bind(
         "uid": str(uid or existing.get("uid") or ""),
         "sec_uid": str(sec_uid or existing.get("sec_uid") or ""),
         "id_source": str(id_source or existing.get("id_source") or ""),
-        "created_at": str(existing.get("created_at") or _now()),
-        "updated_at": _now(),
+        "created_at": str(existing.get("created_at") or now_str()),
+        "updated_at": now_str(),
         # 之前的目录名留个痕迹，方便排查「换过目录」
         "previous_folder": existing.get("folder")
         if existing.get("folder") and existing.get("folder") != folder
         else str(existing.get("previous_folder") or ""),
     }
     accounts[unique_id] = record
-    save(accounts)
-    return record
-
-
-def touch(unique_id: str, **fields) -> dict | None:
-    """只更新条目里的展示字段（不改目录名）。条目不存在则返回 None。"""
-    unique_id = str(unique_id or "").strip()
-    accounts = load()
-    record = accounts.get(unique_id)
-    if not isinstance(record, dict):
-        return None
-    for key in ("nickname", "uid", "sec_uid", "id_source"):
-        value = fields.get(key)
-        if value:
-            record[key] = str(value)
-    record["updated_at"] = _now()
     save(accounts)
     return record
 
@@ -359,58 +313,13 @@ def set_conversations(unique_id: str, names, *, folder: str = "") -> dict:
             "uid": "",
             "sec_uid": "",
             "id_source": "",
-            "created_at": _now(),
-            "updated_at": _now(),
+            "created_at": now_str(),
+            "updated_at": now_str(),
             "previous_folder": "",
         }
 
     record["conversations"] = clean
-    record["conversations_at"] = _now()
+    record["conversations_at"] = now_str()
     accounts[unique_id] = record
     save(accounts)
     return dict(record)
-
-
-def forget(unique_id: str) -> bool:
-    """忘掉某个抖音号的绑定关系，返回是否真的删掉了条目。"""
-    unique_id = str(unique_id or "").strip()
-    accounts = load()
-    if unique_id not in accounts:
-        return False
-    accounts.pop(unique_id)
-    save(accounts)
-    return True
-
-
-def remove_profile_dir(folder: str) -> tuple[bool, str]:
-    """删除一个配置目录。
-
-    这是唯一一处会删磁盘内容的地方，所以设了三道闸：
-      1. 目录名必须匹配本工具的命名规则（随机十六进制）
-      2. 必须是 PROFILE_ROOT 的直接子目录（不允许任何路径跳转）
-      3. 目标必须真实存在且是目录
-
-    任何一条不满足都直接拒绝，返回 (是否成功, 说明)。
-    """
-    folder = str(folder or "").strip()
-    if not is_managed_folder(folder):
-        return False, f"目录名「{folder}」不像本工具分配的（应为 12 位十六进制），已拒绝删除"
-
-    root = Path(paths.PROFILE_ROOT).resolve()
-    try:
-        target = (root / folder).resolve()
-    except OSError as exc:
-        return False, f"路径解析失败：{exc}"
-
-    if target.parent != root:
-        return False, f"目标不在配置目录下，已拒绝删除：{target}"
-    if not target.exists():
-        return True, "目录本来就不存在"
-    if not target.is_dir():
-        return False, f"目标不是目录，已拒绝删除：{target}"
-
-    try:
-        shutil.rmtree(target)
-    except Exception as exc:
-        return False, f"删除失败：{type(exc).__name__}: {exc}"
-    return True, f"已删除 {target}"

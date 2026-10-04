@@ -2,10 +2,10 @@
 
 本工具要支持两种运行方式：
 
-  1) 开发期：cd app && python main.py
+  1) 开发期：在仓库根执行 `python main.py app`
   2) 发布期：用 PyInstaller 打包成 exe，双击运行或放到任意目录运行
 
-所以任何路径都不能假设「自己还在项目仓库里」。打包之后 `.venv/`、`loginTool/`、
+所以任何路径都不能假设「自己还在项目仓库里」。打包之后 `.venv/`、
 项目根目录这些全都不存在，凡是从它们推导出来的路径都会失效。
 
 约定：
@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+
+from app import util
 
 # PyInstaller 打包后会设置 sys.frozen
 FROZEN = bool(getattr(sys, "frozen", False))
@@ -72,9 +74,16 @@ PROFILE_ROOT = APP_DIR / "profiles"
 # 抖音号 -> 配置目录名 的对照表，由 profile_store.py 读写
 PROFILES_INDEX = APP_DIR / "profiles.json"
 
-# 本工具自己的设置（如抓取隧道），由 local_settings.py 读写。
+# 本工具自己的设置（如抓取隧道），由 settings.py 读写。
 # 不进 .env：.env 是供主程序（以及云函数）读取的配置文件，工具私有键放进去会污染它。
 LOCAL_SETTINGS = APP_DIR / "local.json"
+
+# 本机定时任务（app/scheduler）的数据目录：状态、安装记录、启动脚本、日志
+SCHEDULER_DIR = APP_DIR / ".scheduler"
+SCHEDULER_STATE = SCHEDULER_DIR / "state.json"
+SCHEDULER_INSTALL = SCHEDULER_DIR / "install.json"
+SCHEDULER_LOCK = SCHEDULER_DIR / "lock"
+SCHEDULER_LOG = APP_DIR / "logs" / "scheduler.log"
 
 # 自带的隐身 Chromium 目录名
 BROWSER_DIR_NAME = "cloakbrowser-windows-x64"
@@ -88,7 +97,7 @@ def browser_dir() -> Path:
     """
     candidates = [resource_dir() / BROWSER_DIR_NAME, APP_DIR / BROWSER_DIR_NAME]
     for candidate in candidates:
-        if any((candidate / name).is_file() for name in BROWSER_EXE_NAMES):
+        if util.find_binary(BROWSER_EXE_NAMES, [candidate]):
             return candidate
     return candidates[0]
 
@@ -96,10 +105,8 @@ def browser_dir() -> Path:
 def browser_binary() -> Path:
     """自带的 Chromium 可执行文件路径。"""
     directory = browser_dir()
-    for name in BROWSER_EXE_NAMES:
-        if (directory / name).is_file():
-            return directory / name
-    return directory / BROWSER_EXE_NAMES[0]
+    found = util.find_binary(BROWSER_EXE_NAMES, [directory])
+    return found if found else directory / BROWSER_EXE_NAMES[0]
 
 
 # ---------------------------------------------------------------------------

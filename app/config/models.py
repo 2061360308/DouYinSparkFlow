@@ -134,34 +134,9 @@ class Account:
     fingerprint: str = ""
 
     @property
-    def display_name(self) -> str:
-        return self.username or self.unique_id or "（未登录账号）"
-
-    @property
     def cookies_key(self) -> str:
         """对应的 .env 键名。config.py 里是 f"cookies_{unique_id}".upper()。"""
         return f"COOKIES_{self.unique_id.strip().upper()}"
-
-    @property
-    def cookie_count(self) -> int:
-        text = (self.cookies or "").strip()
-        if not text:
-            return 0
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            return 0
-        return len(data) if isinstance(data, list) else 0
-
-    @property
-    def has_cookies(self) -> bool:
-        return self.cookie_count > 0
-
-    @property
-    def cookie_status(self) -> str:
-        if not (self.cookies or "").strip():
-            return "待登录"
-        return f"已获取 {self.cookie_count} 项" if self.cookie_count else "格式错误"
 
     def to_task(self) -> dict:
         """TASKS 数组里的一项。
@@ -246,10 +221,6 @@ class Config:
                 env[account.cookies_key] = (account.cookies or "").strip()
 
         return env
-
-    def render_env_text(self) -> str:
-        """「复制 .env 内容」用的文本，逐行 KEY=VALUE。"""
-        return "\n".join(f"{key}={value}" for key, value in self.to_env_map().items())
 
     # -- 反序列化 -----------------------------------------------------------
     @classmethod

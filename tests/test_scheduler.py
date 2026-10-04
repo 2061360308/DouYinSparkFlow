@@ -14,12 +14,11 @@ from unittest import mock
 os.environ.setdefault("SCHEDULER_BACKEND", "noop")
 os.environ.setdefault("APP_SCHEDULE_AUTOREGISTER", "0")
 
-from app.scheduler import api, config, core, paths, state
-from app.scheduler.backends.linux import LinuxBackend
-from app.scheduler.backends.noop import NoopBackend
-from app.scheduler.backends.windows import WindowsBackend
-from app.scheduler.launcher import Launcher
-from app.scheduler.lock import LockBusy, RunLock
+from app import paths
+from app.config import env_store
+from app.scheduler import api, core, state
+from app.scheduler.backends import LinuxBackend, NoopBackend, WindowsBackend
+from app.scheduler.core import Launcher, LockBusy, RunLock
 
 
 class FakeResult:
@@ -39,18 +38,18 @@ class PathsTestCase(unittest.TestCase):
             key: getattr(paths, key)
             for key in (
                 "SCHEDULER_DIR",
-                "STATE_FILE",
-                "INSTALL_FILE",
-                "LOCK_FILE",
-                "LOG_FILE",
+                "SCHEDULER_STATE",
+                "SCHEDULER_INSTALL",
+                "SCHEDULER_LOCK",
+                "SCHEDULER_LOG",
                 "ENV_FILE",
             )
         }
         paths.SCHEDULER_DIR = self.root / ".scheduler"
-        paths.STATE_FILE = paths.SCHEDULER_DIR / "state.json"
-        paths.INSTALL_FILE = paths.SCHEDULER_DIR / "install.json"
-        paths.LOCK_FILE = paths.SCHEDULER_DIR / "lock"
-        paths.LOG_FILE = self.root / "logs" / "scheduler.log"
+        paths.SCHEDULER_STATE = paths.SCHEDULER_DIR / "state.json"
+        paths.SCHEDULER_INSTALL = paths.SCHEDULER_DIR / "install.json"
+        paths.SCHEDULER_LOCK = paths.SCHEDULER_DIR / "lock"
+        paths.SCHEDULER_LOG = self.root / "logs" / "scheduler.log"
         paths.ENV_FILE = self.root / ".env"
 
     def tearDown(self):
@@ -62,17 +61,17 @@ class PathsTestCase(unittest.TestCase):
 class ConfigTests(unittest.TestCase):
     def test_resolve_run_time_from_env(self):
         env = {"CRON_HOUR": "7", "CRON_MINUTE": "5", "CRON_SECOND": "30"}
-        self.assertEqual(config.resolve_run_time(env), "07:05")
+        self.assertEqual(core.resolve_run_time(env), "07:05")
 
     def test_resolve_run_time_defaults_and_clamps(self):
-        self.assertEqual(config.resolve_run_time({}), "09:00")
-        self.assertEqual(config.resolve_run_time({"CRON_HOUR": "99", "CRON_MINUTE": "-3"}), "23:00")
+        self.assertEqual(core.resolve_run_time({}), "09:00")
+        self.assertEqual(core.resolve_run_time({"CRON_HOUR": "99", "CRON_MINUTE": "-3"}), "23:00")
 
     def test_read_env_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".env"
             path.write_text('CRON_HOUR=8\n# comment\nCRON_MINUTE="30"\n\n', encoding="utf-8")
-            data = config.read_env_file(path)
+            data = env_store.read_env_map(path)
             self.assertEqual(data["CRON_HOUR"], "8")
             self.assertEqual(data["CRON_MINUTE"], "30")
 

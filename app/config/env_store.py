@@ -10,12 +10,12 @@ from pathlib import Path
 
 from dotenv import dotenv_values, set_key, unset_key
 
-from app.models import Config
+from app.config.models import Config
 from app.paths import ENV_FILE
 
 HEADER = """# DouYinSparkFlow 配置文件
 #
-# 这个文件由本地配置生成器（app）自动读写：
+# 这个文件由本地可视化工具（app）自动读写：
 #   - 下面那些由工具管理的变量会被就地更新
 #   - 你手写的注释和其他变量不会被改动
 #
@@ -78,6 +78,18 @@ def read_keys(path=None) -> list:
         return []
 
 
+def read_env_map(path=None) -> dict:
+    """原始 KEY -> VALUE（值缺失的键丢掉）。调度模块读 CRON_*/TZ 用。"""
+    target = resolve_path(path)
+    if not target.exists():
+        return {}
+    try:
+        raw = dotenv_values(target)
+    except Exception:
+        return {}
+    return {key: value for key, value in raw.items() if value is not None}
+
+
 def orphan_cookie_keys(config: Config, path=None) -> list:
     """找出 .env 里存在、但当前账户已不再引用的 COOKIES_*。
 
@@ -133,17 +145,3 @@ def unset_keys(keys, path=None) -> int:
         except Exception:
             continue
     return removed
-
-
-# ---------------------------------------------------------------------------
-# 值层面的风险检查
-# ---------------------------------------------------------------------------
-def risky_values(config: Config) -> list:
-    """返回 [(键, 说明)]：值里含 # 或首尾带空白时，.env 解析可能出偏差。"""
-    risky: list = []
-    for key, value in config.to_env_map().items():
-        if "#" in value:
-            risky.append((key, "值里含 # ，.env 解析时可能被当成行内注释截断"))
-        elif value != value.strip():
-            risky.append((key, "值首尾有空白，.env 解析器可能裁掉"))
-    return risky

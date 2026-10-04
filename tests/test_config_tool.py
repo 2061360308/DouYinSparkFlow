@@ -3,14 +3,14 @@
 只测 `models.Config` 的序列化往返 —— 尤其是 MESSAGE_TEMPLATE 的换行编码，
 这是 GUI（真换行）与 `.env`（字面 `\\n`）之间的桥，两侧必须严格对称。
 
-注意：app 已经是包，直接 `from app import models` 即可
+注意：app 已经是包，直接 `from app.config import models` 即可
    （从仓库根跑测试时仓库根就在 sys.path 上）。models.py 是纯数据层，
    不 import GUI，可以安全在无界面环境跑。
 """
 import unittest
 from pathlib import Path
 
-from app import models
+from app.config import models
 
 
 def _roundtrip(gui_text: str) -> tuple:
@@ -100,7 +100,7 @@ class DefaultsAlignmentTests(unittest.TestCase):
     """三处默认值必须一致（2026-09-19 对齐过一轮，网页版已下线移除一处）。
 
     同一个键有三个"默认"来源，历史上已经漂移过一次：
-        app/models.py  DEFAULT_*        —— GUI 新建配置的初始值
+        app/config/models.py  DEFAULT_*        —— GUI 新建配置的初始值
         .env.example                            —— 给人抄的示例值
         utils/config.py  os.getenv(..., 兜底)   —— 程序无 .env 时的备用默认值
 

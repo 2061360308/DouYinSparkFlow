@@ -16,8 +16,8 @@ from pathlib import Path
 os.environ.setdefault("SCHEDULER_BACKEND", "noop")
 os.environ.setdefault("APP_SCHEDULE_AUTOREGISTER", "0")
 
-from app import local_settings, profile_store
-from app.web.account_ops import AccountOperator, BrowserSession
+from app.config import settings, profile_store
+from app.browser.sessions import AccountOperator, BrowserSession
 from app.web.bridge import Bridge
 from app.web.service import Service
 
@@ -50,8 +50,8 @@ class AccountOperatorTests(unittest.TestCase):
         self._index_backup = profile_store.INDEX_FILE
         profile_store.INDEX_FILE = self.root / "profiles.json"
         # local.json 也指到临时目录（proxy_config 会读它）
-        self._settings_backup = local_settings.SETTINGS_FILE
-        local_settings.SETTINGS_FILE = self.root / "local.json"
+        self._settings_backup = settings.SETTINGS_FILE
+        settings.SETTINGS_FILE = self.root / "local.json"
         self.bridge = Bridge()
         self.factories: list = []
 
@@ -64,7 +64,7 @@ class AccountOperatorTests(unittest.TestCase):
 
     def tearDown(self):
         profile_store.INDEX_FILE = self._index_backup
-        local_settings.SETTINGS_FILE = self._settings_backup
+        settings.SETTINGS_FILE = self._settings_backup
         self.tmp.cleanup()
 
     def _drain(self) -> list:
@@ -267,12 +267,12 @@ class ServiceConversationsTests(unittest.TestCase):
         self.env_file = self.root / ".env"
         self._index_backup = profile_store.INDEX_FILE
         profile_store.INDEX_FILE = self.root / "profiles.json"
-        self._settings_backup = local_settings.SETTINGS_FILE
-        local_settings.SETTINGS_FILE = self.root / "local.json"
+        self._settings_backup = settings.SETTINGS_FILE
+        settings.SETTINGS_FILE = self.root / "local.json"
 
     def tearDown(self):
         profile_store.INDEX_FILE = self._index_backup
-        local_settings.SETTINGS_FILE = self._settings_backup
+        settings.SETTINGS_FILE = self._settings_backup
         self.tmp.cleanup()
 
     def test_save_then_get_config_attaches_conversations_and_folder(self):

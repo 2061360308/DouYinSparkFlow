@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import os
 
-from app.scheduler import config, core, paths, state
+from app.scheduler import core, state
 from app.scheduler.backends import get_backend
-from app.scheduler.launcher import Launcher
+from app.scheduler.core import Launcher
 
 MODE_SCHEDULED = "scheduled"  # 常驻定时
 MODE_BOOT = "boot"            # 开机执行
@@ -25,7 +25,7 @@ MODE_LABELS = {
 
 
 def _task_name(name: str | None = None) -> str:
-    return (name or state.load_install().get("name") or paths.DEFAULT_NAME).strip()
+    return (name or state.load_install().get("name") or core.DEFAULT_NAME).strip()
 
 
 def _normalize_time(value: str | None) -> str:
@@ -36,7 +36,7 @@ def _normalize_time(value: str | None) -> str:
             return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
         except (TypeError, ValueError):
             pass
-    return config.resolve_run_time()
+    return core.resolve_run_time()
 
 
 def get_status() -> dict:
@@ -133,7 +133,7 @@ def _restore(previous: dict, launcher: Launcher, backend, name: str) -> None:
     if old_mode not in (MODE_SCHEDULED, MODE_BOOT):
         return
     try:
-        old_time = str(previous.get("run_time") or config.resolve_run_time())
+        old_time = str(previous.get("run_time") or core.resolve_run_time())
         backend.install(name=name, mode=old_mode, run_time=old_time, launcher=launcher)
         state.save_install(previous)
     except Exception:
@@ -163,7 +163,7 @@ def ensure_default_mode() -> dict:
     if state.load_install().get("mode"):
         return get_status()
     try:
-        return set_mode(MODE_SCHEDULED, run_time=config.resolve_run_time())
+        return set_mode(MODE_SCHEDULED, run_time=core.resolve_run_time())
     except Exception:
         # 注册失败不该拖垮启动；状态里保持未注册
         return get_status()

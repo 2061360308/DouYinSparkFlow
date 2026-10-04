@@ -15,6 +15,8 @@ import queue
 import threading
 from collections.abc import Callable
 
+from app.errors import AppError
+
 _JSON_SAFE = (dict, list, str, int, float, bool, type(None))
 
 
@@ -62,6 +64,9 @@ class Bridge:
                 raise KeyError(f"未注册的方法：{method}")
             result = handler(payload)
             return _json_safe(result)
+        except AppError as exc:
+            # 面向用户的业务错误：消息原样回传
+            return {"error": str(exc)}
         except Exception as exc:  # noqa: BLE001 —— 任何异常都要回给页面
             return {"error": f"{type(exc).__name__}: {exc}"}
 

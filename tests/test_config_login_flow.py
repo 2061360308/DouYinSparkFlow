@@ -9,7 +9,7 @@
 
 import unittest
 
-from app import browser_login as bl
+from app.browser import worker as bl
 
 SESSION = ("sessionid",)
 

@@ -25,10 +25,7 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
-from app import paths
+from app import jsonstore, paths
 
 SETTINGS_FILE = paths.LOCAL_SETTINGS
 VERSION = 1
@@ -57,31 +54,19 @@ def _clean_proxy(raw) -> dict:
 
 def load() -> dict:
     """读设置。文件不存在或内容坏了都退回默认值（绝不抛异常）。"""
-    path = Path(SETTINGS_FILE)
-    empty = {"version": VERSION, "proxy": dict(DEFAULT_PROXY)}
-    if not path.is_file():
-        return empty
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return empty
+    data = jsonstore.read_json(SETTINGS_FILE)
     if not isinstance(data, dict):
-        return empty
+        data = {}
     return {"version": VERSION, "proxy": _clean_proxy(data.get("proxy"))}
 
 
 def save(settings) -> None:
-    """整表写回（先写临时文件再替换，避免中途崩掉留下半个文件）。"""
-    path = Path(SETTINGS_FILE)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """整表写回（原子替换，避免中途崩掉留下半个文件）。"""
     payload = {
         "version": VERSION,
         "proxy": _clean_proxy((settings or {}).get("proxy")),
     }
-    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    temp = path.with_name(path.name + ".tmp")
-    temp.write_text(text, encoding="utf-8")
-    temp.replace(path)
+    jsonstore.write_json(SETTINGS_FILE, payload)
 
 
 def save_proxy(proxy) -> None:
