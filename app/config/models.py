@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from app.config import notify_spec
+
 # ---------------------------------------------------------------------------
 # 可选项
 # ---------------------------------------------------------------------------
@@ -74,6 +76,7 @@ BASE_ENV_KEYS = [
     "IM_MAX_STEPS",
     "TASK_RETRY_TIMES",
     "LOG_LEVEL",
+    "NOTIFY",
     "TASKS",
 ]
 
@@ -105,6 +108,46 @@ def build_run_time(hour, minute, second) -> str:
         return max(0, min(top, number))
 
     return f"{clamp(hour, 23):02d}:{clamp(minute, 59):02d}:{clamp(second, 59):02d}"
+
+
+def _clean_notification(item) -> dict:
+    """把一条通知规整成 {"type", "enabled", ...参数字段}。
+
+    未知类型 / 非字典一律丢弃（返回 {}）。字段只保留规格里认识的键，其余忽略，
+    避免手改 .env 塞进来奇怪的东西。
+    """
+    if not isinstance(item, dict):
+        return {}
+    type_id = str(item.get("type") or "").strip()
+    spec = notify_spec.spec_for(type_id)
+    if not spec:
+        return {}
+    clean = {"type": type_id, "enabled": bool(item.get("enabled", True))}
+    for field in spec.get("fields", []):
+        key = field["key"]
+        if key not in item:
+            continue
+        value = item.get(key)
+        if field.get("type") == "bool":
+            clean[key] = bool(value)
+        else:
+            clean[key] = "" if value is None else str(value)
+    return clean
+
+
+def _parse_notifications(raw) -> list:
+    try:
+        data = json.loads(raw or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    result = []
+    for item in data:
+        clean = _clean_notification(item)
+        if clean:
+            result.append(clean)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +214,8 @@ class Config:
     im_max_steps: int = DEFAULT_IM_MAX_STEPS
     task_retry_times: int = DEFAULT_TASK_RETRY_TIMES
     log_level: str = DEFAULT_LOG_LEVEL
+    # 消息通知列表：每项 {"type": <方式>, "enabled": bool, ...该方式的参数字段}
+    notifications: list = field(default_factory=list)
     accounts: list = field(default_factory=list)
 
     # -- 序列化 -------------------------------------------------------------
@@ -207,6 +252,10 @@ class Config:
             "IM_MAX_STEPS": str(int(self.im_max_steps)),
             "TASK_RETRY_TIMES": str(int(self.task_retry_times)),
             "LOG_LEVEL": self.log_level or DEFAULT_LOG_LEVEL,
+            # 通知列表：保持单行 JSON，字段名与 notify_spec 对齐
+            "NOTIFY": json.dumps(
+                self.notifications or [], ensure_ascii=False, separators=(",", ":")
+            ),
             # TASKS 不走 unicode_escape，保持中文可读（与 index.html / .env.example 一致）
             "TASKS": json.dumps(
                 [account.to_task() for account in self.accounts],
@@ -276,6 +325,8 @@ class Config:
         if not isinstance(hitokoto, list) or not hitokoto:
             hitokoto = list(DEFAULT_HITOKOTO_TYPES)
 
+        notifications = _parse_notifications(text("NOTIFY", "[]"))
+
         return cls(
             proxy_address=text("PROXY_ADDRESS"),
             run_time=run_time,
@@ -309,6 +360,7 @@ class Config:
                 "TASK_RETRY_TIMES", DEFAULT_TASK_RETRY_TIMES, *RETRY_TIMES_RANGE
             ),
             log_level=text("LOG_LEVEL", DEFAULT_LOG_LEVEL) or DEFAULT_LOG_LEVEL,
+            notifications=notifications,
             accounts=accounts,
         )
 
@@ -383,6 +435,20 @@ def validate(config: Config) -> list:
             # 但 TASKS 里的 fingerprint 会是空串，主程序若依赖它就会每次换指纹。
             issues.append(
                 ("警告", f"{name}：还没有浏览器指纹，TASKS 里的 fingerprint 会是空的")
+            )
+
+    for index, item in enumerate(config.notifications, start=1):
+        type_id = str((item or {}).get("type") or "").strip()
+        label = notify_spec.label_for(type_id) or f"第 {index} 条"
+        if not notify_spec.spec_for(type_id):
+            issues.append(("错误", f"通知「{label}」：未知的通知方式 {type_id!r}"))
+            continue
+        if not item.get("enabled", True):
+            continue
+        missing = notify_spec.missing_required(item)
+        if missing:
+            issues.append(
+                ("错误", f"通知「{label}」：缺少必填参数 {'、'.join(missing)}")
             )
 
     return issues

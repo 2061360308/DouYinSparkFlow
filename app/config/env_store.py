@@ -25,6 +25,7 @@ HEADER = """# DouYinSparkFlow 配置文件
 # - TASKS 里每项的 fingerprint 是该账号固定的浏览器指纹种子（由 app 分配，
 #   与 profiles.json 里的那份一致），别手改 —— 改了等于让这个账号换设备
 # - MESSAGE_TEMPLATE 用 \\n 表示换行
+# - NOTIFY 是任务完成后的通知渠道列表（JSON 数组），由界面的「消息通知」配置
 # - 本文件生成在项目根目录，主程序直接用；Docker → 复制 / 挂载为 ./config/.env
 # - 工具自己的数据（profiles/、profiles.json、local.json）在 app/ 下
 """

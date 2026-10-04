@@ -14,6 +14,20 @@ config = None
 userData = None
 
 
+def _load_notifications() -> list:
+    """读取 .env 的 NOTIFY（JSON 数组）。坏数据只告警、返回空列表。"""
+    raw = os.getenv("NOTIFY", "[]")
+    try:
+        data = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        logger.warning("NOTIFY 不是合法 JSON，已忽略")
+        return []
+    if not isinstance(data, list):
+        logger.warning("NOTIFY 必须是 JSON 数组，已忽略")
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
 def get_config():
     """
     获取配置信息
@@ -53,6 +67,7 @@ def get_config():
         ),  # 滚动步数硬上限
         "taskRetryTimes": int(os.getenv("TASK_RETRY_TIMES", "3")),  # 任务重试次数
         "logLevel": os.getenv("LOG_LEVEL", "Debug"),  # 日志级别
+        "notifications": _load_notifications(),  # 任务完成后的通知渠道
     }
 
     return config
