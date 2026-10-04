@@ -16,7 +16,7 @@ from pathlib import Path
 os.environ.setdefault("SCHEDULER_BACKEND", "noop")
 os.environ.setdefault("APP_SCHEDULE_AUTOREGISTER", "0")
 
-from app.config import settings
+from app.config import profile_store, settings
 from app.errors import AppError
 from app.web.bridge import Bridge
 from app.web.service import Service
@@ -83,10 +83,14 @@ class ServiceTests(unittest.TestCase):
         # 把 local.json 指到临时目录，别写进仓库
         self._settings_backup = settings.SETTINGS_FILE
         settings.SETTINGS_FILE = self.root / "local.json"
+        # profiles.json 同样指到临时目录，避免测试污染真实账号
+        self._profiles_backup = profile_store.INDEX_FILE
+        profile_store.INDEX_FILE = self.root / "profiles.json"
         self.service = Service(self.env_file)
 
     def tearDown(self):
         settings.SETTINGS_FILE = self._settings_backup
+        profile_store.INDEX_FILE = self._profiles_backup
         self.tmp.cleanup()
 
     def test_get_config_returns_defaults_when_no_env(self):
@@ -139,6 +143,27 @@ class ServiceTests(unittest.TestCase):
         # 代理进了 local.json，不污染 .env
         self.assertNotIn("tunnel", env_text)
         self.assertEqual(settings.proxy_config()["user"], "u")
+
+    def test_get_config_reflects_fresh_conversations(self):
+        """拉完会话列表后 get_config 要返回新名单（浏览器线程直接写 profiles.json）。"""
+        self.service.save_config(
+            {
+                "config": {
+                    "run_time": "09:00:00",
+                    "tz": "Asia/Shanghai",
+                    "message_template": "x",
+                    "hitokoto_types": ["文学"],
+                    "accounts": [
+                        {"username": "a", "unique_id": "AAA", "cookies": "[1]", "targets": []}
+                    ],
+                }
+            }
+        )
+        profile_store.bind("AAA", "pabc", fingerprint="12345")
+        profile_store.set_conversations("AAA", ["甲", "乙"], folder="pabc")
+
+        data = self.service.get_config()
+        self.assertEqual(data["config"]["accounts"][0]["conversations"], ["甲", "乙"])
 
     def test_orphan_after_account_removed(self):
         payload = {

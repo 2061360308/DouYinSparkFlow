@@ -78,8 +78,18 @@ class ConfigService:
             self.profile_index = profile_store.load()
 
     # -- 读 -> 页面 ---------------------------------------------------------
+    def refresh_profiles(self) -> None:
+        """重新读 profiles.json。
+
+        会话列表是浏览器线程直接落盘的（profile_store.set_conversations），
+        这里的内存缓存不会自动跟着变；不重读的话，拉完会话再 get_config
+        拿到的还是旧名单，目标好友下拉就不会刷新。
+        """
+        self.profile_index = profile_store.load()
+
     def to_payload(self) -> dict:
         """页面启动/保存后调用的全量数据源（不含运行模式，那部分由门面补）。"""
+        self.refresh_profiles()
         return {
             "config": self._config_to_dict(),
             "options": {
