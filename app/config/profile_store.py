@@ -80,6 +80,16 @@ def random_fingerprint() -> str:
     return str(random.randint(FINGERPRINT_MIN, FINGERPRINT_MAX))
 
 
+def is_valid_fingerprint(value) -> bool:
+    """判断指纹种子是否落在 cloakbrowser 认可的范围内（10000–99999）。
+
+    历史版本可能写入过非数字、超范围或空的值，这类脏数据传给
+    ``--fingerprint=<种子>`` 时会被内核当成非法种子，等于没固定指纹。
+    """
+    text = str(value or "").strip()
+    return text.isdigit() and FINGERPRINT_MIN <= int(text) <= FINGERPRINT_MAX
+
+
 # ---------------------------------------------------------------------------
 # 读写
 # ---------------------------------------------------------------------------
@@ -144,15 +154,14 @@ def fingerprint_for(accounts: dict, unique_id: str = "", folder: str = "") -> st
         record = accounts.get(unique_id)
         if isinstance(record, dict):
             got = str(record.get("fingerprint") or "").strip()
-            if got:
+            if is_valid_fingerprint(got):
                 return got
-
     folder = str(folder or "").strip()
     if folder:
         for record in accounts.values():
             if isinstance(record, dict) and str(record.get("folder") or "") == folder:
                 got = str(record.get("fingerprint") or "").strip()
-                if got:
+                if is_valid_fingerprint(got):
                     return got
     return ""
 
@@ -197,16 +206,19 @@ def ensure_fingerprint(unique_id: str = "", folder: str = "", fallback: str = ""
     if not target_key:
         return (
             fingerprint_for(accounts, unique_id, folder)
-            or fallback
+            or (fallback if is_valid_fingerprint(fallback) else "")
             or random_fingerprint()
         )
 
     record = accounts[target_key]
     existing = str(record.get("fingerprint") or "").strip()
-    if existing and list(record)[:2] == ["folder", "fingerprint"]:
-        return existing  # 已固定且顺序正常，不必再写一次文件
+    if is_valid_fingerprint(existing):
+        if list(record)[:2] == ["folder", "fingerprint"]:
+            return existing  # 已固定且顺序正常，不必再写一次文件
+        seed = existing
+    else:
+        seed = random_fingerprint()  # 缺失或非法（历史脏数据）→ 重新分配
 
-    seed = existing or random_fingerprint()
     accounts[target_key] = _ordered_record(record, seed)
     try:
         save(accounts)
@@ -264,11 +276,14 @@ def bind(
 
     accounts = load()
     existing = accounts.get(unique_id) or {}
+    chosen = str(fingerprint or "").strip()
+    if not is_valid_fingerprint(chosen):
+        chosen = str(existing.get("fingerprint") or "").strip()
+    if not is_valid_fingerprint(chosen):
+        chosen = random_fingerprint()
     record = {
         "folder": folder,
-        "fingerprint": str(
-            fingerprint or existing.get("fingerprint") or random_fingerprint()
-        ).strip(),
+        "fingerprint": chosen,
         "nickname": str(nickname or existing.get("nickname") or ""),
         "uid": str(uid or existing.get("uid") or ""),
         "sec_uid": str(sec_uid or existing.get("sec_uid") or ""),

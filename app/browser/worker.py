@@ -99,7 +99,7 @@ def _ensure_dependencies_on_path() -> None:
     """
     import sys
 
-    for root in (paths.APP_DIR, paths.APP_DIR.parent):
+    for root in (paths.BUNDLE_DIR, paths.BUNDLE_DIR.parent):
         for rel in ("Lib/site-packages", "lib/site-packages"):
             candidate = root / ".venv" / rel
             if candidate.is_dir() and str(candidate) not in sys.path:
@@ -971,17 +971,29 @@ class BrowserLoginWorker(threading.Thread):
             self.log(f"固定指纹：{FINGERPRINT_FLAG}{self.fingerprint}")
         else:
             self.log("未指定固定指纹，本次由浏览器自行随机")
+        # 反检测开关：关噪声注入 + 指定存储配额（持久化配置下尤其重要，
+        # 否则 BrowserScan 之类的检测会从存储配额推断成隐身/无痕模式）。
+        extra_args += ["--fingerprint-noise=false", "--fingerprint-storage-quota=2048"]
         if proxy_url:
             # 走代理时必须让 WebRTC 也报代理出口 IP，否则它会绕过 HTTP 代理暴露本机真实 IP
             extra_args.append("--fingerprint-webrtc-ip=auto")
 
+        launch_kwargs = dict(
+            headless=self.headless,
+            proxy=proxy_url or None,
+            args=extra_args or None,
+        )
         try:
-            self.ctx = launch(
-                str(self.profile_dir),
-                headless=self.headless,
-                proxy=proxy_url or None,
-                args=extra_args or None,
-            )
+            # 走代理时用 geoip 按出口 IP 自动匹配时区/语言（否则 UTC + en-US
+            # 本身就是风控信号）。geoip 解析失败会抛错中断启动，降级重试一次。
+            if proxy_url:
+                try:
+                    self.ctx = launch(str(self.profile_dir), geoip=True, **launch_kwargs)
+                except RuntimeError as exc:
+                    self.log(f"GeoIP 自动时区/语言失败，改用本机默认时区继续：{exc}")
+                    self.ctx = launch(str(self.profile_dir), **launch_kwargs)
+            else:
+                self.ctx = launch(str(self.profile_dir), **launch_kwargs)
         except Exception:
             # 浏览器没起来，这条隧道也就不需要了，立刻释放
             self._stop_tunnel()

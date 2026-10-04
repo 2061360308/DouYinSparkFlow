@@ -53,6 +53,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcb1 libxext6 libxshmfence1 libglib2.0-0 libgtk-3-0 \
     libpangocairo-1.0-0 libcairo-gobject2 libgdk-pixbuf-2.0-0 \
     libxss1 libxtst6 fonts-liberation \
+    fonts-noto-color-emoji fonts-freefont-ttf fonts-unifont \
+    fonts-ipafont-gothic fonts-wqy-zenhei fonts-tlwg-loma-otf \
     fontconfig \
     curl ca-certificates \
     && if [ "${ENABLE_HEADED}" = "true" ]; then \
