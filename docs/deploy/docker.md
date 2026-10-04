@@ -47,13 +47,13 @@ docker compose restart      # 重启（改配置后）
 | 项 | 值 |
 | --- | --- |
 | 隧道地址 | `ws://<服务器公网IP>:9000?path=/ws` |
-| 隧道账号 | 与 `GOST_USER` 一致 |
-| 隧道密码 | 与 `GOST_PASSWORD` 一致 |
+| 隧道账号 | 与 `docker-compose.yml` 里 gost 命令的账号一致（默认 `gostuser`） |
+| 隧道密码 | 与 `docker-compose.yml` 里 gost 命令的密码一致（默认 `gostpassword`） |
 
 > 端口别省 —— app 不会给 `ws://` 补默认端口。
 
 ## 7. 安全提醒
 
-- `.env` 里的 `GOST_PASSWORD` 要设成足够长的随机串（留空则 docker compose 无法启动）
+- `docker-compose.yml` 里 gost 命令的密码要设成足够长的随机串
 - 建议在云服务器安全组里限制 9000 端口的来源 IP（只放你本机出口）
 - 想要加密，把 gost 换成 `http+wss://` 并挂载证书，本地地址相应改成 `wss://`
