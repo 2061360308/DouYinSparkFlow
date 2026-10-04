@@ -1,5 +1,6 @@
 .git
 .github
+.venv/
 .env
 logs/
 __pycache__/
@@ -7,3 +8,35 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.spec
+build/
+dist/
+*.deb
+
+# 抓包取证目录：HAR 与 .dat 含 cookie（登录凭据）和好友昵称/uid，绝不进镜像
+har_logs/
+.workbuddy/
+
+# 桌面端本地数据（配置目录、对照表、本地设置、调度元数据、窗口状态）
+app/profiles/
+app/profiles.json
+app/local.json
+app/window.json
+app/.scheduler/
+app/.ui-profile/
+app/web/dist/
+app/web/ui/node_modules/
+
+# 自带浏览器与配套代理客户端：Linux 任务镜像用 Dockerfile 里的 /opt/cloakbrowser，
+# 这两个目录是 Windows/桌面端分发包，不进任务镜像
+app/cloakbrowser-windows-x64/
+app/cloakbrowser-linux-x64/
+app/cloakbrowser-linux-arm64/
+app/gost/
+
+# 桌面端图标与打包/测试/文档（任务镜像不需要）
+app/logo.png
+app/logo.ico
+packaging/
+tests/
+docs/
