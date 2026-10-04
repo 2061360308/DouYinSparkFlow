@@ -1,8 +1,10 @@
-name: Build app (Windows)
+name: Build app (Windows + Linux deb)
 
-# 把本地可视化工具（app）打包成 Windows 可执行文件并发布到 Release。
+# 把本地可视化工具（app）打包成桌面发行物并发布到 Release：
+#   - Windows x64：PyInstaller onedir → DouyinSparkFlow-win-x64.zip
+#   - Linux amd64 / arm64：PyInstaller onedir → tools/packaging/linux/build-deb.sh 打成 .deb
 #
-# 发布包解开后的结构（exe 与两个"本地分发物"同级 —— app/paths.py 正是按
+# Windows 发布包解开后的结构（exe 与两个"本地分发物"同级 —— app/paths.py 正是按
 # 「程序目录 / resource_dir」去找它们的，所以用户解压即用）：
 #
 #   DouyinSparkFlow/
@@ -11,8 +13,13 @@ name: Build app (Windows)
 #     cloakbrowser-windows-x64/          ← 自带隐身 Chromium（构建时从上游 release 拉）
 #     gost/gost.exe                      ← 配套代理客户端（同理）
 #
-# 这两个目录都超过 GitHub 单文件 / 仓库合理体积，所以不入库，构建时现拉；
-# 版本号在下面 env 里，升级时改一处即可。
+# 这两个目录都超过 GitHub 单文件 / 仓库合理体积，所以不入库，构建时现拉。
+# 版本号：Windows 的 Chromium 走 env CLOAK_CHROMIUM_VERSION，gost 走 env GOST_VERSION；
+# Linux 的 Chromium 走 matrix 里的 cloak_tag（x64 用 .5、arm64 用 .3，两版资产不同），
+# gost 走 matrix 里的 gost_asset。升级时对应改一处即可。
+#
+# 前端（Vite singlefile）与平台无关，由 build-frontend 只构建一次，Windows / Linux
+# 各矩阵 job 共用同一份 artifact，避免重复构建。
 #
 # 入口是仓库根的 main.py app 分支（app 是包，由 main.py 分派启动）。
 # 发布版里工具数据（profiles/、profiles.json、local.json、.env）都在 exe 同级目录 ——
