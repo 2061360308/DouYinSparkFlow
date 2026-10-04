@@ -61,7 +61,7 @@ jobs:
       - name: 安装打包依赖
         run: |
           python -m pip install --upgrade pip
-          pip install --no-cache-dir pyinstaller python-dotenv cloakbrowser==0.5.10
+          pip install --no-cache-dir pyinstaller python-dotenv "cloakbrowser[geoip]==0.5.10"
 
       - name: 构建前端界面（Vite -> singlefile）
         uses: actions/setup-node@v4
@@ -118,6 +118,10 @@ jobs:
           pyinstaller --noconfirm --clean --onedir --windowed `
             --name "$env:APP_NAME" `
             --hidden-import cloakbrowser `
+            --hidden-import geoip2 `
+            --hidden-import geoip2.database `
+            --hidden-import maxminddb `
+            --hidden-import socksio `
             --collect-all cloakbrowser `
             --collect-all playwright `
             --collect-all dotenv `
@@ -167,3 +171,140 @@ jobs:
           files: DouyinSparkFlow-win-x64.zip
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+  build-linux-deb:
+    name: Build Linux deb (${{ matrix.arch }})
+    # 等 Windows job 先把 Release 建好，避免两个 job 并发创建同一个 release
+    needs: build-windows
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x64：免费最新版只有 linux-x64（.5）
+          - arch: amd64
+            runner: ubuntu-latest
+            cloak_tag: chromium-v146.0.7680.177.5
+            cloak_asset: cloakbrowser-linux-x64.tar.gz
+            cloak_dir: cloakbrowser-linux-x64
+            gost_asset: gost_3.3.0_linux_amd64.tar.gz
+          # arm64：只有 .3 同时提供 linux-x64 + linux-arm64（与 wrapper 映射一致）
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            cloak_tag: chromium-v146.0.7680.177.3
+            cloak_asset: cloakbrowser-linux-arm64.tar.gz
+            cloak_dir: cloakbrowser-linux-arm64
+            gost_asset: gost_3.3.0_linux_arm64.tar.gz
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装打包依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir pyinstaller
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: 构建前端界面（Vite -> singlefile）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+        working-directory: app/web/ui
+      - run: npm run build
+        working-directory: app/web/ui
+
+      - name: 下载自带隐身浏览器（${{ matrix.arch }}）
+        env:
+          CLOAK_TAG: ${{ matrix.cloak_tag }}
+          CLOAK_ASSET: ${{ matrix.cloak_asset }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/CloakHQ/CloakBrowser/releases/download/${CLOAK_TAG}"
+          curl -fL --connect-timeout 15 --max-time 900 --retry 2 --retry-delay 3 \
+            -o "/tmp/${CLOAK_ASSET}" "${base}/${CLOAK_ASSET}"
+          curl -fL --connect-timeout 15 --max-time 120 \
+            -o /tmp/SHA256SUMS "${base}/SHA256SUMS"
+          (cd /tmp && grep " ${CLOAK_ASSET}\$" SHA256SUMS | sha256sum -c -)
+
+          rm -rf /tmp/cb_extract_tmp
+          mkdir -p /tmp/cb_extract_tmp "app/${{ matrix.cloak_dir }}"
+          tar -xzf "/tmp/${CLOAK_ASSET}" -C /tmp/cb_extract_tmp
+          chrome="$(find /tmp/cb_extract_tmp -maxdepth 6 -type f -name chrome -perm -u+x | head -n 1)"
+          test -n "${chrome}" || { echo "发布包里没找到 chrome 二进制" >&2; exit 1; }
+          # 必须整目录拷贝：icudtl.dat / *.pak / locales 缺一个都启动不了
+          cp -a "$(dirname "${chrome}")/." "app/${{ matrix.cloak_dir }}/"
+          chmod +x "app/${{ matrix.cloak_dir }}/chrome"
+          test -f "app/${{ matrix.cloak_dir }}/icudtl.dat"
+          "app/${{ matrix.cloak_dir }}/chrome" --version
+
+      - name: 下载 gost（${{ matrix.arch }}）
+        env:
+          GOST_ASSET: ${{ matrix.gost_asset }}
+        run: |
+          set -euo pipefail
+          url="https://github.com/go-gost/gost/releases/download/v${GOST_VERSION}/${GOST_ASSET}"
+          curl -fL --connect-timeout 15 --max-time 300 --retry 2 --retry-delay 3 -o /tmp/gost.tar.gz "$url"
+          rm -rf /tmp/gost_extract
+          mkdir -p /tmp/gost_extract
+          tar -xzf /tmp/gost.tar.gz -C /tmp/gost_extract
+          gost="$(find /tmp/gost_extract -maxdepth 3 -type f -name gost | head -n 1)"
+          test -n "${gost}" || { echo "压缩包里没找到 gost" >&2; exit 1; }
+          mkdir -p app/gost
+          install -m 0755 "$gost" app/gost/gost
+
+      - name: PyInstaller 打包
+        run: |
+          pyinstaller --noconfirm --clean --onedir \
+            --name "$APP_NAME" \
+            --hidden-import cloakbrowser \
+            --hidden-import geoip2 \
+            --hidden-import geoip2.database \
+            --hidden-import maxminddb \
+            --hidden-import socksio \
+            --collect-all cloakbrowser \
+            --collect-all playwright \
+            --collect-all dotenv \
+            --add-data "app/web/dist:app/web/dist" \
+            "main.py"
+
+      - name: 打包成 deb
+        id: deb
+        run: |
+          set -euo pipefail
+          chmod +x packaging/linux/build-deb.sh
+          ver="$(cat VERSION)"
+          out="${APP_NAME}_${ver}_${{ matrix.arch }}.deb"
+          packaging/linux/build-deb.sh \
+            "${{ matrix.arch }}" \
+            "${ver}" \
+            "dist/${APP_NAME}" \
+            "app/${{ matrix.cloak_dir }}" \
+            "app/gost/gost" \
+            "app/logo.png" \
+            "${out}"
+          echo "file=${out}" >> "$GITHUB_OUTPUT"
+
+      - name: 计算发布 tag
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v$(cat VERSION)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 上传到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          files: ${{ steps.deb.outputs.file }}
+          fail_on_unmatched_files: true
