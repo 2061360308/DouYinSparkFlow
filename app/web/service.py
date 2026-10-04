@@ -23,6 +23,7 @@ from app.config.models import (
 from app.errors import AppError
 from app.paths import ENV_FILE
 from app.util import open_in_system
+from utils.logger import LOG_FILE as TASK_LOG
 
 # 数值型配置的取值范围（界面渲染与保存时的 clamp 共用）
 RANGES = {
@@ -282,6 +283,12 @@ class ScheduleService:
 
         return {"ok": True, "schedule": status, "proxy": settings.proxy_config()}
 
+    def cancel(self) -> dict:
+        """移除系统注册（任务 + 启动脚本），但保留当前模式，便于「重新注册」。"""
+        from app.scheduler import api
+
+        return api.cancel()
+
     def resync_scheduled(self, run_time: str) -> list:
         """保存配置后：若当前是「常驻定时」，按新的执行时间重新注册。返回提示列表。"""
         notes: list = []
@@ -319,6 +326,50 @@ class DesktopActions:
 
 
 # ---------------------------------------------------------------------------
+# 执行日志
+# ---------------------------------------------------------------------------
+def _read_day_log(day: str) -> str:
+    """从任务日志（app.log 及其轮转备份）里筛出该日期的行。"""
+    base = Path(TASK_LOG)
+    candidates = [base] + [base.with_name(f"{base.name}.{i}") for i in range(1, 4)]
+    lines: list = []
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if line.startswith(day):
+                        lines.append(line.rstrip("\n"))
+        except OSError:
+            continue
+    return "\n".join(lines)
+
+
+class LogService:
+    """执行日志：按天历史（热力图） + 某天的任务日志。"""
+
+    def history(self, _payload=None) -> dict:
+        try:
+            from app.scheduler import api
+
+            return {"days": api.history()}
+        except Exception as exc:
+            return {"days": {}, "error": f"{type(exc).__name__}: {exc}"}
+
+    def day_log(self, payload) -> dict:
+        day = str((payload or {}).get("date") or "").strip()
+        if not day:
+            raise AppError("schedule_day_log 需要 date")
+        return {"date": day, "text": _read_day_log(day)}
+
+    def open_log_dir(self, _payload=None) -> dict:
+        target = Path(TASK_LOG).parent
+        target.mkdir(parents=True, exist_ok=True)
+        return {"path": open_in_system(target)}
+
+
+# ---------------------------------------------------------------------------
 # 门面
 # ---------------------------------------------------------------------------
 class Service:
@@ -328,6 +379,7 @@ class Service:
         self.config_service = ConfigService(env_path)
         self.schedule = ScheduleService(self.config_service)
         self.desktop = DesktopActions()
+        self.logs = LogService()
         self.env_path = self.config_service.env_path
 
     @property
@@ -364,6 +416,18 @@ class Service:
     def schedule_set_mode(self, payload) -> dict:
         return self.schedule.set_mode(payload)
 
+    def schedule_cancel(self, _payload=None) -> dict:
+        return self.schedule.cancel()
+
+    def schedule_history(self, _payload=None) -> dict:
+        return self.logs.history()
+
+    def schedule_day_log(self, payload) -> dict:
+        return self.logs.day_log(payload)
+
+    def open_log_dir(self, _payload=None) -> dict:
+        return self.logs.open_log_dir()
+
     def ping(self, _payload=None) -> dict:
         return self.config_service.ping()
 
@@ -383,6 +447,10 @@ def make_bridge(bridge, worker_factory=None) -> "AccountOperator":
         open_external_url=service.open_external_url,
         schedule_status=service.schedule_status,
         schedule_set_mode=service.schedule_set_mode,
+        schedule_cancel=service.schedule_cancel,
+        schedule_history=service.schedule_history,
+        schedule_day_log=service.schedule_day_log,
+        open_log_dir=service.open_log_dir,
         account_login_start=ops.login_start,
         account_conversations_start=ops.conversations_start,
         account_open_browser=ops.open_browser,

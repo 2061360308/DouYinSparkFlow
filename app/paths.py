@@ -82,6 +82,7 @@ LOCAL_SETTINGS = APP_DIR / "local.json"
 SCHEDULER_DIR = APP_DIR / ".scheduler"
 SCHEDULER_STATE = SCHEDULER_DIR / "state.json"
 SCHEDULER_INSTALL = SCHEDULER_DIR / "install.json"
+SCHEDULER_HISTORY = SCHEDULER_DIR / "history.json"
 SCHEDULER_LOCK = SCHEDULER_DIR / "lock"
 SCHEDULER_LOG = APP_DIR / "logs" / "scheduler.log"
 

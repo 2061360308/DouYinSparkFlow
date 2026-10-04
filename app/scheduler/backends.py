@@ -91,7 +91,10 @@ class WindowsBackend(Backend):
     # -- 安装 / 卸载 / 状态 ----------------------------------------------
     def install(self, *, name: str, mode: str, run_time: str, launcher) -> None:
         if mode == "scheduled":
-            vbs = core.write_vbs(launcher, self.task_vbs(), launcher.task_argv())
+            # 定点执行：走 run-if-due --force —— 每次都跑，同时记录执行历史
+            vbs = core.write_vbs(
+                launcher, self.task_vbs(), launcher.scheduler_argv("run-if-due", "--force")
+            )
             result = self._run(
                 self.build_scheduled_command(name=name, run_time=run_time, vbs=vbs)
             )
@@ -183,8 +186,11 @@ class LinuxBackend(Backend):
 
     def install(self, *, name: str, mode: str, run_time: str, launcher) -> None:
         if mode == "scheduled":
+            # 定点执行：走 run-if-due --force —— 每次都跑，同时记录执行历史
             wrapper = core.write_sh(
-                launcher, paths.SCHEDULER_DIR / "run_task.sh", launcher.task_argv()
+                launcher,
+                paths.SCHEDULER_DIR / "run_task.sh",
+                launcher.scheduler_argv("run-if-due", "--force"),
             )
         elif mode == "boot":
             wrapper = core.write_sh(

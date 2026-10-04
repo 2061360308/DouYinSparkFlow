@@ -6,6 +6,7 @@ CLI 与 app 都调用这里，保证两边行为一致。
 from __future__ import annotations
 
 import os
+from datetime import date, timedelta
 
 from app.scheduler import core, state
 from app.scheduler.backends import get_backend
@@ -54,6 +55,10 @@ def get_status() -> dict:
         except Exception:
             installed = False
 
+    days = state.history_days()
+    today = date.today().isoformat()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+
     return {
         "mode": mode,
         "mode_label": MODE_LABELS.get(mode, ""),
@@ -65,7 +70,16 @@ def get_status() -> dict:
         "run_time": str(install.get("run_time") or ""),
         "modes": list(MODES),
         "mode_labels": dict(MODE_LABELS),
+        "run": {
+            "today": days.get(today),
+            "yesterday": days.get(yesterday),
+        },
     }
+
+
+def history() -> dict:
+    """按天执行历史（供热力图）：{日期: {attempts, success, last_exit_code, last_at}}。"""
+    return state.history_days()
 
 
 def set_mode(
@@ -150,6 +164,21 @@ def uninstall(*, name: str | None = None, backend=None) -> dict:
         pass
     core.remove_wrappers()
     state.save_install({"mode": "", "name": name})
+    return get_status()
+
+
+def cancel(*, name: str | None = None, backend=None) -> dict:
+    """只移除系统注册（任务 + 启动脚本），**保留当前模式** —— 便于「重新注册」。
+
+    与 uninstall 的区别：不清空 install.json 里的 mode。
+    """
+    backend = backend or get_backend()
+    name = _task_name(name)
+    try:
+        backend.uninstall(name=name)
+    except Exception:
+        pass
+    core.remove_wrappers()
     return get_status()
 
 

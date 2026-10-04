@@ -34,7 +34,8 @@
             <BaseConfig v-if="activeView === 'base'" :config="state.config" :options="state.options" @change="markDirty" />
             <Accounts v-if="activeView === 'accounts'" :accounts="state.config.accounts" @change="markDirty" @refresh="load" />
             <Tunnel v-if="activeView === 'tunnel' && isConfigMode" :proxy="state.proxy" @change="markDirty" />
-            <Summary v-if="activeView === 'summary'" :data="state" :status="statusInfo" @clean="cleanOrphans" @copy="copyEnv" @open="openEnvDir" />
+            <Summary v-if="activeView === 'summary'" :data="state" :status="statusInfo" :schedule="state.schedule" @clean="cleanOrphans" @copy="copyEnv" @open="openEnvDir" @cancel="scheduleCancel" @reregister="scheduleReregister" />
+            <RunLog v-if="activeView === 'runlog' && !isConfigMode" />
             <iframe
               v-if="activeResource"
               class="embed-frame"
@@ -81,6 +82,7 @@ import { computed, h, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   BookOpen,
+  CalendarDays,
   GlobeCode,
   MessageSquareShare,
   MessagesSquare,
@@ -94,6 +96,7 @@ import BaseConfig from './views/BaseConfig.vue'
 import Accounts from './views/Accounts.vue'
 import Tunnel from './views/Tunnel.vue'
 import Summary from './views/Summary.vue'
+import RunLog from './views/RunLog.vue'
 import SidebarContent from './views/SidebarContent.vue'
 
 const BREAKPOINT = 768
@@ -132,6 +135,7 @@ const navItems = [
   { id: 'summary', label: '概览', icon: Sparkles },
   { id: 'accounts', label: '账户配置', icon: Users },
   { id: 'base', label: '任务配置', icon: Play },
+  { id: 'runlog', label: '执行日志', icon: CalendarDays },
   { id: 'tunnel', label: '隧道配置', icon: GlobeCode },
 ]
 
@@ -142,12 +146,16 @@ const resourceItems = [
   { id: 'res-feedback', label: '反馈', icon: MessageSquareShare, url: 'https://github.com/2061360308/DouYinSparkFlow/issues', embed: false },
 ]
 
-// 只有「生成配置」模式才需要/显示隧道配置
+// 「生成配置」模式：显示隧道配置、隐藏执行日志；本机执行模式反之
 const isConfigMode = computed(() => state.value?.schedule?.mode === 'config')
 
 const visibleNavItems = computed(() => {
-  if (isConfigMode.value) return navItems
-  return navItems.filter((item) => item.id !== 'tunnel')
+  const mode = state.value?.schedule?.mode
+  return navItems.filter((item) => {
+    if (item.id === 'tunnel') return mode === 'config'
+    if (item.id === 'runlog') return mode !== 'config'
+    return true
+  })
 })
 
 const showAside = computed(() => !isNarrow.value && !asideCollapsed.value)
@@ -197,6 +205,7 @@ const statusInfo = computed(() => ({
   issueText: issueText.value,
   issueClass: issueClass.value,
   saveStatus: saveStatus.value,
+  run: state.value?.schedule?.run ?? {},
 }))
 
 function updateNarrow() {
@@ -214,11 +223,44 @@ function toggleSidebar() {
 
 function onNavigate(id) {
   activeView.value = id
+  if (id === 'summary') refreshSchedule()
 }
 
 function onDrawerNavigate(id) {
   activeView.value = id
   drawer.value = false
+  if (id === 'summary') refreshSchedule()
+}
+
+async function refreshSchedule() {
+  if (!state.value) return
+  try {
+    state.value.schedule = await py('schedule_status')
+  } catch (e) {
+    // 状态刷新失败不影响页面
+  }
+}
+
+async function scheduleCancel() {
+  try {
+    state.value.schedule = await py('schedule_cancel')
+    ElMessage({ type: 'success', message: '已取消系统注册' })
+  } catch (e) {
+    ElMessage({ type: 'error', message: String(e.message || e) })
+  }
+}
+
+async function scheduleReregister() {
+  const mode = state.value?.schedule?.mode
+  if (mode !== 'scheduled' && mode !== 'boot') return
+  try {
+    const res = await py('schedule_set_mode', { mode })
+    state.value.schedule = res.schedule
+    state.value.proxy = res.proxy
+    ElMessage({ type: 'success', message: '已重新注册系统任务' })
+  } catch (e) {
+    ElMessage({ type: 'error', message: String(e.message || e) })
+  }
 }
 
 async function openExternal(url) {
@@ -266,6 +308,9 @@ function markDirty() {
 async function onScheduleChanged() {
   await load()
   if (activeView.value === 'tunnel' && !isConfigMode.value) {
+    activeView.value = 'summary'
+  }
+  if (activeView.value === 'runlog' && isConfigMode.value) {
     activeView.value = 'summary'
   }
 }

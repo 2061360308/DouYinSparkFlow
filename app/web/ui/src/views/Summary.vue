@@ -15,6 +15,44 @@
       </div>
     </div>
 
+    <div v-if="showExecPanel" class="exec-panel">
+      <div class="ep-head">
+        <span class="ep-title">执行情况</span>
+        <span class="ep-mode">{{ schedule.mode_label || schedule.mode }}</span>
+        <span class="spacer" />
+        <button class="tbtn" @click="$emit(schedule.installed ? 'cancel' : 'reregister')">
+          {{ schedule.installed ? '取消' : '重新注册' }}
+        </button>
+      </div>
+      <div class="ep-grid">
+        <template v-if="schedule.mode === 'scheduled'">
+          <div class="ep-row">
+            <span class="ep-key">注册状态</span>
+            <span class="ep-val" :class="schedule.installed ? 'ok' : 'warn'">
+              {{ schedule.installed ? '已注册' : '未注册' }}
+            </span>
+          </div>
+          <div class="ep-row">
+            <span class="ep-key">执行时间</span>
+            <span class="ep-val">{{ schedule.run_time ? '每天 ' + schedule.run_time : '（未设置）' }}</span>
+          </div>
+        </template>
+        <div v-else-if="schedule.mode === 'boot'" class="ep-row">
+          <span class="ep-key">本次执行</span>
+          <span class="ep-val" :class="runClass(schedule.run?.today)">{{ runText(schedule.run?.today) }}</span>
+        </div>
+
+        <div class="ep-row">
+          <span class="ep-key">今日执行</span>
+          <span class="ep-val" :class="runClass(schedule.run?.today)">{{ runText(schedule.run?.today) }}</span>
+        </div>
+        <div class="ep-row">
+          <span class="ep-key">昨日执行</span>
+          <span class="ep-val" :class="runClass(schedule.run?.yesterday)">{{ runText(schedule.run?.yesterday) }}</span>
+        </div>
+      </div>
+    </div>
+
     <div class="toolbar">
       <button class="tbtn" @click="copy">复制 .env 内容</button>
       <button class="tbtn" @click="open">打开程序目录</button>
@@ -55,9 +93,14 @@ import { ElMessage } from 'element-plus'
 const props = defineProps({
   data: { type: Object, required: true },
   status: { type: Object, default: () => ({}) },
+  schedule: { type: Object, default: () => ({}) },
 })
-const emit = defineEmits(['clean', 'copy', 'open'])
+const emit = defineEmits(['clean', 'copy', 'open', 'cancel', 'reregister'])
 const filter = ref('')
+
+const showExecPanel = computed(
+  () => props.schedule.mode === 'scheduled' || props.schedule.mode === 'boot',
+)
 
 const envList = computed(() =>
   Object.entries(props.data.env_map ?? {}).map(([key, value]) => ({ key, value: String(value) }))
@@ -71,6 +114,18 @@ const filtered = computed(() => {
 
 function copy() { emit('copy') }
 function open() { emit('open') }
+
+function runText(entry) {
+  if (!entry) return '未执行'
+  const time = String(entry.last_at || '').slice(11, 19)
+  const status = entry.success ? '成功' : `失败(退出码 ${entry.last_exit_code})`
+  return time ? `${status} · ${time}` : status
+}
+
+function runClass(entry) {
+  if (!entry) return ''
+  return entry.success ? 'ok' : 'err'
+}
 
 function clean() {
   const count = (props.data.orphans ?? []).length
@@ -114,6 +169,40 @@ function clean() {
 .status-val.ok { color: #0f766e; }
 .status-val.warn { color: #92400e; }
 .status-val.err { color: #b91c1c; }
+
+/* 执行情况 */
+.exec-panel {
+  background: var(--vg-bg);
+  border-radius: var(--vg-radius);
+  box-shadow: var(--vg-shadow-card);
+  padding: 14px 18px;
+  margin-bottom: 16px;
+}
+
+.ep-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.ep-title { font-size: 13px; font-weight: 600; color: var(--vg-fg); }
+.ep-mode {
+  font-size: 11.5px; padding: 2px 8px; border-radius: 9999px;
+  background: #f0f0f0; color: var(--vg-fg-2);
+}
+.spacer { flex: 1; }
+
+.ep-grid { display: flex; flex-wrap: wrap; gap: 6px 28px; }
+.ep-row { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.ep-key { font-size: 12px; color: var(--vg-fg-4); flex: 0 0 auto; }
+.ep-val { font-size: 12.5px; color: var(--vg-fg); }
+.ep-val.ok { color: #0f766e; }
+.ep-val.warn { color: #92400e; }
+.ep-val.err { color: #b91c1c; }
+
+.tbtn {
+  padding: 5px 12px; border: none; border-radius: var(--vg-radius-sm);
+  background: var(--vg-bg); color: var(--vg-fg); font-size: 12.5px; font-weight: 500;
+  cursor: pointer; box-shadow: var(--vg-ring); transition: background 0.14s ease;
+}
+.tbtn:hover { background: var(--vg-bg-hover); }
+.tbtn.warn { color: #b91c1c; box-shadow: 0 0 0 1px rgba(185, 28, 28, 0.25); }
+.tbtn.warn:hover { background: #b91c1c; color: #fff; }
 
 /* Toolbar */
 .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }

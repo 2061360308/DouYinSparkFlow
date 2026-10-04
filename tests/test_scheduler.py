@@ -40,6 +40,7 @@ class PathsTestCase(unittest.TestCase):
                 "SCHEDULER_DIR",
                 "SCHEDULER_STATE",
                 "SCHEDULER_INSTALL",
+                "SCHEDULER_HISTORY",
                 "SCHEDULER_LOCK",
                 "SCHEDULER_LOG",
                 "ENV_FILE",
@@ -48,6 +49,7 @@ class PathsTestCase(unittest.TestCase):
         paths.SCHEDULER_DIR = self.root / ".scheduler"
         paths.SCHEDULER_STATE = paths.SCHEDULER_DIR / "state.json"
         paths.SCHEDULER_INSTALL = paths.SCHEDULER_DIR / "install.json"
+        paths.SCHEDULER_HISTORY = paths.SCHEDULER_DIR / "history.json"
         paths.SCHEDULER_LOCK = paths.SCHEDULER_DIR / "lock"
         paths.SCHEDULER_LOG = self.root / "logs" / "scheduler.log"
         paths.ENV_FILE = self.root / ".env"
@@ -107,6 +109,18 @@ class StateTests(PathsTestCase):
         state.record_attempt(1, "2026-10-03")
         self.assertFalse(state.succeeded_today("2026-10-03"))
         self.assertEqual(state.load_state()["last_exit_code"], 1)
+
+    def test_history_records_attempt_and_success(self):
+        state.record_attempt(1, "2026-10-03")
+        day = state.history_days()["2026-10-03"]
+        self.assertEqual(day["attempts"], 1)
+        self.assertFalse(day["success"])
+        self.assertEqual(day["last_exit_code"], 1)
+
+        state.record_success("2026-10-03")
+        day = state.history_days()["2026-10-03"]
+        self.assertTrue(day["success"])
+        self.assertEqual(day["last_exit_code"], 0)
 
 
 class LockTests(PathsTestCase):
@@ -232,6 +246,8 @@ class CoreTests(PathsTestCase):
         self.assertIn(str(self.root), text)
         self.assertIn("main.py", text)
         self.assertIn(", 0, False", text)
+        if paths.browser_binary().is_file():
+            self.assertIn("CLOAKBROWSER_BINARY_PATH", text)
 
     def test_write_sh(self):
         launcher = Launcher(exe="python", frozen=False, root=self.root)
@@ -242,6 +258,8 @@ class CoreTests(PathsTestCase):
         self.assertIn("#!/bin/sh", text)
         self.assertIn(str(self.root), text)
         self.assertIn("main.py", text)
+        if paths.browser_binary().is_file():
+            self.assertIn("CLOAKBROWSER_BINARY_PATH", text)
 
     def test_run_if_due_skips_when_succeeded_today(self):
         from datetime import date
@@ -327,6 +345,14 @@ class ApiTests(PathsTestCase):
             api.set_mode(api.MODE_SCHEDULED, launcher=self._launcher(), backend=backend)
             status = api.uninstall(backend=backend)
         self.assertEqual(status["mode"], "")
+
+    def test_cancel_keeps_mode_but_uninstalls(self):
+        backend = NoopBackend()
+        with mock.patch("app.scheduler.api.get_backend", return_value=backend):
+            api.set_mode(api.MODE_SCHEDULED, launcher=self._launcher(), backend=backend)
+            status = api.cancel(backend=backend)
+        self.assertEqual(status["mode"], api.MODE_SCHEDULED)  # 模式保留
+        self.assertFalse(status["installed"])                 # 已移除注册
 
     def test_ensure_default_mode_disabled_by_env(self):
         with mock.patch.dict(os.environ, {"APP_SCHEDULE_AUTOREGISTER": "0"}):
