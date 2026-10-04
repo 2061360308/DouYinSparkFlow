@@ -5,7 +5,7 @@
 ## 1. 准备
 
 1. 安装 Docker 和 Docker Compose
-2. 用 configTool 生成 `.env`（见 [配置生成器](guide/03-配置生成器.md)）。不熟悉配置项的话可先参考仓库里的 [`.env.example`](https://github.com/2061360308/DouYinSparkFlow/blob/main/.env.example)
+2. 用 app 生成 `.env`（见 [配置生成器](guide/03-配置生成器.md)）。不熟悉配置项的话可先参考仓库里的 [`.env.example`](https://github.com/2061360308/DouYinSparkFlow/blob/main/.env.example)
 
 ## 2. 两个容器
 
@@ -14,7 +14,7 @@
 | 容器 | 作用 |
 | --- | --- |
 | `douyin-spark-flow` | 任务执行器，容器内 cron 到点跑续火花 |
-| `gost` | 配套代理，给本地 configTool 抓 Cookie 时借道 |
+| `gost` | 配套代理，给本地 app 抓 Cookie 时借道 |
 
 两个容器跑在同一台机器上，出口 IP **完全相同**，所以「抓 Cookie 的出口」和「跑任务的出口」天然一致，不需要额外的隧道配置。
 
@@ -24,7 +24,7 @@
 mkdir -p ./config ./logs
 ```
 
-把 configTool 生成的 `.env` 放到 `./config/.env`。
+把 app 生成的 `.env` 放到 `./config/.env`。
 
 ## 4. 启动
 
@@ -40,9 +40,9 @@ docker compose down         # 停止
 docker compose restart      # 重启（改配置后）
 ```
 
-## 6. 给 configTool 配配套代理
+## 6. 给 app 配配套代理
 
-本地 configTool 抓 Cookie 时，需要走服务器上的 gost 容器，让出口 IP 与任务一致。在 configTool 的「工具配置」页签填：
+本地 app 抓 Cookie 时，需要走服务器上的 gost 容器，让出口 IP 与任务一致。在 app 的「工具配置」页签填：
 
 | 项 | 值 |
 | --- | --- |
@@ -50,7 +50,7 @@ docker compose restart      # 重启（改配置后）
 | 隧道账号 | 与 `GOST_USER` 一致 |
 | 隧道密码 | 与 `GOST_PASSWORD` 一致 |
 
-> 端口别省 —— configTool 不会给 `ws://` 补默认端口。
+> 端口别省 —— app 不会给 `ws://` 补默认端口。
 
 ## 7. 安全提醒
 

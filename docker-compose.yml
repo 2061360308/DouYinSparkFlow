@@ -1,7 +1,7 @@
 # 两个容器，与云函数部署（aliyun-fc-ros-template.yaml）里的两个函数一一对应：
 #
 #   ① douyin-spark-flow  任务执行器 —— 容器内 cron 到点跑一轮续火花   （对应 DYSparkTask）
-#   ② gost               配套代理   —— 本地 configTool 抓 Cookie 时借道（对应 DYSparkGost）
+#   ② gost               配套代理   —— 本地 app 抓 Cookie 时借道（对应 DYSparkGost）
 #
 # 为什么 Docker 场景更省事：两个容器跑在同一台机器上，出网 IP **完全相同**，
 # 「抓 Cookie 的出口」和「跑任务的出口」天然一致，不需要像云函数那样再搭一层隧道服务。
@@ -33,7 +33,7 @@ services:
       - ${LOGS_DIR:-./logs}:/app/logs
 
   # ===========================================================================
-  # ② 配套代理：给本地 configTool 提供与任务容器一致的出口
+  # ② 配套代理：给本地 app 提供与任务容器一致的出口
   # ===========================================================================
   gost:
     image: crpi-yagm0mg4gyj902wq.cn-hangzhou.personal.cr.aliyuncs.com/oilu/gost:latest
@@ -43,17 +43,17 @@ services:
     restart: unless-stopped
     command:
       - "-L"
-      # 用 http+ws 而不是裸 http：configTool 那边要求隧道地址以 ws:// 开头，
+      # 用 http+ws 而不是裸 http：app 那边要求隧道地址以 ws:// 开头，
       # 这样本地填的写法与云函数场景完全一致，换个部署方式不用改配置。
       #   GOST_USER / GOST_PASSWORD：必须先在项目根目录的 .env 里设好（见 .env.example），
       #   或启动前 export。没有默认值 —— 不设的话 compose 会直接拒绝启动（:? 强制非空）。
       - "http+ws://${GOST_USER:?请在 .env 设 GOST_USER}:${GOST_PASSWORD:?请在 .env 设 GOST_PASSWORD}@:9000?path=/ws"
     ports:
-      # 暴露给本地 configTool 连；宿主机 9000 被占就改左边的端口
+      # 暴露给本地 app 连；宿主机 9000 被占就改左边的端口
       - "${GOST_PORT:-9000}:9000"
 
 # ---------------------------------------------------------------------------
-# 本地 configTool 怎么填（「工具配置」页签）：
+# 本地 app 怎么填（「工具配置」页签）：
 #
 #   隧道地址   ws://<服务器公网IP>:9000?path=/ws      ← 端口别省，工具不会给 ws 兜默认端口
 #   隧道账号   与 .env 里的 GOST_USER 一致

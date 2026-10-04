@@ -1,4 +1,4 @@
-"""configTool 登录流程的两条约束（纯逻辑，不依赖 GUI / 浏览器）。
+"""app 登录流程的两条约束（纯逻辑，不依赖 GUI / 浏览器）。
 
   · 抓取门禁只看 Cookie（`_has_login_cookie`），页面级信号不当门禁 ——
     check_login 的 DOM 兜底在登录过程中就成立，据此抓取会打断用户登录；
@@ -9,7 +9,7 @@
 
 import unittest
 
-from configTool import browser_login as bl
+from app import browser_login as bl
 
 SESSION = ("sessionid",)
 

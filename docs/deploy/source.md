@@ -19,7 +19,7 @@ pip install -r requirements.txt
 
 ## 3. 准备配置
 
-在项目根目录创建 `.env`，内容用 configTool 生成（见 [配置生成器](guide/03-配置生成器.md)）。
+在项目根目录创建 `.env`，内容用 app 生成（见 [配置生成器](guide/03-配置生成器.md)）。
 
 ## 4. 运行
 

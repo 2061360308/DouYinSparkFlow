@@ -13,13 +13,13 @@ usersData.json
 har_logs/
 
 # 账户登录态的浏览器配置目录：体积大且含敏感登录信息，绝不入库
-configTool/profiles/
+app/profiles/
 
 # 抖音号 -> 配置目录 对照表（含昵称 / uid 等账号信息），不入库
-configTool/profiles.json
-configTool/cloakbrowser-windows-x64/
+app/profiles.json
+app/cloakbrowser-windows-x64/
 # 分发包本体（约 536 MB）同理，不入库
-configTool/cloakbrowser-windows-x64.zip
+app/cloakbrowser-windows-x64.zip
 
 # PyInstaller 打包产物
 build/
@@ -30,18 +30,24 @@ dist/
 .workbuddy/
 
 # gost 隧道客户端
-configTool/gost/
+app/gost/
 
 # 界面窗口用的独立 Chromium profile（可能含站内登录态），不入库
-configTool/.ui-profile/
-configTool/web/dist/
+app/.ui-profile/
+app/web/dist/
 
 # 前端工程依赖与构建缓存（产物由 CI 现构建，不入库）
-configTool/web/ui/node_modules/
+app/web/ui/node_modules/
 
 # 工具自己的本地设置（local.json）：里面存着配套代理的隧道地址与账号密码，
 # 入库等于把代理凭据交出去 —— 绝不提交。
-configTool/local.json
+app/local.json
+
+# 窗口尺寸/位置/最大化状态的记忆，跟着本机走，不入库
+app/window.json
+
+# 调度模块的元数据（当前模式、运行状态、生成的包装脚本），跟着本机走，不入库
+.scheduler/
 
 # Playwright 的 API 调试日志（`DEBUG=pw:api` 重定向出来的，排查「卡很久」用）：
 # 里面是完整的请求 URL 与页面跳转序列，含 token、好友昵称等个人信息，

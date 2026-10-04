@@ -1,4 +1,4 @@
-"""configTool 网页界面：桥（bridge）与业务层（service）的单元测试。
+"""app 网页界面：桥（bridge）与业务层（service）的单元测试。
 
 桥测试不依赖浏览器；service 测试把 .env 与 local.json 都指到临时目录，
 绝不碰仓库里真实的配置。
@@ -6,14 +6,19 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 
-from configTool import local_settings
-from configTool.web.bridge import Bridge
-from configTool.web.service import Service
+# 默认关闭真实系统任务注册（不同发现方式下 tests/__init__.py 未必生效）
+os.environ.setdefault("SCHEDULER_BACKEND", "noop")
+os.environ.setdefault("APP_SCHEDULE_AUTOREGISTER", "0")
+
+from app import local_settings
+from app.web.bridge import Bridge
+from app.web.service import Service
 
 
 class BridgeTests(unittest.TestCase):
@@ -163,6 +168,18 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("COOKIES_AAA", data["orphans"])
         cleaned = self.service.clean_orphans()
         self.assertEqual(cleaned["removed"], 1)
+
+    def test_open_external_url_requires_url(self):
+        with self.assertRaises(ValueError):
+            self.service.open_external_url({})
+
+    def test_open_external_url_opens_system_browser(self):
+        from unittest import mock
+
+        with mock.patch("webbrowser.open", return_value=True) as open_url:
+            result = self.service.open_external_url({"url": "https://example.com"})
+        self.assertTrue(result["ok"])
+        open_url.assert_called_once_with("https://example.com")
 
 
 if __name__ == "__main__":

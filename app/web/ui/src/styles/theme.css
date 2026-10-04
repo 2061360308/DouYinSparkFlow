@@ -1,0 +1,418 @@
+/* Vercel 风格设计系统（Geist 视觉语言）—— 全局令牌与共用组件样式。
+ *
+ * 通过 #app 前缀提高特异性，覆盖各视图里 scoped 的 .input/.label 等规则，
+ * 这样无需逐个改视图就能统一视觉。teleport 出去的元素（下拉/抽屉/消息）
+ * 用不带前缀的选择器单独覆盖。
+ *
+ * 中文适配：不套用 Geist 在大标题上的强负字距；正文加大行高、控制信息密度。
+ */
+
+:root {
+  /* 颜色 */
+  --vg-bg: #ffffff;
+  --vg-bg-subtle: #fafafa;
+  --vg-bg-hover: #f5f5f5;
+  --vg-bg-active: #f0f0f0;
+  --vg-fg: #171717;
+  --vg-fg-2: #4d4d4d;
+  --vg-fg-3: #666666;
+  --vg-fg-4: #808080;
+  --vg-border: rgba(0, 0, 0, 0.08);
+  --vg-border-soft: #ebebeb;
+  --vg-accent: #0072f5;
+  --vg-focus: hsla(212, 100%, 48%, 1);
+  --vg-focus-ring: 0 0 0 3px hsla(212, 100%, 48%, 0.28);
+  --vg-danger: #d93025;
+  --vg-warn-bg: #fff7ed;
+  --vg-warn-fg: #9a3412;
+
+  /* 阴影（Vercel 的 shadow-as-border 体系） */
+  --vg-ring: 0 0 0 1px rgba(0, 0, 0, 0.08);
+  --vg-ring-soft: 0 0 0 1px var(--vg-border-soft);
+  --vg-shadow-card: rgba(0, 0, 0, 0.08) 0 0 0 1px,
+    rgba(0, 0, 0, 0.04) 0 2px 2px, rgba(0, 0, 0, 0.04) 0 8px 8px -8px,
+    #fafafa 0 0 0 1px;
+  --vg-shadow-card-hover: rgba(0, 0, 0, 0.1) 0 0 0 1px,
+    rgba(0, 0, 0, 0.06) 0 3px 6px, rgba(0, 0, 0, 0.05) 0 10px 16px -8px,
+    #fafafa 0 0 0 1px;
+  --vg-shadow-pop: rgba(0, 0, 0, 0.08) 0 0 0 1px,
+    rgba(0, 0, 0, 0.06) 0 8px 24px -6px;
+
+  /* 圆角 */
+  --vg-radius-sm: 6px;
+  --vg-radius: 8px;
+  --vg-radius-lg: 12px;
+
+  /* 字体 */
+  --vg-font: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'Microsoft YaHei UI', 'PingFang SC', 'Hiragino Sans GB', system-ui, sans-serif;
+  --vg-mono: 'Geist Mono', ui-monospace, 'Cascadia Code', Consolas, 'Roboto Mono',
+    Menlo, Monaco, monospace;
+}
+
+/* ── 区块标题：中文适度字重，不用大负字距 ── */
+#app .section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--vg-fg);
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+  margin: 0 0 16px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--vg-border-soft);
+}
+
+#app .block-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vg-fg);
+  letter-spacing: -0.01em;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ── 表单 ── */
+#app .form-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+}
+
+#app .field { flex: 1 1 100%; min-width: 200px; }
+#app .field.half { flex: 1 1 calc(50% - 10px); min-width: 170px; }
+#app .field.third { flex: 1 1 calc(33.3% - 14px); min-width: 150px; }
+
+#app .label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--vg-fg-2);
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
+
+#app .input,
+#app .filter-input,
+#app .select {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--vg-radius-sm);
+  background: var(--vg-bg);
+  box-shadow: var(--vg-ring);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--vg-fg);
+  font-family: inherit;
+  outline: none;
+  transition: box-shadow 0.14s ease;
+}
+
+#app .input:hover,
+#app .filter-input:hover { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.16); }
+
+#app .input:focus,
+#app .filter-input:focus,
+#app .select:focus {
+  box-shadow: 0 0 0 1px var(--vg-focus), var(--vg-focus-ring);
+}
+
+#app .input::placeholder { color: var(--vg-fg-4); }
+
+#app .input:disabled,
+#app .input.disabled {
+  background: var(--vg-bg-subtle);
+  color: var(--vg-fg-3);
+  cursor: default;
+  box-shadow: var(--vg-ring);
+}
+
+#app .textarea {
+  resize: vertical;
+  line-height: 1.7;
+  min-height: 72px;
+}
+
+#app .select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+  cursor: pointer;
+}
+
+#app .field-hint {
+  font-size: 11.5px;
+  color: var(--vg-fg-4);
+  margin: 6px 0 0;
+  line-height: 1.6;
+}
+
+/* checkbox */
+#app .checkbox-row { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+#app .checkbox-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--vg-fg-2);
+  cursor: pointer;
+  user-select: none;
+}
+#app .checkbox-item input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--vg-fg);
+  cursor: pointer;
+}
+
+/* ── 卡片 ── */
+#app .account-card,
+#app .section-block,
+#app .table-wrap {
+  background: var(--vg-bg);
+  border: none;
+  border-radius: var(--vg-radius);
+  box-shadow: var(--vg-shadow-card);
+  padding: 18px 20px;
+  margin-bottom: 16px;
+}
+
+#app .account-card { transition: box-shadow 0.14s ease; }
+#app .account-card:hover { box-shadow: var(--vg-shadow-card-hover); }
+
+#app .card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--vg-border-soft);
+}
+
+#app .card-label { font-weight: 600; font-size: 13.5px; color: var(--vg-fg); }
+#app .card-id {
+  font-size: 12px;
+  color: var(--vg-fg-3);
+  font-family: var(--vg-mono);
+}
+
+/* ── 按钮 ── */
+#app .add-btn,
+#app .action-btn.primary,
+#app .btn.primary {
+  padding: 7px 14px;
+  border: none;
+  border-radius: var(--vg-radius-sm);
+  background: var(--vg-fg);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.14s ease, opacity 0.14s ease;
+}
+
+#app .add-btn:hover:not(:disabled),
+#app .action-btn.primary:hover,
+#app .btn.primary:hover:not(:disabled) { background: #000; }
+#app .add-btn:disabled,
+#app .action-btn.primary:disabled,
+#app .btn.primary:disabled { opacity: 0.4; cursor: default; }
+
+#app .mini-btn,
+#app .tbtn,
+#app .btn,
+#app .action-btn.secondary {
+  padding: 6px 12px;
+  border: none;
+  border-radius: var(--vg-radius-sm);
+  background: var(--vg-bg);
+  color: var(--vg-fg);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: var(--vg-ring);
+  transition: background 0.14s ease, box-shadow 0.14s ease;
+}
+
+#app .mini-btn:hover:not(:disabled),
+#app .tbtn:hover,
+#app .btn:hover:not(:disabled),
+#app .action-btn.secondary:hover {
+  background: var(--vg-bg-hover);
+}
+
+#app .mini-btn:disabled,
+#app .action-btn.secondary:disabled { opacity: 0.45; cursor: default; }
+
+#app .remove-btn {
+  padding: 6px 12px;
+  border: none;
+  border-radius: var(--vg-radius-sm);
+  background: var(--vg-bg);
+  color: var(--vg-danger);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(217, 48, 37, 0.25);
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+#app .remove-btn:hover { background: var(--vg-danger); color: #fff; }
+
+#app .tbtn.warn {
+  color: var(--vg-danger);
+  box-shadow: 0 0 0 1px rgba(217, 48, 37, 0.25);
+}
+#app .tbtn.warn:hover { background: var(--vg-danger); color: #fff; }
+
+/* ── 提示条 / 徽标 ── */
+#app .hint-box,
+#app .note.info {
+  padding: 10px 12px;
+  border-radius: var(--vg-radius-sm);
+  background: #f6f8fb;
+  color: var(--vg-fg-2);
+  font-size: 12.5px;
+  line-height: 1.65;
+  box-shadow: 0 0 0 1px var(--vg-border-soft);
+}
+
+#app .hint-box { margin-bottom: 16px; }
+
+#app .note {
+  padding: 9px 12px;
+  border-radius: var(--vg-radius-sm);
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin-bottom: 6px;
+}
+#app .note.warn { background: var(--vg-warn-bg); color: var(--vg-warn-fg); }
+#app .note.err { background: #fef2f2; color: #b91c1c; }
+
+#app .ok-text { font-size: 12.5px; color: #0f766e; padding: 8px 0; }
+
+#app .env-path {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--vg-fg-4);
+  font-family: var(--vg-mono);
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 表格 ── */
+#app .table-wrap { padding: 0; overflow: hidden; }
+
+#app .env-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+#app .env-table thead { background: var(--vg-bg-subtle); position: sticky; top: 0; z-index: 1; }
+#app .env-table th,
+#app .env-table td {
+  padding: 9px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--vg-border-soft);
+}
+#app .env-table th { font-weight: 500; color: var(--vg-fg-3); font-size: 11.5px; }
+#app .env-table tbody tr:last-child td { border-bottom: none; }
+#app .env-table tbody tr:hover { background: var(--vg-bg-subtle); }
+#app .col-key { width: 240px; font-family: var(--vg-mono); color: var(--vg-fg); font-weight: 500; }
+#app .col-val { color: var(--vg-fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 0; }
+#app .empty-row { text-align: center; color: var(--vg-fg-4); padding: 20px 0; }
+
+/* ── 空状态 ── */
+#app .empty-state { padding: 64px 0; text-align: center; color: var(--vg-fg-3); }
+#app .empty-title { font-size: 14px; font-weight: 600; color: var(--vg-fg); margin-bottom: 8px; }
+#app .empty-sub { font-size: 12.5px; color: var(--vg-fg-3); line-height: 1.7; max-width: 460px; margin: 0 auto; }
+#app .empty-desc { margin-bottom: 16px; font-size: 13px; }
+
+/* ── 骨架屏 ── */
+#app .skeleton-row {
+  height: 40px;
+  border-radius: var(--vg-radius);
+  background: linear-gradient(90deg, #f0f0f0 25%, #f7f7f7 37%, #f0f0f0 63%);
+  background-size: 400% 100%;
+  animation: vg-shimmer 1.4s ease infinite;
+  margin-bottom: 12px;
+}
+
+@keyframes vg-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+/* ── 目标好友标签 ── */
+#app .tag {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 9999px;
+  background: #f0f0f0;
+  color: var(--vg-fg-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+#app .tag:hover { background: #ffe4e0; color: var(--vg-danger); }
+
+/* ── Element Plus：时间选择器 / 下拉多选 融入设计系统 ── */
+#app .time-picker .el-input__wrapper {
+  border: none;
+  border-radius: var(--vg-radius-sm);
+  box-shadow: var(--vg-ring);
+  padding: 0 10px;
+  height: 34px;
+  background: var(--vg-bg);
+}
+#app .time-picker .el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 1px var(--vg-focus), var(--vg-focus-ring);
+}
+#app .time-picker .el-input__inner { font-size: 13px; font-family: inherit; color: var(--vg-fg); }
+
+#app .target-select .el-select__wrapper {
+  box-shadow: var(--vg-ring);
+  border: none;
+  border-radius: var(--vg-radius-sm);
+  padding: 5px 10px;
+  min-height: 34px;
+  background: var(--vg-bg);
+  font-size: 13px;
+}
+#app .target-select .el-select__wrapper:hover { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.16); }
+#app .target-select .el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px var(--vg-focus), var(--vg-focus-ring);
+}
+#app .target-select .el-select__selection { min-height: 24px; max-height: 120px; overflow-y: auto; }
+#app .target-select .el-tag {
+  background: #f0f0f0;
+  border: none;
+  color: var(--vg-fg);
+  border-radius: var(--vg-radius-sm);
+  height: 24px;
+  line-height: 22px;
+  font-size: 12px;
+  margin: 2px 4px 2px 0;
+}
+#app .target-select .el-tag .el-tag__close { color: var(--vg-fg-3); }
+#app .target-select .el-tag .el-tag__close:hover { background: var(--vg-danger); color: #fff; }
+#app .target-select .el-select__placeholder { color: var(--vg-fg-4); }
+#app .target-select .el-select__input { color: var(--vg-fg); font-size: 13px; }
+
+/* 下拉面板（teleport 到 body，不能用 #app 前缀） */
+.el-select-dropdown__item {
+  font-size: 13px;
+  color: var(--vg-fg);
+  border-radius: var(--vg-radius-sm);
+  margin: 0 4px;
+}
+.el-select-dropdown__item.is-selected { color: var(--vg-fg); font-weight: 600; background: var(--vg-bg-active); }
+.el-select-dropdown__item:hover { background: var(--vg-bg-hover); }
+.el-select-dropdown { border-radius: var(--vg-radius) !important; box-shadow: var(--vg-shadow-pop) !important; border: none !important; }
+
+/* 消息提示 */
+.el-message { border-radius: var(--vg-radius-sm) !important; box-shadow: var(--vg-shadow-pop) !important; border: none !important; }
+.el-message-box { border-radius: var(--vg-radius-lg) !important; }

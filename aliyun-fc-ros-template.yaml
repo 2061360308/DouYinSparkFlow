@@ -10,7 +10,7 @@
 #       解析逻辑见 core/fc_server.py 顶部说明)。
 #
 #   ② DYSparkGost   镜像 gost:latest            + HTTP 触发器(http)
-#      容器里只跑 gost, 以 WebSocket 隧道形态提供代理出口。本地 configTool 抓 Cookie
+#      容器里只跑 gost, 以 WebSocket 隧道形态提供代理出口。本地 app 抓 Cookie
 #      时经隧道借这个函数所在地域的出口 IP, 从而与 ① 跑任务时的出口落在同一地域。
 #
 #      ⚠ 为什么必须有 HTTP 触发器 + WebSocket:
@@ -28,7 +28,7 @@ Description:
   en: >-
     DouyinSparkFlow FC3 stack: one RAM role + two custom-container functions.
     DYSparkTask runs on a timer trigger (payload carries the full .env); DYSparkGost
-    exposes a WebSocket tunnel via an HTTP trigger so the local configTool can egress
+    exposes a WebSocket tunnel via an HTTP trigger so the local app can egress
     from the same region. Default region: cn-hangzhou.
 
 Parameters:
@@ -141,7 +141,7 @@ Parameters:
     Default: ''
     NoEcho: true
     Label:
-      zh-cn: 触发消息 payload (.env 全文, 从configTool导出)
+      zh-cn: 触发消息 payload (.env 全文, 从app导出)
       en: Trigger payload (full .env, optional)
     Description:
       zh-cn: 留空则到控制台填触发消息。
@@ -336,7 +336,7 @@ Resources:
     Properties:
       FunctionName:
         Ref: GostFunctionName
-      Description: DouyinSparkFlow 代理出口(gost WebSocket 隧道, 供本地 configTool 借用同地域出口)
+      Description: DouyinSparkFlow 代理出口(gost WebSocket 隧道, 供本地 app 借用同地域出口)
       Runtime: custom-container
       Handler: index.handler
       Cpu:
