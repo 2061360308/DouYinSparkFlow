@@ -36,6 +36,12 @@
       </div>
     </div>
 
+    <Notifications
+      :notifications="config.notifications || []"
+      :notify-types="options.notify_types || []"
+      @change="emitChange"
+    />
+
     <el-collapse v-model="activeNames" class="advanced-collapse">
       <el-collapse-item title="高级配置" name="advanced">
         <div class="form-grid">
@@ -78,12 +84,6 @@
         </div>
       </el-collapse-item>
     </el-collapse>
-
-    <Notifications
-      :notifications="config.notifications || []"
-      :notify-types="options.notify_types || []"
-      @change="emitChange"
-    />
   </div>
 </template>
 
