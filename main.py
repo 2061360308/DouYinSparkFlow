@@ -17,6 +17,12 @@ if os.path.exists(".env"):
 
     load_dotenv(".env")
 
+# Windows 的 C 运行时读不懂 IANA 时区名（如 Asia/Shanghai），.env 里的 TZ 会把
+# datetime.now()/date.today() 带偏（实测差 7 小时）；Windows 直接用系统时区，删掉 TZ。
+# Linux/Docker 保留 TZ（cron 需要）。
+if sys.platform == "win32":
+    os.environ.pop("TZ", None)
+
 _DEFAULT_MODE = "app" if getattr(sys, "frozen", False) else "task"
 MODE = (
     sys.argv[1] if len(sys.argv) > 1 else os.getenv("RUN_MODE", _DEFAULT_MODE)
