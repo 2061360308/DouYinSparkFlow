@@ -14,4 +14,4 @@ docker-compose.yml text eol=lf
 
 # deb 打包脚本与维护脚本（postinst/prerm/postrm、无扩展名的启动器）必须 LF：
 # CRLF 会让 dpkg 的 /bin/sh^M 报 bad interpreter。
-packaging/linux/* text eol=lf
+tools/packaging/linux/* text eol=lf

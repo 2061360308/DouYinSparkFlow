@@ -30,7 +30,8 @@ DouYinSparkFlow/
 │   ├── tunnel.py               # gost 隧道进程生命周期
 │   └── paths.py                # 路径解析（.env 落仓库根，工具数据留 app/）
 ├── tools/
-│   └── record_har.py           # HAR 录制工具（离线分析流量）
+│   ├── record_har.py           # HAR 录制工具（离线分析流量）
+│   └── packaging/linux/        # Linux deb 打包脚本与 deb 元数据（构建时用）
 ├── tests/                      # 单元测试
 ├── docker/                     # 容器入口脚本（entrypoint / run-task）
 ├── docker-compose.yml          # 两容器编排（任务 + gost 代理）

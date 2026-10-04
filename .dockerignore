@@ -34,9 +34,9 @@ app/cloakbrowser-linux-x64/
 app/cloakbrowser-linux-arm64/
 app/gost/
 
-# 桌面端图标与打包/测试/文档（任务镜像不需要）
+# 桌面端图标与工具/打包/测试/文档（任务镜像不需要）
 app/logo.png
 app/logo.ico
-packaging/
+tools/
 tests/
 docs/

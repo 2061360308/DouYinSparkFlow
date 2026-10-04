@@ -298,10 +298,10 @@ jobs:
         id: deb
         run: |
           set -euo pipefail
-          chmod +x packaging/linux/build-deb.sh
+          chmod +x tools/packaging/linux/build-deb.sh
           ver="$(cat VERSION)"
           out="${APP_NAME}_${ver}_${{ matrix.arch }}.deb"
-          packaging/linux/build-deb.sh \
+          tools/packaging/linux/build-deb.sh \
             "${{ matrix.arch }}" \
             "${ver}" \
             "dist/${APP_NAME}" \
