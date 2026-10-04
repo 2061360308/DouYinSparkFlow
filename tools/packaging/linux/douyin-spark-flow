@@ -1,0 +1,19 @@
+#!/bin/sh
+# DouYinSparkFlow 启动器：把可写数据指到用户目录，并定位自带的隐身 Chromium。
+set -e
+
+APP_HOME=/opt/douyin-spark-flow
+DATA="${XDG_DATA_HOME:-$HOME/.local/share}/douyin-spark-flow"
+mkdir -p "$DATA"
+
+case "$(uname -m)" in
+  aarch64|arm64) CLOAK_DIR=cloakbrowser-linux-arm64 ;;
+  *)             CLOAK_DIR=cloakbrowser-linux-x64 ;;
+esac
+
+export APP_DATA_DIR="$DATA"
+export CLOAKBROWSER_BINARY_PATH="$APP_HOME/$CLOAK_DIR/chrome"
+export CLOAKBROWSER_AUTO_UPDATE=false
+
+cd "$DATA"
+exec "$APP_HOME/DouyinSparkFlow" "$@"

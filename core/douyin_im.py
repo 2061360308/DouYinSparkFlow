@@ -1,23 +1,23 @@
 """core/douyin_im.py
 抖音网页版 IM 会话扫描库 —— 传一个 page，内部自己开门、自己滚、自己找人。
 
-设计契约（三句话）
+三个关键约定
     1. `DouyinIM(page)` 内部立即挂只读监听钩子，然后才 goto 打开聊天页。
        顺序不可颠倒：钩子必须早于导航，否则首屏响应会漏。
     2. `on_ready(cb)` 注册就绪回调。库自己完成「登录校验 + 会话列表就绪」两道门禁，
        终态通过 status 区分，结果对象同一形状（见 ReadyResult）。
     3. `iter_find_and_select(targets)` 从头滚到尾逐个找人。
-       **yield 出来的那一刻，该会话已经被选中且 conv_id 已校验过** ——
+       yield 出来的那一刻，该会话已经被选中且 conv_id 已校验过 ——
        调用方拿到就能直接输入、发送，不需要再定位。
 
 不做什么
     - 不模拟人类操作。cloakbrowser 以 `humanize=True` 启动时已自带拟人化，
-      本库只负责「点对地方」，不重复加随机延迟。
+      本库只负责点对地方，不重复加随机延迟。
     - 不自己构造任何请求。全程只读监听，不签名、不重放。
     - 不假设会话列表非虚拟化。列表是虚拟化的（同时渲染约 7-10 个窗口），
-      因此采集必须边滚边累积，且「到底」判定不能用条目数。
+      因此采集必须边滚边累积，且到底判定不能用条目数。
 
-本文件是**自足**的：解析层（选择器 / 页面内表达式 / protobuf 解码 / SSR 抓取 /
+本文件是自足的：解析层（选择器 / 页面内表达式 / protobuf 解码 / SSR 抓取 /
 只读监听器 / 登录态判定 / 身份算法）全部内联在此
 本文件结构：
     一、选择器          二、页面内表达式      三、protobuf 解码
@@ -38,11 +38,11 @@ from utils.logger import setup_logger
 # 本模块的日志器。名字固定 "douyin_im"，与 core.tasks 的 "app" 分开，
 # 便于单独按 logger 名过滤。级别取自 .env 的 LOG_LEVEL（utils.config 统一读）。
 #
-# 注意：这里在**模块导入时**就初始化。utils.config 是纯 env 读取、无网络/无 IO，
+# 注意：这里在模块导入时就初始化。utils.config 是纯 env 读取、无网络、无 IO，
 # 所以 import 期调用是安全的（它自己的 config 也是这么读的）。
 logger = setup_logger("douyin_im", level=get_config().get("logLevel", "Info"))
 
-# 单次调用超过这么多秒就告警（Playwright 默认超时 120s，静默等到那时日志会一片空白）
+# 单次调用超过这么多秒就告警（Playwright 默认超时 120s，静默等待期间日志无输出）
 SLOW_CALL_SECONDS = 3.0
 
 
@@ -119,7 +119,7 @@ JS_LIST_READY = """(() => {
 })()"""
 
 # 采集当前窗口的会话：DOM 字段 + React fiber 里的 conversation 模型。
-# 注意：虚拟列表下这里只返回**当前窗口那 7-10 项**，不是全部好友。
+# 注意：虚拟列表下这里只返回当前窗口那 7-10 项，不是全部好友。
 JS_COLLECT = """(() => {
   const ITEM = '[data-e2e="conversation-item"]';
 
@@ -295,11 +295,11 @@ JS_EDITOR_EXISTS = """(() => {
          || document.querySelector('[data-e2e="msg-input"] [contenteditable="true"]'));
 })()"""
 
-# 合成输入：**一次只处理一行**，由 Python 侧逐行调用、行间留出重渲染时间。
+# 合成输入：一次只处理一行，由 Python 侧逐行调用、行间留出重渲染时间。
 #
-# 为什么不能在一个 JS 循环里插完：Draft.js 每收到一次 beforeinput 都会重渲染
+# 不能在一个 JS 循环里连插：Draft.js 每收到一次 beforeinput 都会重渲染
 # contenteditable，DOM 选区随之失效。连插多行时第 2 行起 execCommand 会静默
-# no-op —— 症状就是「只发出去第一行，后面全是空行」。所以这里做成单行原语：
+# no-op，症状是「只发出去第一行，后面全是空行」。所以这里做成单行原语：
 # 每次重新取节点、把光标强制移到末尾、再用 textContent 长度自校验插入是否真的发生。
 JS_TYPE_LINE = """((p) => {
   const pick = () => document.querySelector('[data-e2e="msg-input"] .public-DraftEditor-content')
@@ -385,7 +385,7 @@ SERVICE_NAMES = {
 
 
 def _read_varint(buf, p):
-    """→ (值, 新位置)。字段越界直接抛，调用方按"解到哪算哪"处理。"""
+    """→ (值, 新位置)。字段越界直接抛，调用方按已解析的部分处理。"""
     r = 0
     s = 0
     while True:
@@ -664,9 +664,9 @@ def _is_group(conv_id, type_, participant_count):
          单聊恒为 assembleConvId 产出的 `0:1:<小uid>:<大uid>`）
       ② conv_id 前缀 0:1:    → 单聊
       ③ 成员数 > 2
-    都对不上返回 None（未知），不要瞎猜。
+    都对不上返回 None（未知），不猜。
 
-    ⚠️ `type_` 参数**不参与判断**：实测 `conv.type` 是长整型会话 id
+    注意：`type_` 参数不参与判断 —— 实测 `conv.type` 是长整型会话 id
     （如 7209265235419514xxx），不是类型枚举。签名保留是为了向后兼容。
     """
     s = str(conv_id) if conv_id else ""
@@ -696,7 +696,7 @@ def peer_uid_of(conv_id, self_uid):
 def _norm(s):
     """归一化：NFKC + 去 NBSP / 零宽 / 空白 + 小写。
 
-    这是**全项目唯一的归一化实现**（旧 `utils.norm` 已删除并入此处）。
+    这是全项目唯一的归一化实现（旧 `utils.norm` 已删除并入此处）。
     `config.py` 读取配置时不再归一化，只由 `tasks.py` 在匹配前统一归一 ——
     两边都归过才谈得上相等。
     """
@@ -719,18 +719,18 @@ def split_message_lines(text):
 
     | 形态 | 例子 | 来源 |
     |---|---|---|
-    | **字面** `\\` + `n` | `"甲\\n乙"` | `.env` 的 `MESSAGE_TEMPLATE` —— `dotenv` 读出来**不做 unescape** |
-    | **真**换行 `U+000A` | `"甲\\n乙"` | 第三方内容（一言 API 正文）、手写 `.env` 的引号多行值 |
+    | 字面 `\\` + `n` | `"甲\\n乙"` | `.env` 的 `MESSAGE_TEMPLATE` —— `dotenv` 读出来不做 unescape |
+    | 真换行 `U+000A` | `"甲\\n乙"` | 第三方内容（一言 API 正文）、手写 `.env` 的引号多行值 |
 
-    只认字面 `\\n` 会把真换行**静默吞掉**（三行挤成一行）；只认真换行会让
-    `.env` 的默认模板整段变成一行。所以先统一、再断。
+    只认字面 `\\n` 会把真换行漏掉（三行挤成一行）；只认真换行会让 `.env` 的
+    默认模板整段变成一行。所以先统一、再断。
 
-    ★ 三条 replace 的顺序**无所谓**（实测可交换）：字面 `\\r\\n` 是 `\\`+`r`+`\\`+`n`
-    四个字符，里面没有真的 `U+000D`，所以「真 CRLF → 真 LF」那条规则对字面串
-    无从下手；反过来，「字面 `\\r\\n` → 字面 `\\n`」对真 CRLF 也匹配不到。
-    **两条规则作用在互不相交的字符集上。** 这里按「先字面、后真换行」写只是为了读着顺。
+    三条 replace 的顺序无所谓（实测可交换）：字面 `\\r\\n` 是 `\\`+`r`+`\\`+`n`
+    四个字符，里面没有真的 `U+000D`，所以真 CRLF → 真 LF 的规则对字面串不生效；
+    反过来，字面 `\\r\\n` → 字面 `\\n` 对真 CRLF 也不生效。
+    两条规则作用在互不相交的字符集上，这里按「先字面、后真换行」写只是为了读着顺。
 
-    空段由调用方的 `if line:` 挡掉（不键入），但**段间仍会按一次 `Shift+Enter`** ——
+    空段由调用方的 `if line:` 挡掉（不键入），但段间仍会按一次 `Shift+Enter` ——
     因为那确实是两个换行符，视觉上就该空一行。
     """
     return (
@@ -1218,7 +1218,7 @@ class DouyinIM:
     def iter_find_and_select(self, targets):
         """从头滚到尾，逐个找出目标并选中。
 
-        yield 出来的那一刻，该会话**已被选中且 conv_id 已校验**。
+        yield 出来的那一刻，该会话已被选中且 conv_id 已校验。
         调用方拿到就能直接输入发送，不需要再次定位。
 
         targets：原始关键词列表（备注 / 昵称 / 抖音号 / uid 皆可，内部会归一化）
@@ -1274,7 +1274,7 @@ class DouyinIM:
 
         滚动的全部复杂度只在这一处：回到顶部、超时、读窗失败重试、到底判定、
         步长守卫、虚拟窗口换页等待、到底后等防抖再比高度。
-        虚拟列表下同一条会被重叠窗口反复读到，这里只在**首次出现**时产出一次。
+        虚拟列表下同一条会被重叠窗口反复读到，这里只在首次出现时产出一次。
 
         调用方想提前停就 break；结束统计一律写进 self._walk_stat。
         """
@@ -1403,7 +1403,7 @@ class DouyinIM:
                 logger.warning(f"        …另有 {len(self.mon.errors) - 5} 条")
 
     def iter_conversations(self):
-        """从头滚到尾，逐个产出**全部**会话（任务二：采集会话）。
+        """从头滚到尾，逐个产出全部会话（任务二：采集会话）。
 
         yield 的项已 `_join` 过监听资料，字段与 `iter_find_and_select` 的命中项一致：
         display / remark / nickname / douyin_id / uid / sec_uid / conv_id /
@@ -1644,7 +1644,7 @@ class DouyinIM:
         return False
 
     def _dom_index_of(self, conv_id):
-        """在**当前窗口内**查 conv_id 对应的 DOM 下标。"""
+        """在当前窗口内查 conv_id 对应的 DOM 下标。"""
         try:
             rows = self.page.evaluate(JS_COLLECT) or []
         except Exception:
@@ -1739,8 +1739,8 @@ class DouyinIM:
     def _input_mode(self):
         """探测真实输入事件能否送达页面。
 
-        抖音在某些环境（本次是 Linux 容器 / 无头）下会在 document 捕获阶段吞掉
-        所有 trusted 输入事件：CDP 的 mouse/keyboard 全部石沉大海，页面 0 事件。
+        抖音在某些环境（本次是 Linux 容器 / 无头）下会在 document 捕获阶段拦截
+        所有 trusted 输入事件：CDP 的 mouse/keyboard 无任何回显，页面 0 事件。
         探测一次即可决定后续走 real 还是 synth（JS 合成事件）。
         """
         mode = getattr(self, "_input_mode_cache", None)
@@ -1825,7 +1825,7 @@ class DouyinIM:
                     pass
                 self.page.wait_for_timeout(200)
             logger.debug(f"[SEND] 编辑器就绪={ready}")
-            # ★ 逐行调用、行间留 250ms：Draft.js 每收一次 beforeinput 都会重渲染
+            # 逐行调用、行间留 250ms：Draft.js 每收一次 beforeinput 都会重渲染
             # contenteditable 并丢掉 DOM 选区，在一个 JS 循环里连插会让第 2 行起
             # 静默 no-op（症状：只有第一行 + 后面全空行）。详见 JS_TYPE_LINE 的注释。
             steps = []

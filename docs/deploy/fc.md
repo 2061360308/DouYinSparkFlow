@@ -11,7 +11,7 @@
 | 函数 | 镜像 | 作用 |
 | --- | --- | --- |
 | `DYSparkTask` | `douyinsparkflow` | 定时触发器驱动，跑续火任务 |
-| `DYSparkGost` | `gost` | HTTP 触发器暴露 WebSocket 隧道，给本地 configTool 借出口 |
+| `DYSparkGost` | `gost` | HTTP 触发器暴露 WebSocket 隧道，给本地 app 借出口 |
 
 ## 为什么要有 gost 函数
 
@@ -32,9 +32,9 @@ FC 的 HTTP 触发器不支持 CONNECT 方法，浏览器没法直接把它当 H
    - `GostPassword`：务必改掉默认值
 4. 部署完成后，从输出里拿到 gost HTTP 触发器的公网地址
 
-## 给 configTool 配隧道
+## 给 app 配隧道
 
-拿到 gost 触发器的公网地址（形如 `https://xxx.cn-hangzhou.fc.aliyuncs.com`）后，在 configTool「工具配置」页签填：
+拿到 gost 触发器的公网地址（形如 `https://xxx.cn-hangzhou.fc.aliyuncs.com`）后，在 app「工具配置」页签填：
 
 | 项 | 值 |
 | --- | --- |

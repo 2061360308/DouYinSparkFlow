@@ -19,7 +19,7 @@ pip install -r requirements.txt
 
 ## 3. 准备配置
 
-在项目根目录创建 `.env`，内容用 configTool 生成（见 [配置生成器](guide/03-配置生成器.md)），或用网页版生成后粘贴。
+在项目根目录创建 `.env`，内容用 app 生成（见 [配置生成器](guide/03-配置生成器.md)）。
 
 ## 4. 运行
 
@@ -38,7 +38,7 @@ python main.py task
 
 ## 关于出口 IP
 
-本机运行的话，「抓 Cookie 的出口」和「跑任务的出口」都是本机，天然一致。但如果 Cookie 是在别处抓的、或用网页版生成的，注意出口 IP 是否一致（见 [Cookie 与出口 IP](guide/02-cookie与出口IP.md)）。
+本机运行的话，「抓 Cookie 的出口」和「跑任务的出口」都是本机，天然一致。但如果 Cookie 是在别处抓的，注意出口 IP 是否一致（见 [Cookie 与出口 IP](guide/02-cookie与出口IP.md)）。
 
 ## 本地调试
 

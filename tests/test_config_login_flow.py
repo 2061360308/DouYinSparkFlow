@@ -1,4 +1,4 @@
-"""configTool 登录流程的两条约束（纯逻辑，不依赖 tkinter / 浏览器）。
+"""app 登录流程的两条约束（纯逻辑，不依赖 GUI / 浏览器）。
 
   · 抓取门禁只看 Cookie（`_has_login_cookie`），页面级信号不当门禁 ——
     check_login 的 DOM 兜底在登录过程中就成立，据此抓取会打断用户登录；
@@ -9,7 +9,7 @@
 
 import unittest
 
-from configTool import browser_login as bl
+from app.browser import worker as bl
 
 SESSION = ("sessionid",)
 
@@ -98,7 +98,7 @@ class AutoFlowNeverReloadsTests(unittest.TestCase):
         self.assertEqual(page.reloads, 0, "自动流程刷新了页面 —— 会打断用户的登录")
 
     def test_manual_grab_may_reload(self):
-        """手动「立即抓取」是例外。只钉决策：把 _reload_for_profile 换成记录器。"""
+        """手动「立即抓取」是例外。只锁定决策：把 _reload_for_profile 换成记录器。"""
         w, _ = _worker((), ssr={})
         calls = []
         w._reload_for_profile = lambda: calls.append(1)

@@ -1,13 +1,14 @@
 import logging
 import os
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
 
-# 日志落盘位置固定为**仓库根目录**下的 logs/app.log。
+# 日志落盘位置固定为仓库根目录下的 logs/app.log。
 # 不能用相对路径 "logs/app.log"：那是相对 CWD 的，从别的目录导入本项目时
-# 会在那边凭空建一个 logs/，日志就散了。这里以本文件位置回推仓库根。
+# 会在那边新建 logs/，日志就与项目分开了。这里以本文件位置回推仓库根。
 LOG_FILE = str(Path(__file__).resolve().parent.parent / "logs" / "app.log")
 
 
@@ -39,14 +40,16 @@ def setup_logger(name="app", level="Info"):
     formatter = logging.Formatter(LOG_FORMAT)
 
     if not logger.handlers:
-        console_handler = logging.StreamHandler()
+        # 打包成 --windowed exe 时没有控制台，sys.stderr 为 None，
+        # 此时再加 StreamHandler 会在写日志时报错；只在有 stderr 时才加。
+        if sys.stderr is not None:
+            logger.addHandler(logging.StreamHandler())
         file_handler = RotatingFileHandler(
             LOG_FILE,
             maxBytes=5 * 1024 * 1024,
             backupCount=3,
             encoding="utf-8",
         )
-        logger.addHandler(console_handler)
         logger.addHandler(file_handler)
 
     for handler in logger.handlers:

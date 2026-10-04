@@ -46,7 +46,7 @@ jobs:
     - name: 安装 Chromium 系统依赖
       run: python -m playwright install-deps chromium
 
-    # 缺 Windows 字体是字体指纹的破绽；失败只告警，不阻断当天任务。
+    # 缺 Windows 字体是字体指纹的异常特征；失败只告警，不阻断当天任务。
     # 这里不加 actions/cache：下载失败时目录是空的，cache 仍会把它存成正式条目，
     # 之后每次运行都命中空缓存、下载步骤被跳过，字体就再也装不上了。
     - name: 下载并安装 Windows 默认字体

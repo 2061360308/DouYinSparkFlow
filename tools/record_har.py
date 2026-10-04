@@ -1,4 +1,4 @@
-"""HAR 录制工具（**不是测试**）—— 打开抖音聊天页录一段流量供离线分析。
+"""HAR 录制工具（不是测试）—— 打开抖音聊天页录一段流量供离线分析。
 
 用法::
 
@@ -9,14 +9,14 @@
 
 产出放在 har_logs/ 下，文件名 `<用户名>_<时间戳>.har`。
 
-⚠️ 产出的 HAR **含登录凭据（cookie）与好友资料（昵称/备注/uid），绝不入库**。
+注意：产出的 HAR 含登录凭据（cookie）与好友资料（昵称/备注/uid），不可入库。
    har_logs/ 已在 .gitignore 里；同目录还会生成一批 <sha1>.dat（二进制报文体），
    它们与 .har 是配套的，一起移动/一起删除。
 
-⚠️ 为什么这里用 `record_har_content="attach"`：
+注意：这里用 `record_har_content="attach"`：
    Playwright 录 HAR 时二进制响应的内容不写进 .har 的 content.text，
    而是落到同目录 <sha1>.dat 并由 content._file 引用。
-   解析时必须带上同目录全部 .dat，否则 protobuf 全是空壳 —— 详见 har_logs 里的取证记录。
+   解析时必须带上同目录全部 .dat，否则 protobuf 内容全为空 —— 详见 har_logs 里的取证记录。
 """
 
 import argparse

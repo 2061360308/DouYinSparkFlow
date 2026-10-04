@@ -1,6 +1,6 @@
 """core.douyin_im 的真实报文抽样测试 —— 需要本机抓的 HAR，没有就整体 skip。
 
-**这个文件依赖真实抓包，而 HAR 含登录凭据与好友资料，不入版本库。**
+这个文件依赖真实抓包，而 HAR 含登录凭据与好友资料，不入版本库。
 所以它默认在你自己的机器上才跑得起来；CI / 别人的 clone 会走 skipTest。
 
 HAR 从哪来：跑 tools/record_har.py 录一段 `www.douyin.com/chat` 的流量。
@@ -44,7 +44,6 @@ def _find_har():
             if f.lower().endswith(".har")]
     if not hars:
         return None
-    # 取最新的一份
     return max(hars, key=os.path.getmtime)
 
 
@@ -103,7 +102,7 @@ class HarSamplingTests(unittest.TestCase):
         self.assertIs(decode_init_resp(bodies[0])["has_more"], True)
 
     def test_last_page_has_more_false(self):
-        # ⚠️ 依赖录制时的会话总数：末轮必然 has_more=False（循环终止条件）
+        # 依赖录制时的会话总数：末轮必然 has_more=False（循环终止条件）
         init = [e for e in self.entries
                 if "get_message_by_init" in e.get("request", {}).get("url", "")]
         bodies = self._bodies(init)
@@ -204,7 +203,7 @@ class HarSamplingTests(unittest.TestCase):
         self.assertIn(ss["verdict"], ("logged_in", "logged_out"))
 
     def test_ssr_reports_logged_in(self):
-        # ⚠️ 依赖录制时的登录态
+        # 依赖录制时的登录态
         docs = [e for e in self.entries
                 if re.match(r"^https://www\.douyin\.com/(chat|$|\?)",
                             e.get("request", {}).get("url", ""))]

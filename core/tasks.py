@@ -1,4 +1,6 @@
 import traceback
+from datetime import datetime
+
 from utils.logger import setup_logger
 from utils.config import get_config, get_userData
 from core.msg_builder import build_message
@@ -30,7 +32,6 @@ def do_user_task(browser, username, cookies, targets):
 
     page = context.new_page()
 
-    # 注入 Cookie
     context.add_cookies(cookies)
 
     im = None
@@ -47,7 +48,7 @@ def do_user_task(browser, username, cookies, targets):
 
         res = im.wait_ready()
         if res.get("status") != STATUS_READY:
-            # 终端态都要显式打印，方便从日志一眼看出是哪种失败
+            # 终端态都要显式打印，方便从日志分辨是哪种失败
             reason = {
                 "LOGGED_OUT": "未登录（没有 sessionid）",
                 "EXPIRED": "登录已失效（有 sessionid 但服务端不认）",
@@ -56,7 +57,14 @@ def do_user_task(browser, username, cookies, targets):
                 "ERROR": "内部错误",
             }.get(res.get("status"), res.get("status"))
             logger.error(f"账号 {username} 操作前检查未通过：{reason}，跳过该账号")
-            return
+            return {
+                "ok": False,
+                "reason": reason,
+                "sent_ok": 0,
+                "sent_fail": 0,
+                "missing": [],
+                "note": "",
+            }
 
         logger.info(
             f"账号 {username} 门禁通过  user_id={res.get('user_id')} "
@@ -119,18 +127,30 @@ def do_user_task(browser, username, cookies, targets):
                 f"账号 {username} 注意：折叠组/陌生人组里有内容 {folds}，"
                 f"主列表扫不到，目标可能被折叠"
             )
+        return {
+            "ok": True,
+            "reason": "",
+            "sent_ok": sent_ok,
+            "sent_fail": sent_fail,
+            "missing": list(scan.get("missing") or []),
+            "note": scan.get("note") or "",
+        }
     finally:
         if im is not None:
             try:
                 im.detach()
             except Exception:
                 pass
-        context.close()  # 任务完成后关闭上下文
+        context.close()
 
 
 def runTasks():
-    # 检查是否启用多任务和任务数量
-    # 创建信号量以限制并发任务数量
+    """跑一轮所有账号的任务。
+
+    返回进程退出码：任一账号门禁失败或抛异常 → 1，否则 0。
+    「部分好友没找到 / 发送失败」不计入整体失败（可能只是改名），只记日志。
+    调度器靠这个退出码判断「今天是否算成功执行」。
+    """
     logger.info("开始执行任务")
     logger.debug(f"当前配置如下：")
     logger.debug(f"消息模板: {config.get('messageTemplate', '未找到消息模板')}")
@@ -140,21 +160,95 @@ def runTasks():
             f"用户: {user.get('username', '未知用户')}, 目标好友: {user['targets']}"
         )
 
+    failed = 0
+    results: list = []
     for user in userData:
         cookies = user["cookies"]
-        # 归一化在**这里**做（配置读取端不做）：DouyinIM._match 内部用同一套 norm，
-        # 两边都归过才谈得上相等 —— 否则配置里的「Ｌｕ瞳」永远匹配不上页面上的「Lu瞳」。
-        # 同时丢掉归一后变空的项：空串留在剩余名单里永远扣不掉，会白滚到底。
+        # 归一化只在这里做（配置读取端不做）：DouyinIM._match 内部也用同一套 norm，
+        # 两边都归过才谈得上相等，否则配置里的「Ｌｕ瞳」永远匹配不上页面上的「Lu瞳」。
+        # 同时丢掉归一后变空的项：空串留在剩余名单里扣不掉，会一直空转到底。
         targets = [t for t in map(norm, user["targets"]) if t]
         username = user.get("username", "未知用户")
         fingerprint = user.get("fingerprint", None)
         logger.info(f"开始处理账号 {username}")
-        # 创建任务
+        browser = None
         try:
             browser = get_browser(fingerprint)
-            do_user_task(browser, username, cookies, targets)
-            logger.info(f"账号 {username} 任务完成")
+            result = do_user_task(browser, username, cookies, targets)
+            results.append((username, result))
+            if not result.get("ok"):
+                failed += 1
+                logger.error(f"账号 {username} 任务失败")
+            else:
+                logger.info(f"账号 {username} 任务完成")
+        except Exception:
+            failed += 1
+            results.append(
+                (
+                    username,
+                    {
+                        "ok": False,
+                        "reason": "任务异常",
+                        "sent_ok": 0,
+                        "sent_fail": 0,
+                        "missing": [],
+                        "note": "",
+                    },
+                )
+            )
+            logger.error(f"账号 {username} 任务异常：\n{traceback.format_exc()}")
         finally:
-            # 关闭浏览器实例
-            browser.close()
-    
+            if browser is not None:
+                try:
+                    browser.close()
+                except Exception:
+                    logger.warning(traceback.format_exc())
+
+    _notify_summary(results, failed)
+
+    if failed:
+        logger.error(f"本轮共有 {failed} 个账号失败")
+        return 1
+    return 0
+
+
+def _notify_summary(results: list, failed: int) -> None:
+    """把本轮结果拼成文本，推送到用户配置的通知渠道。
+
+    通知失败只记日志，绝不影响任务退出码 —— 调度器判断「今天是否成功」
+    只看任务本身的结果。
+    """
+    notifications = config.get("notifications") or []
+    if not notifications:
+        return
+
+    total_ok = sum(int(r.get("sent_ok") or 0) for _, r in results)
+    total_fail = sum(int(r.get("sent_fail") or 0) for _, r in results)
+
+    lines = [f"抖音火花续期 · {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
+    for username, r in results:
+        if r.get("ok"):
+            line = f"✅ {username}：发送成功 {int(r.get('sent_ok') or 0)}"
+            if r.get("sent_fail"):
+                line += f"，失败 {int(r['sent_fail'])}"
+        else:
+            line = f"❌ {username}：{r.get('reason') or '任务失败'}"
+        lines.append(line)
+        if r.get("missing"):
+            lines.append(f"　未找到：{'、'.join(str(x) for x in r['missing'])}")
+    lines.append("————————————")
+    lines.append(
+        f"本轮：{len(results) - failed}/{len(results)} 个账号成功，"
+        f"共发送 {total_ok} 条，失败 {total_fail} 条"
+    )
+
+    try:
+        from core import notify
+
+        for label, ok, message in notify.send_all(notifications, "\n".join(lines)):
+            if ok:
+                logger.info(f"通知已发送：{label}")
+            else:
+                logger.warning(f"通知发送失败：{label} - {message}")
+    except Exception:
+        logger.warning(f"通知发送异常：\n{traceback.format_exc()}")

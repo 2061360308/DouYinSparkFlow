@@ -7,12 +7,25 @@ from utils.logger import setup_logger
 logger = setup_logger(level=logging.DEBUG)
 
 """
-是否启用调试模式
-更详细的日志打印，浏览器操作可视化等
+调试模式：更详细的日志打印、浏览器操作可视化等
 """
 DEBUG = True if os.environ.get("DEBUG", "").lower() == "true" else False
 config = None
 userData = None
+
+
+def _load_notifications() -> list:
+    """读取 .env 的 NOTIFY（JSON 数组）。坏数据只告警、返回空列表。"""
+    raw = os.getenv("NOTIFY", "[]")
+    try:
+        data = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        logger.warning("NOTIFY 不是合法 JSON，已忽略")
+        return []
+    if not isinstance(data, list):
+        logger.warning("NOTIFY 必须是 JSON 数组，已忽略")
+        return []
+    return [item for item in data if isinstance(item, dict)]
 
 
 def get_config():
@@ -34,7 +47,7 @@ def get_config():
         "hitokotoTypes": json.loads(
             os.getenv("HITOKOTO_TYPES", '["文学","影视","诗词","哲学"]')
         ),
-        # .env 里统一用**秒**，出口按消费方的单位给：
+        # .env 里统一用秒，出口按消费方的单位给：
         #   browserActionTimeout / friendListSettleMs 带单位后缀 → 已是毫秒，调用方直接用
         #   imScanTimeout / imReadyTimeout / imMaxSteps 原本就是秒/步
         "browserActionTimeout": int(
@@ -54,6 +67,7 @@ def get_config():
         ),  # 滚动步数硬上限
         "taskRetryTimes": int(os.getenv("TASK_RETRY_TIMES", "3")),  # 任务重试次数
         "logLevel": os.getenv("LOG_LEVEL", "Debug"),  # 日志级别
+        "notifications": _load_notifications(),  # 任务完成后的通知渠道
     }
 
     return config
