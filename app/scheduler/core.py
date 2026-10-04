@@ -105,25 +105,42 @@ def _vbs_command(argv: list) -> str:
 
 
 def write_vbs(launcher: Launcher, path, argv: list):
-    """写一个隐藏运行的 VBS 启动器（WScript，无控制台窗口）。"""
-    content = (
-        'Set sh = CreateObject("WScript.Shell")\r\n'
-        f'sh.CurrentDirectory = "{launcher.root}"\r\n'
-        f'sh.Run "{_vbs_command(argv)}", 0, False\r\n'
-    )
-    _write_text(path, content)
+    """写一个隐藏运行的 VBS 启动器（WScript，无控制台窗口）。
+
+    自带浏览器存在时，把 CLOAKBROWSER_BINARY_PATH / CLOAKBROWSER_AUTO_UPDATE 写进
+    进程环境 —— 计划任务没有交互环境，不设的话任务找不到自带 Chromium。
+    """
+    lines = [
+        'Set sh = CreateObject("WScript.Shell")',
+        f'sh.CurrentDirectory = "{launcher.root}"',
+    ]
+    browser = paths.browser_binary()
+    if browser.is_file():
+        lines.append(
+            f'sh.Environment("PROCESS")("CLOAKBROWSER_BINARY_PATH") = "{browser}"'
+        )
+        lines.append('sh.Environment("PROCESS")("CLOAKBROWSER_AUTO_UPDATE") = "false"')
+    lines.append(f'sh.Run "{_vbs_command(argv)}", 0, False')
+    _write_text(path, "\r\n".join(lines) + "\r\n")
     return path
 
 
 def write_sh(launcher: Launcher, path, argv: list):
-    """写一个 POSIX sh 启动器（输出重定向到 logs/scheduler.log）。"""
+    """写一个 POSIX sh 启动器（输出重定向到 logs/scheduler.log）。
+
+    自带浏览器存在时一并导出 CLOAKBROWSER_BINARY_PATH / CLOAKBROWSER_AUTO_UPDATE。
+    """
     cmd = " ".join(shlex.quote(arg) for arg in argv)
-    content = (
-        "#!/bin/sh\n"
-        f'cd "{launcher.root}" || exit 1\n'
-        f'exec {cmd} >> "{paths.SCHEDULER_LOG}" 2>&1\n'
-    )
-    _write_text(path, content)
+    lines = [
+        "#!/bin/sh",
+        f'cd "{launcher.root}" || exit 1',
+    ]
+    browser = paths.browser_binary()
+    if browser.is_file():
+        lines.append(f'export CLOAKBROWSER_BINARY_PATH="{browser}"')
+        lines.append('export CLOAKBROWSER_AUTO_UPDATE="false"')
+    lines.append(f'exec {cmd} >> "{paths.SCHEDULER_LOG}" 2>&1')
+    _write_text(path, "\n".join(lines) + "\n")
     try:
         path.chmod(0o755)
     except OSError:
