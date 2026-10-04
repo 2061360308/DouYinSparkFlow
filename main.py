@@ -12,10 +12,25 @@ PyInstaller 打包的 exe（sys.frozen）不带参数时默认 app。
 import os
 import sys
 
-if os.path.exists(".env"):
-    from dotenv import load_dotenv
 
-    load_dotenv(".env")
+def _load_env() -> None:
+    """加载 .env：优先当前目录，其次工具数据目录（deb 装在 /opt 时）。"""
+    if os.path.exists(".env"):
+        from dotenv import load_dotenv
+
+        load_dotenv(".env")
+        return
+    try:
+        from app import paths
+    except Exception:
+        return
+    if paths.ENV_FILE.is_file():
+        from dotenv import load_dotenv
+
+        load_dotenv(paths.ENV_FILE)
+
+
+_load_env()
 
 # Windows 的 C 运行时读不懂 IANA 时区名（如 Asia/Shanghai），.env 里的 TZ 会把
 # datetime.now()/date.today() 带偏（实测差 7 小时）；Windows 直接用系统时区，删掉 TZ。

@@ -139,6 +139,10 @@ def write_sh(launcher: Launcher, path, argv: list):
     if browser.is_file():
         lines.append(f'export CLOAKBROWSER_BINARY_PATH="{browser}"')
         lines.append('export CLOAKBROWSER_AUTO_UPDATE="false"')
+    # 数据目录跟桌面端保持一致：deb 装在 /opt 时数据落在用户目录
+    data_dir = os.environ.get("APP_DATA_DIR", "").strip()
+    if data_dir:
+        lines.append(f'export APP_DATA_DIR="{data_dir}"')
     lines.append(f'exec {cmd} >> "{paths.SCHEDULER_LOG}" 2>&1')
     _write_text(path, "\n".join(lines) + "\n")
     try:

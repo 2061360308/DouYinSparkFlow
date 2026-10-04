@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+if [ -x /usr/bin/fc-cache ]; then fc-cache -f >/dev/null 2>&1 || true; fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database -q /usr/share/applications || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -q -f /usr/share/icons/hicolor >/dev/null 2>&1 || true
+fi
+
+# Chromium 自带沙箱需要 root:root + setuid（发布包若带 chrome-sandbox）
+for sb in /opt/douyin-spark-flow/cloakbrowser-linux-*/chrome-sandbox; do
+  [ -e "$sb" ] || continue
+  chown root:root "$sb" 2>/dev/null || true
+  chmod 4755 "$sb" 2>/dev/null || true
+done
+
+exit 0

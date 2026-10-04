@@ -21,6 +21,13 @@ app/cloakbrowser-windows-x64/
 # 分发包本体（约 536 MB）同理，不入库
 app/cloakbrowser-windows-x64.zip
 
+# Linux 版自带 Chromium（构建时现拉，体积大，不入库）
+app/cloakbrowser-linux-x64/
+app/cloakbrowser-linux-arm64/
+
+# Linux .deb 发布包（CI 现构建，不入库）
+*.deb
+
 # PyInstaller 打包产物
 build/
 dist/
