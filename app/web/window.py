@@ -64,6 +64,11 @@ def _app_mode_args() -> list:
         "--no-default-browser-check",
         "--disable-extensions",
         "--disable-background-timer-throttling",
+        # 界面窗口在 Linux 上以 --no-sandbox 启动（系统禁用了非特权 userns），
+        # Chromium 会因此弹「不受支持的命令行标记」横幅。--test-type 让启动阶段的
+        # 信息条整体跳过（见 Chromium 的 infobar_utils.cc::AddInfoBarsIfNecessary），
+        # 只作用于界面窗口，不改网页加载 / 渲染 / JS 行为。
+        "--test-type",
     ]
 
 
