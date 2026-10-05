@@ -1,15 +1,41 @@
 import logging
 import os
 import sys
+import tempfile
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
 
-# 日志落盘位置固定为仓库根目录下的 logs/app.log。
-# 不能用相对路径 "logs/app.log"：那是相对 CWD 的，从别的目录导入本项目时
-# 会在那边新建 logs/，日志就与项目分开了。这里以本文件位置回推仓库根。
-LOG_FILE = str(Path(__file__).resolve().parent.parent / "logs" / "app.log")
+
+def _log_dir() -> Path:
+    """日志目录，必须是可写位置（不能落在打包后的 _internal / /opt 里）。
+
+    1) APP_DATA_DIR：deb/桌面端启动脚本设置的用户数据目录（优先）
+    2) 打包运行（sys.frozen）：exe 同级 logs/
+    3) 源码运行：仓库根 logs/（以本文件位置回推，避免跟 CWD 走）
+    """
+    override = os.environ.get("APP_DATA_DIR", "").strip()
+    if override:
+        return Path(override).expanduser() / "logs"
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "logs"
+    return Path(__file__).resolve().parent.parent / "logs"
+
+
+def _ensure_writable_dir(path: Path) -> Path:
+    """确保日志目录可写；实在不行退回系统临时目录，绝不让启动因写日志而崩。"""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    except OSError:
+        fallback = Path(tempfile.gettempdir()) / "douyin-spark-flow" / "logs"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
+LOG_DIR = _ensure_writable_dir(_log_dir())
+LOG_FILE = str(LOG_DIR / "app.log")
 
 
 def resolve_log_level(level):
@@ -31,7 +57,10 @@ def resolve_log_level(level):
 
 def setup_logger(name="app", level="Info"):
     resolved_level = resolve_log_level(level)
-    os.makedirs(os.path.dirname(LOG_FILE) or ".", exist_ok=True)
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
 
     logger = logging.getLogger(name)
     logger.setLevel(resolved_level)
