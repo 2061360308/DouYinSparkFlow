@@ -309,6 +309,15 @@ jobs:
             "app/gost/gost" \
             "app/logo.png" \
             "${out}"
+          # 布局自检：数据必须平铺在 /usr、/opt 下，不能再多套一层包名（否则装到 /douyin-spark-flow/usr/...）
+          dpkg-deb -c "${out}" | grep -q '\./usr/share/applications/douyin-spark-flow.desktop' \
+            || { echo "deb 布局错误：缺 /usr/share/applications/douyin-spark-flow.desktop" >&2; exit 1; }
+          dpkg-deb -c "${out}" | grep -q '\./usr/bin/douyin-spark-flow' \
+            || { echo "deb 布局错误：缺 /usr/bin/douyin-spark-flow" >&2; exit 1; }
+          dpkg-deb -c "${out}" | grep -q '\./opt/douyin-spark-flow/DouyinSparkFlow' \
+            || { echo "deb 布局错误：缺 /opt/douyin-spark-flow/DouyinSparkFlow" >&2; exit 1; }
+          dpkg-deb -c "${out}" | grep -q '\./usr/share/icons/hicolor/256x256/apps/douyin-spark-flow.png' \
+            || { echo "deb 布局错误：缺图标" >&2; exit 1; }
           echo "file=${out}" >> "$GITHUB_OUTPUT"
 
       - name: 计算发布 tag
