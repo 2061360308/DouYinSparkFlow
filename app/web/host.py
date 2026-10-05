@@ -96,9 +96,11 @@ def run() -> int:
             # （对后续抓抖音登录态更隐蔽）。接口调用（$py / expose_function /
             # __pyOn）走 CDP，不依赖这个开关。
             #
-            # 沙箱开启：chromium_sandbox=True 让 playwright 不自作主张加 --no-sandbox，
-            # 从而消除「不受支持的命令行标记：--no-sandbox」横幅。
-            chromium_sandbox=True,
+            # 关闭沙箱：Ubuntu 23.10+/24.04 等发行版默认用 AppArmor 禁用了非特权
+            # user namespace，Chromium 自带的沙箱起不来（No usable sandbox），
+            # 只能 --no-sandbox。cloakbrowser 的隐身二进制本身也默认 --no-sandbox
+            # （任务路径就是），这里保持一致。Windows 上该开关无影响。
+            chromium_sandbox=False,
             ignore_default_args=["--enable-automation"],
         )
 
