@@ -3,13 +3,10 @@
   - [讨论与贡献](intro/02-讨论与贡献.md)
 - 快速开始
   - [选择部署方式](guide/01-选择部署方式.md)
-  - [Cookie 与出口 IP](guide/02-cookie与出口IP.md)
-  - [配置生成器](guide/03-配置生成器.md)
+  - [快速开始](guide/快速开始.md)
 - 部署方式
-  - [服务器 Docker（推荐）](deploy/docker.md)
-  - [云函数](deploy/fc.md)
-  - [GitHub Action（过时）](deploy/action.md)
-  - [源码部署](deploy/source.md)
+  - [发行包](deploy/release.md)
+  - [Docker](deploy/docker.md)
 - 开发
   - [仓库结构](dev/overview.md)
   - [工具与测试](dev/tools.md)

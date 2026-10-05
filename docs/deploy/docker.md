@@ -1,11 +1,11 @@
-# 服务器 Docker 部署（推荐）
+# Docker 部署
 
-在个人服务器、NAS 或任何支持 Docker 的设备上部署。出口 IP 固定，登录态最稳。
+在个人服务器、NAS 或任何支持 Docker 的设备上部署。适用于能力强熟悉Docker的用户。
 
 ## 1. 准备
 
 1. 安装 Docker 和 Docker Compose
-2. 用 app 生成 `.env`（见 [配置生成器](guide/03-配置生成器.md)）。不熟悉配置项的话可先参考仓库里的 [`.env.example`](https://github.com/2061360308/DouYinSparkFlow/blob/main/.env.example)
+2. 用 发行的app 生成 `.env`（见 [DouyinSparkFlow 发行包使用](deploy/release.md)）。
 
 ## 2. 两个容器
 
@@ -15,8 +15,6 @@
 | --- | --- |
 | `douyin-spark-flow` | 任务执行器，容器内 cron 到点跑续火花 |
 | `gost` | 配套代理，给本地 app 抓 Cookie 时借道 |
-
-两个容器跑在同一台机器上，出口 IP **完全相同**，所以「抓 Cookie 的出口」和「跑任务的出口」天然一致，不需要额外的隧道配置。
 
 ## 3. 准备配置目录
 

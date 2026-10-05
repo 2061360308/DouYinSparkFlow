@@ -6,22 +6,6 @@
 ![Playwright](https://img.shields.io/badge/Playwright-%E2%9C%94-green?logo=playwright)
 ![chrome-headless-shell](https://img.shields.io/badge/chrome--headless--shell-%E2%9C%94-brightgreen?logo=googlechrome)
 
-> 由于`抖音创作者更新后不能发送私信`项目已迁移到`https://www.douyin.com/chat` 加载更稳定，支持通过备注/昵称/抖音号等多种方式智能匹配。目前`https://www.douyin.com/chat`没经过长期测试
->
-> 反馈Github Action部署会被抖音检测到踢下线，暂时不确定消息可靠性。但已增加Docker部署方式，有条件的可以使用自己服务器部署。
-
-## 🎁 限时公益服，先到先得
-
-不方便自行部署的用户，可以直接使用已部署的多用户 Web 控制台。
-
-这是由网友自建提供的公益服，自行评估风险后使用。详情见：
-
-[discussions76](https://github.com/2061360308/DouYinSparkFlow/discussions/76)
-
-**在线入口：[https://wangze.oilu.cn/admin](https://wangze.oilu.cn/admin)**
-
-> 邀请码显示无效通常表示已经被其他用户使用，请更换另一个邀请码。请勿向他人提供账号密码、短信验证码或抖音登录凭证，并合理控制任务数量与发送频率。
-
 ## 贡献者
 
 感谢所有为本项目做出贡献的开发者：
@@ -32,20 +16,24 @@
 
 **抖音火花自动续火脚本**一款轻量实用的抖音互动脚本，可自动为你和抖音好友续火花，无需手动操作。
 
-✅ 支持 GitHub Actions 自动运行（开箱即用的 Workflow 配置）
+![界面展示](docs/images/屏幕截图%202026-10-05%20190345.png)
 
-✅ 也可源码部署至自有服务器，青龙/白虎等任务管理面板，灵活适配个人使用场景
+✅ 支持 可视化应用，操作简单方便
+
+✅ 支持 Docker 部署
+
+✅ 可安装在挂机宝长期托管，也可安装到个人日常电脑日常开机静默执行
 
 ### 特性/优势
 
-- [x] 在线可视化配置工具，新手也能入门操作
-- [x] Fork即用，无需克隆代码，配置运行环境
+- [x] 可视化应用，新手也能入门操作
 - [x] 多用户,同时批量支持多个账户
 - [x] 多目标,一个账户支持多个续火花目标
-- [x] 支持按照昵称和抖音号两种方式查找好友目标
+- [x] 支持按照昵称和抖音号多种方式查找好友目标
 - [x] 一言支持,更丰富的消息文本
+- [x] 使用CloakBrowser，稳定自动化操作环境，降低被判别为机器的风险
 
-使用`PlayWright`以及`chrome-headless-shell`自动化操作[抖音聊天网页版](https://www.douyin.com/chat)，进行定时发送抖音消息来续火花
+使用`CloakBrowse`（基于PlayWright）自动化操作[抖音聊天网页版](https://www.douyin.com/chat)，进行定时发送抖音消息来续火花
 
 ## 🚀 使用方法
 
@@ -57,10 +45,9 @@
 
 [跳转讨论区](https://github.com/2061360308/DouYinSparkFlow/discussions)
 
-此外创建了一个QQ群，主要用于作者收集反馈信息，愿意帮助测试的朋友可以加入
-
-[点此加入群聊](https://qun.qq.com/universal-share/share?ac=1&authKey=r6QyQAfAdjDnardyxro5kycsnF%2BdsLBTGUPWh7gFxqutzbbVF2shbgmqNJyCRdbZ&busi_data=eyJncm91cENvZGUiOiIxMDkxNjUxNDYyIiwidG9rZW4iOiJPdlB6dDU2Y2RxMzZ3L2ZWU01LNWtxM0ZWSW56QzlpSmZ5dnZVYWI3dzJWY2hVQmROeHZHN3QwdEpvUGJsc0JnIiwidWluIjoiMjA2MTM2MDMwOCJ9&data=L-_Gkg2cVrzDBW6FWJnD31g0RDbq67_YR0WK17hkRrMetritPsn3gvtBMXpTmY8Y8UZDlwY9qz5liHbbG3YDlg&svctype=4&tempid=h5_group_info
+此外创建了一个QQ群，用于收集反馈信息，交流讨论，[点此加入](https://qun.qq.com/universal-share/share?ac=1&authKey=r6QyQAfAdjDnardyxro5kycsnF%2BdsLBTGUPWh7gFxqutzbbVF2shbgmqNJyCRdbZ&busi_data=eyJncm91cENvZGUiOiIxMDkxNjUxNDYyIiwidG9rZW4iOiJPdlB6dDU2Y2RxMzZ3L2ZWU01LNWtxM0ZWSW56QzlpSmZ5dnZVYWI3dzJWY2hVQmROeHZHN3QwdEpvUGJsc0JnIiwidWluIjoiMjA2MTM2MDMwOCJ9&data=L-_Gkg2cVrzDBW6FWJnD31g0RDbq67_YR0WK17hkRrMetritPsn3gvtBMXpTmY8Y8UZDlwY9qz5liHbbG3YDlg&svctype=4&tempid=h5_group_info
 )
+
 ## ⭐Star 趋势
 
 [![Star History Chart](https://api.star-history.com/svg?repos=2061360308/DouYinSparkFlow&type=Date)](https://www.star-history.com/#2061360308/DouYinSparkFlow&Date)
