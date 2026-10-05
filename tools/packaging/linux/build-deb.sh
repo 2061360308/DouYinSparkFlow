@@ -19,7 +19,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 PKG=douyin-spark-flow
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
-ROOT="$STAGE/$PKG"
+# dpkg-deb --build <dir> 把 <dir> 当包根：<dir>/DEBIAN 是控制信息，
+# <dir> 下其余目录按 / 平铺安装。所以数据必须和 DEBIAN 平级，不能再套一层 $PKG，
+# 否则会装到 /douyin-spark-flow/usr/... 而不是 /usr/...
+ROOT="$STAGE"
 
 mkdir -p \
   "$ROOT/opt/$PKG" \
