@@ -6,5 +6,6 @@ Comment=抖音火花续期工具（本地可视化 + 定时任务）
 Comment[zh_CN]=本地可视化配置、账户登录与定时任务
 Exec=douyin-spark-flow
 Icon=douyin-spark-flow
+StartupWMClass=douyin-spark-flow
 Terminal=false
 Categories=Utility;Network;
