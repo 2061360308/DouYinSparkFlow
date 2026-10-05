@@ -40,6 +40,11 @@ on:
 permissions:
   contents: write
 
+# 同一 tag 重复触发时取消旧运行，避免两个运行同时往同一个 Release 传文件
+concurrency:
+  group: build-app-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: true
+
 env:
   # 与 Dockerfile 里的 CLOAK_CHROMIUM_VERSION 保持一致，别各改各的
   CLOAK_CHROMIUM_VERSION: 146.0.7680.177.5
@@ -76,9 +81,48 @@ jobs:
           path: app/web/dist
           if-no-files-found: error
 
+  # 只做两件事：算发布 tag + 把 Release 建好一次。之后三个构建 job 并行，
+  # 各自用 gh release upload 往这个已存在的 Release 传自己的文件 —— 纯资产上传，
+  # 不会像 action-gh-release 那样并发建 release / updateRelease 打架。
+  release-meta:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 计算发布 tag
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            tag="${{ github.ref_name }}"
+          elif [ -n "${{ github.event.inputs.tag }}" ]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            # 手动触发且没给 tag：以仓库根 VERSION 为准
+            tag="v$(cat VERSION)"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: 预建 Release（幂等，只建一次）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在"
+          elif git rev-parse -q --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          else
+            gh release create "$TAG" --title "$TAG" --generate-notes --target "$GITHUB_SHA"
+          fi
+
   build-windows:
-    name: Build & Release (Windows x64)
-    needs: build-frontend
+    name: Build Windows (x64)
+    needs: [build-frontend, release-meta]
     runs-on: windows-latest
 
     steps:
@@ -176,36 +220,16 @@ jobs:
           $size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
           Write-Host "发布包：$zip（$size MB）"
 
-      - name: 计算发布 tag
-        id: meta
-        shell: pwsh
-        run: |
-          if ('${{ github.event_name }}' -eq 'push') {
-            $tag = '${{ github.ref_name }}'
-          } elseif ('${{ github.event.inputs.tag }}') {
-            $tag = '${{ github.event.inputs.tag }}'
-          } else {
-            # 手动触发时以仓库根目录的 VERSION 为准，与主程序版本保持一致
-            # （不再用 run_number，免得同一版代码重复发布出一堆 tag）
-            $ver = (Get-Content VERSION -Raw).Trim()
-            $tag = "v$ver"
-          }
-          Write-Host "发布 tag：$tag"
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-
       - name: 上传到 Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: ${{ steps.meta.outputs.tag }}
-          files: DouyinSparkFlow-win-x64.zip
-          fail_on_unmatched_files: true
-          generate_release_notes: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ needs.release-meta.outputs.tag }}" "DouyinSparkFlow-win-x64.zip" --clobber
 
   build-linux-deb:
     name: Build Linux deb (${{ matrix.arch }})
-    # 等前端构建 + Windows job（后者先把 Release 建好，避免并发创建同一个 release）
-    needs: [build-frontend, build-windows]
+    # 与 Windows job 并行；Release 已由 release-meta 建好，这里只传文件
+    needs: [build-frontend, release-meta]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -317,30 +341,22 @@ jobs:
             "app/logo.png" \
             "${out}"
           # 布局自检：数据必须平铺在 /usr、/opt 下，不能再多套一层包名（否则装到 /douyin-spark-flow/usr/...）
-          dpkg-deb -c "${out}" | grep -q '\./usr/share/applications/douyin-spark-flow.desktop' \
-            || { echo "deb 布局错误：缺 /usr/share/applications/douyin-spark-flow.desktop" >&2; exit 1; }
-          dpkg-deb -c "${out}" | grep -q '\./usr/bin/douyin-spark-flow' \
-            || { echo "deb 布局错误：缺 /usr/bin/douyin-spark-flow" >&2; exit 1; }
-          dpkg-deb -c "${out}" | grep -q '\./opt/douyin-spark-flow/DouyinSparkFlow' \
-            || { echo "deb 布局错误：缺 /opt/douyin-spark-flow/DouyinSparkFlow" >&2; exit 1; }
-          dpkg-deb -c "${out}" | grep -q '\./usr/share/icons/hicolor/256x256/apps/douyin-spark-flow.png' \
-            || { echo "deb 布局错误：缺图标" >&2; exit 1; }
+          # 先把清单整份读进变量再判断 —— 用 `dpkg-deb -c | grep -q` 时 grep 提前退出会让
+          # dpkg-deb 收到 SIGPIPE，配合 set -o pipefail 会误报「布局错误」。
+          listing="$(dpkg-deb -c "${out}")"
+          for path in \
+            './usr/share/applications/douyin-spark-flow.desktop' \
+            './usr/bin/douyin-spark-flow' \
+            './opt/douyin-spark-flow/DouyinSparkFlow' \
+            './usr/share/icons/hicolor/256x256/apps/douyin-spark-flow.png'; do
+            case "$listing" in
+              *"$path"*) ;;
+              *) echo "deb 布局错误：缺 $path" >&2; exit 1 ;;
+            esac
+          done
           echo "file=${out}" >> "$GITHUB_OUTPUT"
 
-      - name: 计算发布 tag
-        id: meta
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          elif [ -n "${{ github.event.inputs.tag }}" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=v$(cat VERSION)" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: 上传到 Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          files: ${{ steps.deb.outputs.file }}
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ needs.release-meta.outputs.tag }}" "${{ steps.deb.outputs.file }}" --clobber
