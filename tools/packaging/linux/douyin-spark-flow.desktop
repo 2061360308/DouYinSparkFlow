@@ -1,7 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=DouYin Spark Flow
-Name[zh_CN]=抖音火花续期
+Name=DouyinSparkFlow
 Comment=抖音火花续期工具（本地可视化 + 定时任务）
 Comment[zh_CN]=本地可视化配置、账户登录与定时任务
 Exec=douyin-spark-flow
