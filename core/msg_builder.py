@@ -9,9 +9,7 @@ from datetime import date
 
 
 def build_message_with_openai() -> str:
-    """
-    通过 OpenAI 接口生成续火花消息，内容丰富，不超过20字
-    """
+    """通过 OpenAI 接口生成不超过 20 字的续火花消息。"""
     from openai import OpenAI
 
     import os
@@ -45,6 +43,14 @@ def build_message_with_openai() -> str:
 
 def build_message() -> str:
     message = get_config().get("messageTemplate", "续火花")
+    # 换行归一，两种 CRLF 都收成真 \n：
+    #   ① 字面 \r\n（反斜杠+r+反斜杠+n 四字符）→ 字面 \n：手写 .env 可能是这样，
+    #      不收的话下游会漏下一个裸露的 \r 打进草稿。
+    #   ② 真 CRLF（U+000D U+000A）→ 真 \n：第三方内容（一言）可能带进来。
+    # 两条规则作用在互不相交的字符集上（字面串里没有真的 CR/LF），顺序无所谓。
+    # 只做这两步：不再额外 replace("\r","\n")，否则会把「字面 \r + 真换行」
+    # 这类组合也改掉，而那可能是作者的本意。
+    message = message.replace("\\r\\n", "\\n").replace("\r\n", "\n")
     if "[API]" in message:
         api_content = request_hitokoto()
         message = message.replace("[API]", api_content)
