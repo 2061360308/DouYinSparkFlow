@@ -1,303 +1,254 @@
 import traceback
+from datetime import datetime
+
 from utils.logger import setup_logger
 from utils.config import get_config, get_userData
-from core.msg_builder import build_message, build_message_with_openai
+from core.msg_builder import build_message
 from core.browser import get_browser
-from playwright.sync_api import Response
-import time
-import json
+from core.douyin_im import DouyinIM, STATUS_READY, norm
 
-
-complates = {}
 
 config = get_config()
 userData = get_userData()
 logger = setup_logger(level=config.get("logLevel", "Info"))
-matchMode = config.get("matchMode", "nickname")
-userIDDict = {}
-
-def handle_response(response: Response):
-    """
-    只监听你要的那个接口响应
-    """
-    global userIDDict
-    # 精准匹配目标接口 URL
-    if "aweme/v1/creator/im/user_detail/" in response.url:
-        # print(f"URL: {response.url}")
-        # print(f"状态码: {response.status}")
-        try:
-            # 获取接口返回的 JSON 数据（就是你在 Network 里看到的内容）
-            json_data = response.json()
-            # print("\n📦 响应 JSON 数据：")
-            # print(json.dumps(json_data, indent=4, ensure_ascii=False))
-            for item in json_data.get("user_list", []):
-                short_id = item.get("user", {}).get("ShortId")
-                nickname = item.get("user", {}).get("nickname")
-                user_id = item.get("user_id", "")
-                userIDDict[str(short_id)] = {"nickname": nickname, "user_id": user_id}
-        except Exception as e:
-            tb = traceback.extract_tb(e.__traceback__)
-            last = tb[-1]
-            print(f"解析响应失败: {e}")
-            print(f"文件: {last.filename}, 行号: {last.lineno}, 函数: {last.name}")
-
-
-def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
-    """
-    通用的重试逻辑
-    :param name: 操作名称（用于日志记录）
-    :param operation: 要执行的异步操作
-    :param retries: 最大重试次数
-    :param delay: 每次重试之间的延迟（秒）
-    :param args: 传递给操作的参数
-    :param kwargs: 传递给操作的关键字参数
-    """
-    for attempt in range(retries):
-        try:
-            return operation(*args, **kwargs)
-        except Exception as e:
-            if attempt < retries - 1:
-                logger.warning(f"{name} 失败，正在重试第 {attempt + 1} 次，错误：{e}")
-                time.sleep(delay)
-            else:
-                logger.error(f"{name} 失败，已达到最大重试次数，错误：{e}")
-                raise
-
-
-def scroll_and_select_user(page, username, targets):
-    """尝试滚动并查找用户名"""
-    # 定义目标元素和滚动容器的选择器
-    friends_tab_selector = 'xpath=//*[@id="sub-app"]/div/div/div[1]/div[2]'
-    target_selector = 'xpath=//*[@id="sub-app"]/div/div[1]/div[2]/div[2]//div[contains(@class, "semi-list-item-body semi-list-item-body-flex-start")]'
-    scrollable_friends_selector = 'xpath=//*[@id="sub-app"]/div/div[1]/div[2]/div[2]/div/div/div[3]/div/div/div/ul/div'
-    
-    # [修复] 使用模糊匹配 no-more-tip- 前缀，不再依赖精确哈希后缀
-    # 同时增加文本匹配作为兜底
-    no_more_selector = 'xpath=//div[contains(@class, "no-more-tip-")]'
-    loading_selector = 'xpath=//div[contains(@class, "semi-spin")]'
-
-    logger.debug(f"账号 {username} 开始查找目标好友列表")
-    logger.debug(f"账号 {username} 目标好友列表: {targets}")
-
-    logger.debug(f"账号 {username} 点击进入好友标签页")
-    # 点击好友标签页
-    page.wait_for_selector(friends_tab_selector)
-    page.locator(friends_tab_selector).click()
-
-    logger.debug(f"账号 {username} 进入好友列表页面")
-
-    # 确保第一个好友元素加载完成
-    first_friend_selector = 'xpath=//*[@id="sub-app"]/div/div/div[2]/div[2]/div/div/div[1]/div/div/div/ul/div/div/div[1]/li/div'
-    page.wait_for_selector(first_friend_selector)
-    page.locator(first_friend_selector).click()  # 点击第一个好友，确保列表激活
-
-    logger.debug(f"账号 {username} 已激活好友列表，开始滚动查找目标好友")
-
-    time.sleep(config["friendListTimeout"] / 1000)  # 等待好友列表加载
-
-    found_targets = set()
-    # [修改] 复制一份目标列表用于追踪进度
-    remaining_targets = set(targets)
-
-    # [修复] 新增：连续空滚动计数器（滚动后没有发现新好友的次数）
-    empty_scroll_count = 0
-    MAX_EMPTY_SCROLLS = 10  # 连续10次滚动没有新好友，认为到底了
-
-    while True:
-        # 查找所有目标元素
-        target_elements = page.locator(target_selector).all()
-
-        # [修复] 记录本轮循环前已发现的好友数，用于判断是否有新发现
-        prev_found_count = len(found_targets)
-
-        for element in target_elements:
-            try:
-                # 查找子元素 span，模糊匹配 class
-                span = element.locator(
-                    """xpath=.//span[contains(@class, "item-header-name-")]"""
-                )
-                targetName = span.inner_text()
-
-                if targetName in found_targets:
-                    continue  # 已处理过，跳过
-                found_targets.add(targetName)
-
-                logger.debug(f"账号 {username} 找到好友 {targetName}")
-                # 检查是否是目标用户名
-                if matchMode == "short_id":
-                    targetSymbol = next((sid for sid, info in userIDDict.items() if info.get("nickname") == targetName), None)
-                else:
-                    targetSymbol = targetName
-
-                if targetSymbol in targets:
-                    element.click()
-                    if matchMode == "short_id":
-                        logger.debug(
-                            f"账号 {username} 选中目标好友 {targetName} 准备开始交互"
-                        )
-                    else:
-                        logger.debug(
-                            f"账号 {username} 选中目标好友 {targetName} (ShortId: {targetSymbol}) 准备开始交互"
-                        )
-                    yield targetName
-                    
-                    # [修改] 标记已找到，如果全找到了直接退出
-                    if targetSymbol in remaining_targets:
-                        remaining_targets.remove(targetSymbol)
-                    if len(remaining_targets) == 0:
-                        logger.debug(f"账号 {username} 所有目标好友均已找到，停止搜索")
-                        return
-                    break
-            except Exception as e:
-                traceback.print_exc()
-        else:
-            # [修复] 检查本轮是否有新好友被发现
-            new_found = len(found_targets) > prev_found_count
-            if new_found:
-                empty_scroll_count = 0  # 有新发现，重置计数器
-            else:
-                empty_scroll_count += 1  # 无新发现，递增计数器
-
-            # [修复] 状态检测逻辑（多重兜底）
-            
-            # 1. 检查是否到底（"没有更多了" —— 使用模糊类名匹配）
-            if page.locator(no_more_selector).count() > 0:
-                logger.info(f"账号 {username} 检测到'没有更多了'标志，已到达底部")
-                if len(remaining_targets) > 0:
-                    logger.warning(f"账号 {username} 搜索结束，仍有以下好友未找到: {remaining_targets}")
-                break
-
-            # 2. [修复] 检查连续空滚动次数，防止死循环
-            if empty_scroll_count >= MAX_EMPTY_SCROLLS:
-                logger.warning(f"账号 {username} 连续 {MAX_EMPTY_SCROLLS} 次滚动未发现新好友，判定已到达底部")
-                if len(remaining_targets) > 0:
-                    logger.warning(f"账号 {username} 搜索结束，仍有以下好友未找到: {remaining_targets}")
-                break
-
-            # 3. 检查是否正在加载
-            if page.locator(loading_selector).count() > 0:
-                logger.debug(f"账号 {username} 列表正在加载中 (Loading)...")
-                time.sleep(1.5) # 给加载留点时间
-                # 不 break，继续去滚动以触发后续内容
-
-            # 4. 滚动容器
-            scrollable_element = page.locator(
-                scrollable_friends_selector
-            ).element_handle()
-            
-            if scrollable_element:
-                # [修复] 记录滚动前的 scrollTop，用于检测是否真的滚动了
-                scroll_top_before = page.evaluate(
-                    "(element) => element.scrollTop", scrollable_element
-                )
-                
-                page.evaluate(
-                    "(element) => element.scrollTop += 800", scrollable_element
-                )
-                
-                # [修复] 检测滚动后的 scrollTop
-                time.sleep(0.3)
-                scroll_top_after = page.evaluate(
-                    "(element) => element.scrollTop", scrollable_element
-                )
-                
-                if scroll_top_before == scroll_top_after:
-                    # scrollTop 没有变化，说明已经到底了
-                    empty_scroll_count += 2  # 加速判定到底
-                    logger.debug(f"账号 {username} scrollTop 未变化 ({scroll_top_before})，可能已到底 (空滚动计数: {empty_scroll_count}/{MAX_EMPTY_SCROLLS})")
-                else:
-                    logger.debug(f"账号 {username} 滚动好友列表以加载更多好友 (scrollTop: {scroll_top_before} -> {scroll_top_after})")
-                
-                time.sleep(1.5)
-            else:
-                logger.error(f"账号 {username} 未找到滚动容器，退出")
-                break
 
 
 def do_user_task(browser, username, cookies, targets):
-        context = browser.new_context()  # 每个任务使用独立的上下文
-        context.set_default_navigation_timeout(config["browserTimeout"])  # 设置导航超时时间为 120 秒
-        context.set_default_timeout(config["browserTimeout"])  # 设置所有操作的默认超时时间为 120 秒
+    """一个账号的完整流程：门禁 → 滚动找人 → 发送 → 回执确认。
 
-        page = context.new_page()
-        
-        if matchMode == "short_id":  # 使用抖音号进行匹配
-            page.on("response", handle_response)
-        
-        # 打开抖音创作者中心
-        retry_operation(
-            "打开抖音创作者中心",
-            page.goto,
-            retries=config["taskRetryTimes"],
-            delay=5,
-            url="https://creator.douyin.com/",
+    实现委托给 `core.douyin_im.DouyinIM`：
+      任务一（门禁）    DouyinIM 构造时自动完成，结论在 wait_ready() 里
+      任务二（找人）    iter_find_and_select —— yield 时该会话已选中且 conv_id 已校验
+      任务三（发送）    im.type_and_send —— 真实键盘事件 + HTTP/DOM 回执双确认
+    拟人化节奏由 cloakbrowser 的 humanize 负责，这里不再叠加延迟。
+    """
+    context = browser.new_context()  # 每个任务使用独立的上下文
+    context.set_default_navigation_timeout(
+        config["browserActionTimeout"]
+    )  # 导航超时（毫秒，config 已换算好）
+    context.set_default_timeout(
+        config["browserActionTimeout"]
+    )  # 单次操作默认超时（毫秒）
+
+    page = context.new_page()
+
+    context.add_cookies(cookies)
+
+    im = None
+    try:
+        # 打开抖音网页聊天页面由库内部完成（先挂钩子再导航，顺序不可颠倒）
+        # 扫描参数全部来自配置：总预算/门禁等待是秒，静默窗是毫秒（见 utils.config）
+        im = DouyinIM(
+            page,
+            timeout=config["imScanTimeout"],
+            ready_timeout=config["imReadyTimeout"],
+            settle_ms=config["friendListSettleMs"],
+            max_steps=config["imMaxSteps"],
         )
-        # 注入 Cookie
-        context.add_cookies(cookies)
 
-        # 导航到消息页面
-        retry_operation(
-            "导航到消息页面",
-            page.goto,
-            retries=config["taskRetryTimes"],
-            delay=5,
-            url="https://creator.douyin.com/creator-micro/data/following/chat",
+        res = im.wait_ready()
+        if res.get("status") != STATUS_READY:
+            # 终端态都要显式打印，方便从日志分辨是哪种失败
+            reason = {
+                "LOGGED_OUT": "未登录（没有 sessionid）",
+                "EXPIRED": "登录已失效（有 sessionid 但服务端不认）",
+                "LOGIN_LOST": "运行期掉登录",
+                "TIMEOUT": "等待超时",
+                "ERROR": "内部错误",
+            }.get(res.get("status"), res.get("status"))
+            logger.error(f"账号 {username} 操作前检查未通过：{reason}，跳过该账号")
+            return {
+                "ok": False,
+                "reason": reason,
+                "sent_ok": 0,
+                "sent_fail": 0,
+                "missing": [],
+                "note": "",
+            }
+
+        logger.info(
+            f"账号 {username} 门禁通过  user_id={res.get('user_id')} "
+            f"nickname={res.get('nickname')} 会话列表就绪"
         )
 
-        logger.debug(f"账号 {username} 开始发送消息")
-        # 滚动并选择用户
-        for username in scroll_and_select_user(page, username, targets):
-            logger.debug(f"账号 {username} 已选中好友 {username} 发送消息")
-            # 等待聊天输入框元素加载完成，使用更稳定的属性选择器
-            chat_input_selector = "xpath=//div[contains(@class, 'chat-input-')]"
-            page.wait_for_selector(chat_input_selector, timeout=config["browserTimeout"])
-            chat_input = page.locator(chat_input_selector)
+        sent_ok = sent_fail = 0
 
-            # 在 chat-input-dccKiL 中输入内容
+        # 生成器：yield 出来的那一刻，对应好友的会话已经被选中
+        for friend in im.iter_find_and_select(targets):
+            logger.debug(f"账号 {username} 已选中好友 {friend['display']}，准备发送")
             message = build_message()
-            for line in message.split("\\n"):
-                chat_input.type(line)  # 输入每一行
-                # 如果不是最后一行，模拟 Shift+Enter 插入换行
-                if line != message.split("\\n")[-1]:
-                    chat_input.press("Shift+Enter")  # 模拟 Shift+Enter 插入换行
+            r = im.type_and_send(friend, message)
+            if r["ok"]:
+                sent_ok += 1
+                logger.info(
+                    f"账号 {username} → {friend['display']} 发送成功"
+                    f"（{r.get('via')} message_id={r.get('message_id') or '-'}）"
+                )
+            else:
+                sent_fail += 1
+                # 重试一次：用 conv_id 重新选中（列表可能已滚动，原来的下标失效）
+                logger.warning(
+                    f"账号 {username} → {friend['display']} 未拿到回执，重试一次"
+                )
+                try:
+                    if friend.get("reselect") and friend["reselect"]():
+                        r2 = im.type_and_send(friend, message)
+                        if r2["ok"]:
+                            sent_ok += 1
+                            sent_fail -= 1
+                            logger.info(
+                                f"账号 {username} → {friend['display']} 重试成功"
+                            )
+                except Exception:
+                    logger.warning(traceback.format_exc())
+            # 发送完让列表状态落定，再继续滚动（发送会把该会话移到顶部）
+            page.wait_for_timeout(800)
 
-            logger.debug(
-                f"账号 {username} 准备发送消息给好友 {username}：\n\t{message}"
+        scan = im.last_scan or {}
+        logger.info(
+            f"账号 {username} 扫描结束：停止原因={scan.get('stopped')} "
+            f"步数={scan.get('steps')} 访问会话={scan.get('visited')} "
+            f"发送成功={sent_ok} 发送失败={sent_fail}"
+        )
+        if scan.get("missing"):
+            # 这两句必须区分开：scanned_all=False 时"没找到"不代表"不存在"
+            logger.warning(
+                f"账号 {username} 未找到的目标：{scan['missing']}"
+                f"（{scan.get('note')}）"
             )
-            logger.debug(f"账号 {username} 给好友 {username} 发送消息完成")
-            # 模拟按下回车键发送消息
-            chat_input.press("Enter")
-            time.sleep(2)  # 发送完等待一会儿
+        if scan.get("select_failed"):
+            logger.warning(
+                f"账号 {username} 找到但选中失败：{scan['select_failed']}"
+            )
 
-        context.close()  # 任务完成后关闭上下文
+        folds = im.fold_groups()
+        if any(v for v in folds.values() if v):
+            logger.warning(
+                f"账号 {username} 注意：折叠组/陌生人组里有内容 {folds}，"
+                f"主列表扫不到，目标可能被折叠"
+            )
+        return {
+            "ok": True,
+            "reason": "",
+            "sent_ok": sent_ok,
+            "sent_fail": sent_fail,
+            "missing": list(scan.get("missing") or []),
+            "note": scan.get("note") or "",
+        }
+    finally:
+        if im is not None:
+            try:
+                im.detach()
+            except Exception:
+                pass
+        context.close()
 
 
 def runTasks():
-    playwright, browser = get_browser()
+    """跑一轮所有账号的任务。
+
+    返回进程退出码：任一账号门禁失败或抛异常 → 1，否则 0。
+    「部分好友没找到 / 发送失败」不计入整体失败（可能只是改名），只记日志。
+    调度器靠这个退出码判断「今天是否算成功执行」。
+    """
+    logger.info("开始执行任务")
+    logger.debug(f"当前配置如下：")
+    logger.debug(f"消息模板: {config.get('messageTemplate', '未找到消息模板')}")
+    logger.debug(f"一言类型: {config['hitokotoTypes']}")
+    for user in userData:
+        logger.debug(
+            f"用户: {user.get('username', '未知用户')}, 目标好友: {user['targets']}"
+        )
+
+    failed = 0
+    results: list = []
+    for user in userData:
+        cookies = user["cookies"]
+        # 归一化只在这里做（配置读取端不做）：DouyinIM._match 内部也用同一套 norm，
+        # 两边都归过才谈得上相等，否则配置里的「Ｌｕ瞳」永远匹配不上页面上的「Lu瞳」。
+        # 同时丢掉归一后变空的项：空串留在剩余名单里扣不掉，会一直空转到底。
+        targets = [t for t in map(norm, user["targets"]) if t]
+        username = user.get("username", "未知用户")
+        fingerprint = user.get("fingerprint", None)
+        logger.info(f"开始处理账号 {username}")
+        browser = None
+        try:
+            browser = get_browser(fingerprint)
+            result = do_user_task(browser, username, cookies, targets)
+            results.append((username, result))
+            if not result.get("ok"):
+                failed += 1
+                logger.error(f"账号 {username} 任务失败")
+            else:
+                logger.info(f"账号 {username} 任务完成")
+        except Exception:
+            failed += 1
+            results.append(
+                (
+                    username,
+                    {
+                        "ok": False,
+                        "reason": "任务异常",
+                        "sent_ok": 0,
+                        "sent_fail": 0,
+                        "missing": [],
+                        "note": "",
+                    },
+                )
+            )
+            logger.error(f"账号 {username} 任务异常：\n{traceback.format_exc()}")
+        finally:
+            if browser is not None:
+                try:
+                    browser.close()
+                except Exception:
+                    logger.warning(traceback.format_exc())
+
+    _notify_summary(results, failed)
+
+    if failed:
+        logger.error(f"本轮共有 {failed} 个账号失败")
+        return 1
+    return 0
+
+
+def _notify_summary(results: list, failed: int) -> None:
+    """把本轮结果拼成文本，推送到用户配置的通知渠道。
+
+    通知失败只记日志，绝不影响任务退出码 —— 调度器判断「今天是否成功」
+    只看任务本身的结果。
+    """
+    notifications = config.get("notifications") or []
+    if not notifications:
+        return
+
+    total_ok = sum(int(r.get("sent_ok") or 0) for _, r in results)
+    total_fail = sum(int(r.get("sent_fail") or 0) for _, r in results)
+
+    lines = [f"抖音火花续期 · {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
+    for username, r in results:
+        if r.get("ok"):
+            line = f"✅ {username}：发送成功 {int(r.get('sent_ok') or 0)}"
+            if r.get("sent_fail"):
+                line += f"，失败 {int(r['sent_fail'])}"
+        else:
+            line = f"❌ {username}：{r.get('reason') or '任务失败'}"
+        lines.append(line)
+        if r.get("missing"):
+            lines.append(f"　未找到：{'、'.join(str(x) for x in r['missing'])}")
+    lines.append("————————————")
+    lines.append(
+        f"本轮：{len(results) - failed}/{len(results)} 个账号成功，"
+        f"共发送 {total_ok} 条，失败 {total_fail} 条"
+    )
+
     try:
-        # 检查是否启用多任务和任务数量
-        # 创建信号量以限制并发任务数量
-        logger.info("开始执行任务")
-        logger.debug(f"当前配置如下：")
-        logger.debug(f"消息模板: {config.get('messageTemplate', '未找到消息模板')}")
-        logger.debug(f"一言类型: {config['hitokotoTypes']}")
-        for user in userData:
-            logger.debug(f"用户: {user.get('username', '未知用户')}, 目标好友: {user['targets']}")
+        from core import notify
 
-        for user in userData:
-            cookies = user["cookies"]
-            targets = user["targets"]
-            complates[user["unique_id"]] = []  # 初始化该用户的已完成列表
-            username = user.get("username", "未知用户")
-            logger.info(f"开始处理账号 {username}")
-            # 创建任务
-            do_user_task(browser, username, cookies, targets)
-            logger.info(f"账号 {username} 任务完成")
-    finally:
-        # 关闭浏览器实例
-        browser.close()
-        
-        playwright.stop()
-
-        
-
+        for label, ok, message in notify.send_all(notifications, "\n".join(lines)):
+            if ok:
+                logger.info(f"通知已发送：{label}")
+            else:
+                logger.warning(f"通知发送失败：{label} - {message}")
+    except Exception:
+        logger.warning(f"通知发送异常：\n{traceback.format_exc()}")
