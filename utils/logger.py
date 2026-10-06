@@ -1,61 +1,64 @@
 import logging
 import os
+import sys
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
-# 创建 logs 文件夹（如果不存在）
-if not os.path.exists("logs"):
-    os.makedirs("logs")
-
-# 日志格式
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
 
-# 日志文件路径
-LOG_FILE = "logs/app.log"
+# 日志落盘位置固定为仓库根目录下的 logs/app.log。
+# 不能用相对路径 "logs/app.log"：那是相对 CWD 的，从别的目录导入本项目时
+# 会在那边新建 logs/，日志就与项目分开了。这里以本文件位置回推仓库根。
+LOG_FILE = str(Path(__file__).resolve().parent.parent / "logs" / "app.log")
 
-# 配置日志
+
+def resolve_log_level(level):
+    if isinstance(level, int):
+        return level
+
+    if isinstance(level, str):
+        mapping = {
+            "debug": logging.DEBUG,
+            "info": logging.INFO,
+            "warning": logging.WARNING,
+            "error": logging.ERROR,
+            "critical": logging.CRITICAL,
+        }
+        return mapping.get(level.lower(), logging.INFO)
+
+    return logging.INFO
+
+
 def setup_logger(name="app", level="Info"):
-    """
-    配置日志记录器
-    :param name: 日志记录器名称
-    :param level: 日志级别
-    :return: 配置好的日志记录器
-    """
-    if level == "Debug":
-        level = logging.DEBUG
-    elif level == "Info":
-        level = logging.INFO
-    elif level == "Warning":
-        level = logging.WARNING
-    elif level == "Error":
-        level = logging.ERROR
-    else:
-        level = logging.INFO
-    
+    resolved_level = resolve_log_level(level)
+    os.makedirs(os.path.dirname(LOG_FILE) or ".", exist_ok=True)
+
     logger = logging.getLogger(name)
-    logger.setLevel(level)
+    logger.setLevel(resolved_level)
+    logger.propagate = False
 
-    # 防止重复添加处理器
+    formatter = logging.Formatter(LOG_FORMAT)
+
     if not logger.handlers:
-        # 控制台日志处理器
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(level)
-        console_formatter = logging.Formatter(LOG_FORMAT)
-        console_handler.setFormatter(console_formatter)
-
-        # 文件日志处理器（带日志轮转）
-        file_handler = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
-        file_handler.setLevel(level)
-        file_formatter = logging.Formatter(LOG_FORMAT)
-        file_handler.setFormatter(file_formatter)
-
-        # 添加处理器到日志记录器
-        logger.addHandler(console_handler)
+        # 打包成 --windowed exe 时没有控制台，sys.stderr 为 None，
+        # 此时再加 StreamHandler 会在写日志时报错；只在有 stderr 时才加。
+        if sys.stderr is not None:
+            logger.addHandler(logging.StreamHandler())
+        file_handler = RotatingFileHandler(
+            LOG_FILE,
+            maxBytes=5 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8",
+        )
         logger.addHandler(file_handler)
+
+    for handler in logger.handlers:
+        handler.setLevel(resolved_level)
+        handler.setFormatter(formatter)
 
     return logger
 
 
-# 示例：使用日志记录器
 if __name__ == "__main__":
     logger = setup_logger(level="Debug")
     logger.debug("这是一个调试信息")
