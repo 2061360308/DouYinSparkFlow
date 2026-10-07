@@ -1,5 +1,5 @@
 <template>
-  <div class="session-mask" @click.self="$emit('close')">
+  <div class="session-mask" @click.self="session.kind !== 'export' && closeSession()">
     <div class="session-panel">
       <div class="sp-head">
         <span class="sp-title">{{ session.title }}</span>
@@ -12,6 +12,13 @@
       </div>
 
       <div v-if="names.length" class="sp-names">已读到 {{ names.length }} 个会话，正在保存…</div>
+      <div v-if="exportResult" class="sp-detected">
+        <p>已导出 {{ exportResult.metadata.message_count }} 条文字消息（未确认全部历史）。</p>
+        <p>{{ exportResult.metadata.first_message_at }} 至 {{ exportResult.metadata.last_message_at }}</p>
+        <p>{{ exportResult.metadata.stop_description }}</p>
+        <p style="word-break: break-all">文件目录：{{ exportResult.folder }}</p>
+        <button class="btn" @click="openExports">打开导出目录</button>
+      </div>
 
       <div v-if="detected && (detected.nickname || detected.unique_id)" class="sp-detected">
         识别到：<b>{{ detected.nickname || '（无昵称）' }}</b>
@@ -25,11 +32,12 @@
       </div>
 
       <div class="sp-actions">
-        <button class="btn" :disabled="done" @click="reopen">重新打开浏览器</button>
+        <button v-if="session.kind !== 'export'" class="btn" :disabled="done" @click="reopen">重新打开浏览器</button>
+        <button v-if="session.kind === 'export' && !done && !hasError" class="btn" :disabled="stopping" @click="stopExport">{{ stopping ? '正在停止并保存…' : '停止并保存已读记录' }}</button>
         <button v-if="session.kind === 'login'" class="btn primary" :disabled="done" @click="grabNow">
           立即抓取
         </button>
-        <button class="btn danger" @click="closeSession">{{ done ? '关闭' : '取消' }}</button>
+        <button v-if="session.kind !== 'export' || done || hasError" class="btn danger" @click="closeSession">{{ done ? '关闭' : '取消' }}</button>
       </div>
     </div>
   </div>
@@ -51,6 +59,8 @@ const hasError = ref(false)
 const done = ref(false)
 const detected = ref(null)
 const names = ref([])
+const exportResult = ref(null)
+const stopping = ref(false)
 
 let unsubscribe = null
 
@@ -84,6 +94,14 @@ function handleEvent(data) {
     case 'conversation_progress':
       statusText.value = `正在滚动加载会话… 已读到 ${payload.count ?? 0} 个`
       break
+    case 'export_progress':
+      statusText.value = `${stopping.value ? '正在停止并保存' : '正在加载历史文字消息'}… 已读到 ${payload.count ?? 0} 条`
+      break
+    case 'chat_exported':
+      exportResult.value = payload
+      done.value = true
+      statusText.value = `导出完成：${payload.metadata.message_count} 条文字消息，未确认全部历史`
+      break
     case 'conversations':
       names.value = payload.names || []
       break
@@ -102,9 +120,22 @@ function handleEvent(data) {
       }
       break
     case 'closed':
-      emit('close')
+      if (!exportResult.value) emit('close')
       break
   }
+}
+
+async function stopExport() {
+  try {
+    const res = await py('account_chat_export_stop', { session: props.session.id })
+    if (!res?.ok) throw new Error(res?.error || '停止失败')
+    stopping.value = true
+  } catch (e) { log(String(e.message || e), true) }
+}
+
+async function openExports() {
+  try { await py('chat_exports_open') }
+  catch (e) { log(String(e.message || e), true) }
 }
 
 async function grabNow() {
