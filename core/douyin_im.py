@@ -376,6 +376,37 @@ JS_MSG_STATE = """(() => {
 # 三、protobuf 最小解码（Python 原生大整数，不存在 JS 的 2^53 精度坑）
 # ===========================================================================
 
+JS_CHAT_MESSAGES = """(convId) => {
+  const seen = new Set();
+  const result = [];
+  for (const el of document.querySelectorAll('[data-e2e="msg-item-content"]')) {
+    const key = Object.keys(el).find(k => k.startsWith('__reactFiber'));
+    let fiber = key ? el[key] : null;
+    let msg = null;
+    for (let i = 0; fiber && i < 20; i++, fiber = fiber.return) {
+      const m = fiber.memoizedProps && fiber.memoizedProps.message;
+      if (m && m.serverId && m.createdAt) { msg = m; break; }
+    }
+    if (!msg) continue;
+    try {
+      // 必须有会话身份，避免切换会话时残留的上一屏消息串入上下文。
+      if (String(msg.conversationId) !== convId) continue;
+      const id = String(msg.serverId);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const content = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
+      const text = content && content.text;
+      if (typeof text !== 'string' || !text.trim()) continue;
+      const timestamp = new Date(msg.createdAt).getTime() / 1000;
+      if (!Number.isFinite(timestamp) || timestamp <= 0) continue;
+      // DOM 发送方标记补充模型判断，避免把自己发的消息再次交给 AI。
+      const fromMe = msg.isMyMessage === true || !!el.closest('.MessageBoxContentisFromMe');
+      result.push({id, text: text.trim(), created_at: timestamp, from_me: fromMe});
+    } catch (_) { /* 未识别的媒体/系统消息跳过 */ }
+  }
+  return result.sort((a, b) => a.created_at - b.created_at);
+}"""
+
 SERVICE_NAMES = {
     100: "SEND_MESSAGE", 301: "GET_BY_CONVERSATION", 605: "PARTICIPANTS_LIST",
     610: "GET_CONVERSATION_INFO_LIST", 1001: "GET_STRANGER_LIST",
@@ -1781,7 +1812,7 @@ class DouyinIM:
 
     # ---------------------------------------------------- 对外：输入发送
 
-    def type_and_send(self, hit, text, wait_receipt=True, timeout=20.0):
+    def type_and_send(self, hit, text, wait_receipt=True, timeout=20.0, log_content=True):
         """给「已选中」的会话输入并发送。
 
         输入走真实键盘事件（Draft.js 依赖 beforeinput/keydown 序列更新 EditorState，
@@ -1811,7 +1842,7 @@ class DouyinIM:
         # ② 输入。用 contenteditable 本体，humanize 的「可编辑」检查能过
         # 两种换行都认（口径见 split_message_lines 的文档）
         lines = split_message_lines(text)
-        if text != "\n".join(lines):
+        if log_content and text != "\n".join(lines):
             logger.debug(f"[SEND] 换行归一：{text!r} → {lines!r}")
         if self._input_mode() == "synth":
             ready = False
@@ -1844,9 +1875,11 @@ class DouyinIM:
             logger.debug(f"[SEND] 合成输入={steps}  已键入={typed}/{want_len}  输入框为空={empty_now}")
             if typed < want_len:
                 logger.warning(f"[SEND] ⚠️ 合成输入缺行：已键入 {typed} 字，应为 {want_len} 字"
-                               f"（lines={lines}）")
+                               + (f"（lines={lines}）" if log_content else ""))
                 if typed == 0:
                     raise RuntimeError("合成输入一行都没进去，拒绝发送空消息")
+                if not log_content:
+                    raise RuntimeError("AI 回复输入不完整，已取消发送")
         else:
             editor = self._editor()
             if editor is None:
@@ -1890,6 +1923,27 @@ class DouyinIM:
             "conv_id": hit.get("conv_id"),
             "display": hit.get("display"),
         }
+
+    def select_conversation(self, conv_id):
+        """按固定会话 ID 选择，供陪聊轮询使用，绝不按模糊昵称发送。"""
+        if str((self._current_conv() or {}).get("convId")) == str(conv_id):
+            return True
+        for item in self._read_window() or []:
+            if item.get("conv_id") == conv_id:
+                return self._select_and_verify(item)
+        for rows in self._walk():
+            # _walk only yields previously unseen conversations; polling also
+            # needs the visible window when all conversations are cached.
+            for item in self._read_window() or rows:
+                if str(item.get("conv_id")) == str(conv_id):
+                    return self._select_and_verify(item)
+        return False
+
+    def read_chat_messages(self, conv_id):
+        """只读当前已渲染的文字消息。身份/时间取 React 消息模型，不用 DOM 序号。"""
+        if str((self._current_conv() or {}).get("convId")) != str(conv_id):
+            return []
+        return self.page.evaluate(JS_CHAT_MESSAGES, str(conv_id)) or []
 
     def _editor(self):
         for sel in ('[data-e2e="msg-input"] .public-DraftEditor-content',

@@ -21,6 +21,7 @@ from app.config.models import (
     validate,
 )
 from app.errors import AppError
+from core.ai.config import AIConfig
 from app.paths import ENV_FILE
 from app.util import open_in_system
 from utils.logger import LOG_FILE as TASK_LOG
@@ -90,6 +91,13 @@ class ConfigService:
     def to_payload(self) -> dict:
         """页面启动/保存后调用的全量数据源（不含运行模式，那部分由门面补）。"""
         self.refresh_profiles()
+        env_map = self.config.to_env_map()
+        import json
+        ai_preview = self.config.ai_chat.to_dict()
+        for provider in ai_preview["providers"]:
+            if provider["api_key"]:
+                provider["api_key"] = "<API Key 已隐藏>"
+        env_map["AI_CHAT"] = json.dumps(ai_preview, ensure_ascii=False, separators=(",", ":"))
         return {
             "config": self._config_to_dict(),
             "options": {
@@ -103,13 +111,14 @@ class ConfigService:
             "notes": list(self.notes),
             "issues": [list(item) for item in self.issues],
             "orphans": list(self.orphans),
-            "env_map": self.config.to_env_map(),
+            "env_map": env_map,
             "env_path": str(self.env_path),
         }
 
     def _config_to_dict(self) -> dict:
         config = self.config
         return {
+            "ai_chat": config.ai_chat.to_dict(),
             "proxy_address": config.proxy_address,
             "run_time": config.run_time,
             "tz": config.tz,
@@ -129,6 +138,7 @@ class ConfigService:
                     "unique_id": account.unique_id,
                     "cookies": account.cookies,
                     "targets": list(account.targets),
+                    "ai_targets": list(account.ai_targets),
                     "profile_folder": account.profile_folder,
                     "fingerprint": account.fingerprint,
                     # 会话名单在 profiles.json（拉取会话列表的结果），
@@ -187,6 +197,7 @@ class ConfigService:
                     unique_id=str(raw.get("unique_id") or "").strip(),
                     cookies=str(raw.get("cookies") or ""),
                     targets=[str(t) for t in targets if str(t).strip()],
+                    ai_targets=[str(t) for t in (raw.get("ai_targets") if isinstance(raw.get("ai_targets"), list) else []) if str(t).strip()],
                     fingerprint=str(raw.get("fingerprint") or "").strip(),
                 )
             )
@@ -208,6 +219,7 @@ class ConfigService:
                     item[key] = "" if value is None else str(value)
             notifications.append(item)
         return Config(
+            ai_chat=AIConfig.from_value(data.get("ai_chat") or self.config.ai_chat.to_dict()),
             proxy_address=str(data.get("proxy_address") or ""),
             run_time=str(data.get("run_time") or "09:00:00") or "09:00:00",
             tz=str(data.get("tz") or "Asia/Shanghai") or "Asia/Shanghai",
@@ -480,6 +492,8 @@ def make_bridge(bridge, worker_factory=None) -> "AccountOperator":
 
     service = Service()
     ops = AccountOperator(bridge, worker_factory=worker_factory)
+    from app.ai_chat import ChatController
+    ops.ai_chat = ChatController()
     bridge.register_all(
         ping=service.ping,
         get_config=service.get_config,
@@ -500,5 +514,9 @@ def make_bridge(bridge, worker_factory=None) -> "AccountOperator":
         account_probe=ops.probe,
         account_grab=ops.grab,
         account_shutdown=ops.shutdown,
+        ai_chat_status=ops.ai_chat.status,
+        ai_chat_start=lambda _p: ops.ai_chat.start(service.config),
+        ai_chat_stop=ops.ai_chat.stop,
+        ai_chat_test=ops.ai_chat.test,
     )
     return ops

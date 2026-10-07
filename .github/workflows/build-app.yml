@@ -137,7 +137,8 @@ jobs:
       - name: 安装打包依赖
         run: |
           python -m pip install --upgrade pip
-          pip install --no-cache-dir pyinstaller python-dotenv "cloakbrowser[geoip]==0.5.10"
+          pip install --no-cache-dir pyinstaller
+          pip install --no-cache-dir -r requirements.txt
 
       - name: 取回前端产物
         uses: actions/download-artifact@v4

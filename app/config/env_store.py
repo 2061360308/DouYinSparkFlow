@@ -59,7 +59,13 @@ def load_config(path=None) -> tuple:
         return Config(), notes
 
     mapping = {key: value for key, value in raw.items() if value is not None}
-    config = Config.from_env_map(mapping)
+    try:
+        config = Config.from_env_map(mapping)
+    except (ValueError, TypeError):
+        # 不让坏的 AI 配置阻止用户打开界面修复，原 .env 不会被自动改写。
+        mapping.pop("AI_CHAT", None)
+        config = Config.from_env_map(mapping)
+        notes.append("AI_CHAT 配置无效，已载入默认陪聊配置；请检查后重新保存")
 
     if not config.accounts:
         notes.append("TASKS 里没有账号 —— 点「＋ 添加账号」会自动打开浏览器登录")

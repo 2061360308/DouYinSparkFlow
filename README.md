@@ -37,6 +37,12 @@
 
 ## 🚀 使用方法
 
+### AI 陪聊（本 fork 新增）
+
+在应用的「AI 陪聊」页面填写 DeepSeek API Key、单独选择陪聊好友并启动。支持多个 AI 服务、OpenAI 兼容接口、角色提示词和多轮上下文。已有配置不会自动启用陪聊；原续火花任务保持独立。
+
+详细使用与扩展说明见 [AI 陪聊](docs/guide/AI陪聊.md)。源码可执行 `python main.py chat` 持续运行，Ctrl+C 停止。
+
 保姆级教程见 [项目文档-https://oilu.cn/DouYinSparkFlow](https://oilu.cn/DouYinSparkFlow)
 
 ## 📢交流讨论
