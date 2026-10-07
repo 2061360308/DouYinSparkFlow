@@ -17,6 +17,8 @@ WORKER_KINDS = {
     "grabbed",
     "conversations",
     "conversation_progress",
+    "export_progress",
+    "chat_exported",
     "error",
     "done",
 }

@@ -55,6 +55,18 @@
             </p>
           </div>
           <div class="field">
+            <label class="label">导出好友聊天记录</label>
+            <el-select v-model="exportFriends[index]" class="target-select" filterable allow-create
+              default-first-option placeholder="选择好友，或输入好友抖音号 / 会话 ID">
+              <el-option v-for="name in account.conversations" :key="name" :label="name" :value="name" />
+            </el-select>
+            <div style="display: flex; gap: 8px; margin-top: 8px">
+              <button class="mini-btn" :disabled="running || !exportFriends[index]" @click="startExport(account, index)">导出 TXT + JSON</button>
+              <button class="mini-btn" @click="openExports">打开导出目录</button>
+            </div>
+            <p class="field-hint">自动向上加载文字消息。图片、视频、语音不导出；结果会注明实际时间范围，无法保证全部历史。打开会话可能改变未读状态。</p>
+          </div>
+          <div class="field">
             <label class="label">Cookies</label>
             <textarea v-model="account.cookies" class="input textarea" rows="3" placeholder='单行 JSON 数组，对应 .env 的 COOKIES_抖音号' @input="emitChange" />
           </div>
@@ -93,6 +105,7 @@ const emit = defineEmits(['change', 'refresh'])
 
 const activeSession = ref(null)
 const running = ref(false)
+const exportFriends = ref({})
 
 function emitChange() { emit('change') }
 
@@ -124,18 +137,32 @@ async function startConversations(account) {
   )
 }
 
+async function startExport(account, index) {
+  await openSession('account_chat_export_start',
+    { unique_id: account.unique_id, friend: exportFriends.value[index] },
+    `导出聊天记录：${exportFriends.value[index]}`, account.unique_id)
+}
+
+async function openExports() {
+  try { await py('chat_exports_open') }
+  catch (e) { ElMessage({ type: 'error', message: String(e.message || e) }) }
+}
+
 async function openSession(method, payload, title, uniqueId) {
+  if (running.value) return
+  running.value = true
   try {
     const res = await py(method, payload)
     if (!res?.ok) throw new Error(res?.error || '启动失败')
     running.value = true
     activeSession.value = {
       id: res.session,
-      kind: method === 'account_conversations_start' ? 'conversations' : 'login',
+      kind: method === 'account_chat_export_start' ? 'export' : method === 'account_conversations_start' ? 'conversations' : 'login',
       title,
       uniqueId,
     }
   } catch (e) {
+    running.value = false
     ElMessage({ type: 'error', message: String(e.message || e) })
   }
 }
