@@ -2,7 +2,7 @@
   <div class="ai-page">
     <section class="card">
       <div class="card-heading">
-        <div><h2>AI 陪聊</h2><p>只回复选定好友的新文字消息。关闭程序会停止陪聊。</p></div>
+        <div><h2>AI 陪聊</h2><p>回复选定好友和群聊的新文字消息。关闭程序会停止陪聊。</p></div>
         <span class="badge" :class="{ live: status.running }">{{ status.stopping ? '正在停止' : status.running ? '运行中' : '未启动' }}</span>
       </div>
       <div class="actions">
@@ -11,7 +11,7 @@
         <span class="hint">本次已回复 {{ status.sent || 0 }} 条 · 异常 {{ status.errors || 0 }} 次</span>
       </div>
       <p class="hint">启动时使用当前配置。修改后停止并重新启动即可生效；不会替代原来的续火花任务。</p>
-      <p class="hint">启用后，所选好友的新文字消息会发送至你配置的 AI 服务用于生成回复。API 测试只发送一句测试问候。</p>
+      <p class="hint">启用后，所选会话的新文字消息会发送至你配置的 AI 服务用于生成回复。API 测试只发送一句测试问候。</p>
     </section>
 
     <section class="card">
@@ -41,12 +41,13 @@
     </section>
 
     <section class="card">
-      <h2>陪聊好友</h2>
-      <p class="hint">与续火花好友名单独立。仅支持私聊；重名时请输入抖音号或 UID。</p>
+      <h2>陪聊好友与群聊</h2>
+      <p class="hint">与续火花名单独立。可选好友或群名；重名时输入会话 ID，好友也可用抖音号或 UID。</p>
+      <p class="hint">选中的群聊会回复群成员的新文字消息，无需 @；连续消息合并回复，并沿用回复间隔。不会自动加入未选择的群。</p>
       <p v-if="!config.accounts.length" class="hint">请先在「账户配置」中添加并登录账号。</p>
       <div v-for="account in config.accounts" :key="account.unique_id" class="account-row">
         <label class="label">{{ account.username || account.unique_id }}</label>
-        <el-select v-model="account.ai_targets" multiple filterable allow-create default-first-option :disabled="status.running" class="friend-select" placeholder="选择陪聊好友，也可输入抖音号或 UID" @change="change">
+        <el-select v-model="account.ai_targets" multiple filterable allow-create default-first-option :disabled="status.running" class="friend-select" placeholder="选择好友或群名，也可输入会话 ID" @change="change">
           <el-option v-for="name in friendOptions(account)" :key="name" :label="name" :value="name" />
         </el-select>
       </div>
@@ -63,7 +64,7 @@
           </div>
         </div>
       </fieldset>
-      <p class="hint">上下文只在本次运行内存中保留，按账号和好友隔离；图片、视频、表情与群聊暂不回复。</p>
+      <p class="hint">上下文只在本次运行内存中保留，按账号和会话隔离；群成员使用独立标签区分。图片、视频、表情暂不回复。</p>
     </section>
 
     <section class="card"><h2>陪聊状态</h2><p v-if="!status.logs?.length" class="hint">启动后会在这里显示连接和发送结果。</p><div class="logs" aria-live="polite"><div v-for="(log, i) in status.logs" :key="i" class="log" :class="{ danger: log.kind === 'error' }"><time>{{ log.time }}</time><span>{{ log.message }}</span></div></div></section>

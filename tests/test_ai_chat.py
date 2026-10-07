@@ -69,6 +69,28 @@ class ReplyEngineTests(unittest.TestCase):
         self.assertIsNone(self.engine.prepare("a", [row("1")], now=161))
         self.assertIsNotNone(self.engine.prepare("a", [row("1")], now=163))
 
+    def test_group_members_are_distinct_stable_and_not_forwarded_as_ids(self):
+        rows = [{**row('1', '你好'), 'sender_id': 'uid-alice'},
+                {**row('2', '晚上好', at=102), 'sender_id': 'uid-bob'},
+                {**row('3', '一起聊聊', at=103), 'sender_id': 'uid-alice'}]
+        pending = self.engine.prepare('group', rows, is_group=True)
+        self.assertEqual(pending.text, '[成员1] 你好\n[成员2] 晚上好\n[成员1] 一起聊聊')
+        messages = self.engine.messages(pending)
+        self.assertIn('多人群聊', messages[0]['content'])
+        self.assertNotIn('uid-alice', json.dumps(messages))
+        self.engine.commit(pending, '大家好', now=104)
+        self.assertIsNone(self.engine.prepare('group', rows, is_group=True))
+        next_ = self.engine.prepare('group', [{**row('4', at=105), 'sender_id':'uid-bob'}], is_group=True)
+        self.assertEqual(next_.text, '[成员2] 你好')
+        other = self.engine.prepare('other-group', [{**row('4', at=105), 'sender_id':'uid-bob'}], is_group=True)
+        self.assertEqual(other.text, '[成员1] 你好')
+
+    def test_group_own_history_and_unknown_members(self):
+        self.assertIsNone(self.engine.prepare('group', [row('old', at=99), row('self', own=True)], is_group=True))
+        self.assertIsNone(self.engine.prepare('group', [row('member'), row('manual', at=102, own=True)], is_group=True))
+        pending = self.engine.prepare('group', [row('member')], is_group=True)
+        self.assertEqual(pending.text, '[未识别成员] 你好')
+
 
 class ConfigTests(unittest.TestCase):
     def test_multiple_providers_and_target_lists_roundtrip(self):
@@ -150,15 +172,27 @@ class ProviderTests(unittest.TestCase):
 
 
 class TargetAndLifecycleTests(unittest.TestCase):
-    def test_exact_resolution_rejects_groups_missing_and_ambiguous_names(self):
+    def test_exact_resolution_rejects_missing_and_ambiguous_names(self):
         im = MagicMock(last_scan={'scanned_all':True})
         im.iter_conversations.return_value = [{'conv_id':'a','title':'小明','is_group':False}]
         self.assertEqual(resolve_targets(im,['小明'],threading.Event())[0]['conv_id'],'a')
-        for hits in [[{'conv_id':'a','title':'小明','is_group':True}],
-                     [{'conv_id':'a','title':'小明','is_group':False},{'conv_id':'b','title':'小明','is_group':False}],
+        for hits in [[{'conv_id':'a','title':'小明','is_group':False},{'conv_id':'b','title':'小明','is_group':False}],
                      [{'conv_id':'a','title':'小明明','is_group':False}]]:
             im.iter_conversations.return_value=hits
             with self.assertRaises(ValueError):resolve_targets(im,['小明'],threading.Event())
+
+    def test_groups_match_title_or_id_without_matching_member_identity(self):
+        im = MagicMock(last_scan={'scanned_all': True})
+        group = {'conv_id': 'group-1', 'title': '聊天群', 'nickname': '成员昵称', 'is_group': True}
+        im.iter_conversations.return_value = [group]
+        self.assertEqual(resolve_targets(im, ['聊天群'], threading.Event()), [group])
+        self.assertEqual(resolve_targets(im, ['group-1'], threading.Event()), [group])
+        with self.assertRaises(ValueError):
+            resolve_targets(im, ['成员昵称'], threading.Event())
+        im.iter_conversations.return_value = [group, {**group, 'conv_id': 'group-2'}]
+        with self.assertRaises(ValueError):
+            resolve_targets(im, ['聊天群'], threading.Event())
+        self.assertEqual(resolve_targets(im, ['group-1'], threading.Event()), [group])
 
     def test_controller_start_stop_and_no_double_start(self):
         entered = threading.Event()
@@ -209,6 +243,26 @@ class TargetAndLifecycleTests(unittest.TestCase):
         self.assertTrue(any(e[0]=='sent' for e in events))
         self.assertEqual(provider.reply.call_args.args[0][-1],{'role':'user','content':'你好'})
 
+    def test_runner_generates_and_sends_to_selected_group(self):
+        stop = threading.Event()
+        config = Config(ai_chat=ai_config())
+        account = Account(username='test', cookies='[]', ai_targets=['群聊'])
+        im = MagicMock(ready=True, last_scan={'scanned_all': True})
+        im.wait_ready.return_value = {'status': 'READY'}
+        hit = {'conv_id':'group', 'display':'群聊', 'title':'群聊', 'is_group':True}
+        im.iter_conversations.return_value = [hit]
+        im.read_chat_messages.return_value = [{**row('1', at=time.time()+1), 'sender_id':'member'}]
+        provider = MagicMock()
+        provider.reply.return_value = '大家好'
+        def send(*args, **kwargs):
+            stop.set()
+            return {'ok': True}
+        im.type_and_send.side_effect = send
+        with patch('cloakbrowser.launch'), patch('core.ai.runner.DouyinIM', return_value=im), patch('core.ai.runner.create_provider', return_value=provider):
+            run_account(account, config.ai_chat, config, stop, lambda *_: None)
+        im.type_and_send.assert_called_once_with(hit, '大家好', log_content=False)
+        self.assertEqual(provider.reply.call_args.args[0][-1]['content'], '[成员1] 你好')
+
 
 class MessageReaderTests(unittest.TestCase):
     def test_selection_rescans_cached_conversations(self):
@@ -234,7 +288,7 @@ class MessageReaderTests(unittest.TestCase):
                 page.evaluate('''() => {
                   for (const m of [
                     {serverId:'2',conversationId:'a',createdAt:new Date(102000),content:JSON.stringify({text:'自己'}),isMyMessage:true},
-                    {serverId:'1',conversationId:'a',createdAt:new Date(101000),content:JSON.stringify({text:'好友'}),isMyMessage:false},
+                    {serverId:'1',conversationId:'a',createdAt:new Date(101000),content:JSON.stringify({text:'好友'}),isMyMessage:false,sender:'member-id'},
                     {serverId:'3',conversationId:'b',createdAt:new Date(103000),content:JSON.stringify({text:'错误会话'})},
                     {serverId:'4',conversationId:'a',createdAt:new Date(104000),content:JSON.stringify({url:'视频'})},
                     {serverId:'1',conversationId:'a',createdAt:new Date(101000),content:JSON.stringify({text:'重复渲染'})}
@@ -243,6 +297,7 @@ class MessageReaderTests(unittest.TestCase):
                 rows=page.evaluate(JS_CHAT_MESSAGES,'a')
                 self.assertEqual([r['id'] for r in rows],['1','2'])
                 self.assertTrue(rows[1]['from_me']);self.assertEqual(rows[0]['created_at'],101)
+                self.assertEqual(rows[0]['sender_id'], 'member-id')
                 from core.douyin_im import DouyinIM
                 im = object.__new__(DouyinIM)
                 im.page = page

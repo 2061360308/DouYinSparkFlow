@@ -14,6 +14,7 @@ class PendingReply:
     ids: tuple[str, ...]
     text: str
     latest_at: float
+    is_group: bool = False
 
 
 class ReplyEngine:
@@ -24,6 +25,7 @@ class ReplyEngine:
         self.history = {}
         self.last_reply = {}
         self.retry_after = {}
+        self.sender_labels = {}
 
     def consume(self, pending):
         for mid in pending.ids:
@@ -31,7 +33,7 @@ class ReplyEngine:
         while len(self.seen) > 4096:
             self.seen.popitem(last=False)
 
-    def prepare(self, conv_id, rows, now=None):
+    def prepare(self, conv_id, rows, now=None, is_group=False):
         now = time.time() if now is None else now
         if now < self.retry_after.get(conv_id, 0):
             return None
@@ -46,12 +48,29 @@ class ReplyEngine:
                     and (conv_id, str(r["id"])) not in self.seen and r.get("text")]
         if not incoming:
             return None
+        texts = []
+        labels = self.sender_labels.setdefault(conv_id, {}) if is_group else {}
+        for message in incoming:
+            if is_group:
+                sender = str(message.get("sender_id") or "")
+                if sender and sender not in labels:
+                    labels[sender] = f"成员{len(labels) + 1}"
+                label = labels.get(sender, "未识别成员")
+                texts.append(f"[{label}] {message['text']}")
+            else:
+                texts.append(message["text"])
         return PendingReply(conv_id, tuple(str(r["id"]) for r in incoming),
-                            "\n".join(r["text"] for r in incoming)[-8000:],
-                            incoming[-1]["created_at"])
+                            "\n".join(texts)[-8000:],
+                            incoming[-1]["created_at"], is_group)
 
     def messages(self, pending):
-        return [{"role": "system", "content": self.config.system_prompt}] + \
+        prompt = self.config.system_prompt
+        if pending.is_group:
+            prompt += ("\n当前是多人群聊，[成员N] 是同一成员的固定标签，"
+                       "[未识别成员] 的消息可能来自不同人。根据发言顺序和成员标签理解对话，"
+                       "以一条简短消息自然参与聊天，不把不同成员当成同一个人，"
+                       "不要在回复中输出这些内部标签。")
+        return [{"role": "system", "content": prompt}] + \
             self.history.get(pending.conv_id, []) + [{"role": "user", "content": pending.text}]
 
     def commit(self, pending, reply, now=None):

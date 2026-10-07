@@ -401,7 +401,9 @@ JS_CHAT_MESSAGES = """(convId) => {
       if (!Number.isFinite(timestamp) || timestamp <= 0) continue;
       // DOM 发送方标记补充模型判断，避免把自己发的消息再次交给 AI。
       const fromMe = msg.isMyMessage === true || !!el.closest('.MessageBoxContentisFromMe');
-      result.push({id, text: text.trim(), created_at: timestamp, from_me: fromMe});
+      const sender = msg.sender;
+      result.push({id, text: text.trim(), created_at: timestamp, from_me: fromMe,
+                   sender_id: typeof sender === 'string' ? sender : ''});
     } catch (_) { /* 未识别的媒体/系统消息跳过 */ }
   }
   return result.sort((a, b) => a.created_at - b.created_at);

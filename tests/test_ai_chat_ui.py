@@ -53,6 +53,7 @@ class AIChatUITests(unittest.TestCase):
                         page.goto(DIST.as_uri())
                         page.expose_function('$py', bridge.call)
                         page.get_by_role('button', name='AI 陪聊', exact=True).click()
+                        page.get_by_role('heading', name='陪聊好友与群聊', exact=True).wait_for()
                         self.assertEqual(page.get_by_label('API Key', exact=True).get_attribute('type'), 'password')
                         page.get_by_role('button', name='添加服务', exact=True).click()
                         page.wait_for_function("document.querySelector('#ai-name').value === '新服务'")

@@ -20,20 +20,19 @@ def resolve_targets(im, targets, stop):
         if stop.is_set():
             return []
         for key in wanted:
-            if any(norm(hit.get(field) or "") == key for field in
-                   ("remark", "nickname", "douyin_id", "uid", "sec_uid", "title")):
+            fields = ("title", "conv_id") if hit.get("is_group") else (
+                "remark", "nickname", "douyin_id", "uid", "sec_uid", "title", "conv_id")
+            if any(norm(hit.get(field) or "") == key for field in fields):
                 matches[key][str(hit["conv_id"])] = dict(hit)
     if not (im.last_scan or {}).get("scanned_all"):
         raise ValueError("会话列表未扫描完整，暂不启动陪聊，请增加扫描预算后重试")
     result = {}
     for key, found in matches.items():
         if not found:
-            raise ValueError(f"未找到陪聊好友：{key}")
+            raise ValueError(f"未找到陪聊会话：{key}")
         if len(found) != 1:
-            raise ValueError(f"陪聊好友存在重名：{key}，请改用抖音号或 UID")
+            raise ValueError(f"陪聊会话存在重名：{key}，请改用会话 ID；好友也可用抖音号或 UID")
         hit = next(iter(found.values()))
-        if hit.get("is_group"):
-            raise ValueError(f"{key} 是群聊，当前版本只支持好友私聊")
         result[str(hit["conv_id"])] = hit
     return list(result.values())
 
@@ -69,9 +68,10 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
                       max_steps=browser_config.im_max_steps)
         if im.wait_ready().get("status") != STATUS_READY:
             raise ValueError(f"{name} 登录不可用，请刷新登录信息")
+        emit("status", f"{name}：已连接，正在扫描好友和群聊会话")
         hits = resolve_targets(im, account.ai_targets, stop)
         engine = ReplyEngine(config, started_at=started_at)
-        emit("status", f"{name}：已监听 {len(hits)} 位好友，仅回复启动后的文字消息")
+        emit("status", f"{name}：已监听 {len(hits)} 个会话（含 {sum(bool(h.get('is_group')) for h in hits)} 个群聊），仅回复启动后的文字消息")
         while not stop.is_set():
             for hit in hits:
                 if stop.is_set():
@@ -82,7 +82,7 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
                 if not im.select_conversation(hit["conv_id"]):
                     continue
                 page.wait_for_timeout(600)
-                pending = engine.prepare(cid, im.read_chat_messages(cid))
+                pending = engine.prepare(cid, im.read_chat_messages(cid), is_group=bool(hit.get("is_group")))
                 if pending is None:
                     continue
                 emit("status", f"{name} → {hit['display']}：正在生成回复")
@@ -101,7 +101,7 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
                     emit("error", f"{name}：{message}，60 秒后再试")
                     continue
                 # API 等待期间有新消息或手动回复，丢弃过时结果，下轮重新判断。
-                fresh = engine.prepare(cid, im.read_chat_messages(cid))
+                fresh = engine.prepare(cid, im.read_chat_messages(cid), is_group=bool(hit.get("is_group")))
                 if fresh is None or fresh.ids != pending.ids or stop.is_set():
                     continue
                 # 发送前就去重；回执缺失不重发，防止同一回复发送两次。

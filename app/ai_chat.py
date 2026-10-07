@@ -55,7 +55,7 @@ class ChatController:
             provider.close()
             accounts = [a for a in snapshot.accounts if a.ai_targets]
             if not accounts:
-                raise ValueError("请先在 AI 陪聊页面勾选至少一位陪聊好友")
+                raise ValueError("请先在 AI 陪聊页面选择至少一个好友或群聊")
             for account in accounts:
                 cookies = json.loads(account.cookies or "[]")
                 if not isinstance(cookies, list) or not cookies:
