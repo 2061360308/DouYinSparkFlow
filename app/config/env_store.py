@@ -1,14 +1,20 @@
 """读写项目根的 .env（位置见 paths.ENV_FILE）。
 
 写入策略是「就地更新」：只改动本工具管理的那些键，你手写的注释和其他变量原样保留。
-（用 python-dotenv 的 set_key / unset_key 实现，它们会保留文件原有结构与注释行。）
+一次生成完整配置再原子替换，保留文件原有结构与注释行。
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import stat
+import tempfile
+import threading
+import time
 
-from dotenv import dotenv_values, set_key, unset_key
+from dotenv import dotenv_values
+from dotenv.parser import parse_stream
 
 from app.config.models import Config
 from app.paths import ENV_FILE
@@ -29,6 +35,59 @@ HEADER = """# DouYinSparkFlow 配置文件
 # - 本文件生成在项目根目录，主程序直接用；Docker → 复制 / 挂载为 ./config/.env
 # - 工具自己的数据（profiles/、profiles.json、local.json）在 app/ 下
 """
+
+_WRITE_LOCK = threading.RLock()
+
+
+def _write_updates(target: Path, updates: dict, remove=()) -> int:
+    """Batch updates, preserving unknown lines; retry temporary Windows locks."""
+    with _WRITE_LOCK:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        existing = target.exists()
+        mode = stat.S_IMODE(target.stat().st_mode) if existing else None
+        original = target.read_text(encoding="utf-8") if existing else HEADER
+        import io
+        lines = []
+        written = set()
+        removed = set()
+        for binding in parse_stream(io.StringIO(original)):
+            key = binding.key
+            if key in remove:
+                removed.add(key)
+            elif key in updates:
+                if key not in written:
+                    lines.append(f"{key}={updates[key]}\n")
+                    written.add(key)
+            else:
+                lines.append(binding.original.string)
+        content = "".join(lines)
+        for key, value in updates.items():
+            if key not in written:
+                if content and not content.endswith("\n"):
+                    content += "\n"
+                content += f"{key}={value}\n"
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n",
+                                             prefix=".tmp_", dir=target.parent, delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if mode is not None:
+                os.chmod(temporary, mode)
+            for attempt in range(7):
+                try:
+                    os.replace(temporary, target)
+                    break
+                except PermissionError as exc:
+                    if os.name != "nt" or getattr(exc, "winerror", None) not in (5, 32, 33) or attempt == 6:
+                        raise
+                    time.sleep(min(0.05 * 2 ** attempt, 0.5))
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        return len(removed)
 
 
 def resolve_path(path=None) -> Path:
@@ -120,15 +179,11 @@ def save_config(config: Config, path=None) -> tuple:
     notes: list = []
 
     if not target.exists():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(HEADER, encoding="utf-8")
         notes.append(f"已创建 {target.name}")
 
     managed = config.to_env_map()
-    for key, value in managed.items():
-        # quote_mode="never"：与 .env.example / index.html 的写法保持一致，不加引号，
-        # 否则 Docker 的 env_file 解析器不会还原被转义的 \" ，JSON 值会坏掉。
-        set_key(str(target), key, value, quote_mode="never", encoding="utf-8")
+    # 保持不加引号，与 Docker env_file 的 JSON 读取方式一致。
+    _write_updates(target, managed)
 
     orphans = sorted(
         key
@@ -144,11 +199,6 @@ def save_config(config: Config, path=None) -> tuple:
 def unset_keys(keys, path=None) -> int:
     """删除指定键，返回实际删除的个数。"""
     target = resolve_path(path)
-    removed = 0
-    for key in keys:
-        try:
-            if unset_key(str(target), key, quote_mode="never", encoding="utf-8"):
-                removed += 1
-        except Exception:
-            continue
-    return removed
+    if not target.exists():
+        return 0
+    return _write_updates(target, {}, set(keys))

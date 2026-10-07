@@ -161,7 +161,10 @@ class ConfigService:
             raise AppError("save_config 需要 config/proxy 对象")
         config = self._dict_to_config(payload.get("config") or {})
 
-        notes, _orphans = env_store.save_config(config, self.env_path)
+        try:
+            notes, _orphans = env_store.save_config(config, self.env_path)
+        except PermissionError:
+            raise AppError("配置未保存：.env 被其他程序占用或没有写入权限，请关闭占用它的程序后重试。原文件已保留。") from None
         try:
             settings.save_proxy(payload.get("proxy") or {})
         except Exception as exc:
