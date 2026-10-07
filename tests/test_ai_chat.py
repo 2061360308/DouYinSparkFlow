@@ -32,6 +32,24 @@ class ReplyEngineTests(unittest.TestCase):
     def setUp(self):
         self.engine = ReplyEngine(ai_config(), started_at=100)
 
+    def test_seed_and_message_order_handle_incorrect_sdk_clock(self):
+        old = [{**row('old-own', at=99999, own=True), 'order':'10'},
+               {**row('old-incoming', at=999999), 'order':'11'}]
+        self.engine.seed('a', old)
+        self.assertIsNone(self.engine.prepare('a', old))
+        incoming = {**row('new', at=1), 'order':'12'}
+        pending = self.engine.prepare('a', old + [incoming])
+        self.assertEqual(pending.ids, ('new',))
+        manual = {**row('manual', at=2, own=True), 'order':'13'}
+        self.assertIsNone(self.engine.prepare('a', old + [incoming, manual]))
+        self.assertIsNone(self.engine.prepare('a', [{**row('older-page', at=999999), 'order':'9'}]))
+
+    def test_sdk_order_sorts_messages_even_when_timestamps_disagree(self):
+        self.engine.seed('a', [])
+        pending = self.engine.prepare('a', [{**row('later', '第二句', at=1), 'order':'3'},
+                                            {**row('first', '第一句', at=99999), 'order':'2'}])
+        self.assertEqual(pending.text, '第一句\n第二句')
+
     def test_history_and_own_messages_are_not_replied(self):
         self.assertIsNone(self.engine.prepare("a", [row("old", at=99)]))
         self.assertIsNone(self.engine.prepare("a", [row("own", own=True)]))
@@ -214,7 +232,7 @@ class TargetAndLifecycleTests(unittest.TestCase):
         im.wait_ready.return_value={'status':'READY'}
         hit={'conv_id':'a','display':'好友','title':'好友','is_group':False}
         im.iter_conversations.return_value=[hit]
-        im.read_chat_messages.return_value=[row('1',at=time.time()+1)]
+        im.read_chat_messages.side_effect=[[], [row('1',at=time.time()+1)]]
         provider = MagicMock()
         def reply(messages):stop.set();return '不得发送'
         provider.reply.side_effect=reply
@@ -232,7 +250,7 @@ class TargetAndLifecycleTests(unittest.TestCase):
         im.wait_ready.return_value={'status':'READY'}
         hit={'conv_id':'a','display':'好友','title':'好友','is_group':False}
         im.iter_conversations.return_value=[hit]
-        im.read_chat_messages.return_value=[row('1',at=time.time()+1)]
+        im.read_chat_messages.side_effect=[[], [row('1',at=time.time()+1)], [row('1',at=time.time()+1)]]
         provider = MagicMock();provider.reply.return_value='你好，我是 AI。'
         events = []
         def send(*args, **kwargs):stop.set();return {'ok':True}
@@ -251,7 +269,8 @@ class TargetAndLifecycleTests(unittest.TestCase):
         im.wait_ready.return_value = {'status': 'READY'}
         hit = {'conv_id':'group', 'display':'群聊', 'title':'群聊', 'is_group':True}
         im.iter_conversations.return_value = [hit]
-        im.read_chat_messages.return_value = [{**row('1', at=time.time()+1), 'sender_id':'member'}]
+        rows = [{**row('1', at=time.time()+1), 'sender_id':'member'}]
+        im.read_chat_messages.side_effect = [[], rows, rows]
         provider = MagicMock()
         provider.reply.return_value = '大家好'
         def send(*args, **kwargs):
@@ -287,20 +306,23 @@ class MessageReaderTests(unittest.TestCase):
                 page.goto('data:text/html,<div id="messages"></div>')
                 page.evaluate('''() => {
                   for (const m of [
-                    {serverId:'2',conversationId:'a',createdAt:new Date(102000),content:JSON.stringify({text:'自己'}),isMyMessage:true},
-                    {serverId:'1',conversationId:'a',createdAt:new Date(101000),content:JSON.stringify({text:'好友'}),isMyMessage:false,sender:'member-id'},
+                    {serverId:'2',conversationId:'a',createdAt:new Date(102000),content:JSON.stringify({text:'自己'}),isMyMessage:true,sender:'self-id',orderInConversation:'1002'},
+                    {serverId:'1',conversationId:'a',createdAt:new Date(101000),content:JSON.stringify({text:'好友'}),isMyMessage:true,sender:'member-id',orderInConversation:'1001'},
                     {serverId:'3',conversationId:'b',createdAt:new Date(103000),content:JSON.stringify({text:'错误会话'})},
                     {serverId:'4',conversationId:'a',createdAt:new Date(104000),content:JSON.stringify({url:'视频'})},
                     {serverId:'1',conversationId:'a',createdAt:new Date(101000),content:JSON.stringify({text:'重复渲染'})}
                   ]) {const el=document.createElement('div');el.setAttribute('data-e2e','msg-item-content');el.__reactFiberTest={memoizedProps:{message:m}};document.querySelector('#messages').append(el)}
                 }''')
-                rows=page.evaluate(JS_CHAT_MESSAGES,'a')
+                rows=page.evaluate(JS_CHAT_MESSAGES, {'conv_id':'a', 'self_uid':'self-id'})
                 self.assertEqual([r['id'] for r in rows],['1','2'])
                 self.assertTrue(rows[1]['from_me']);self.assertEqual(rows[0]['created_at'],101)
                 self.assertEqual(rows[0]['sender_id'], 'member-id')
+                self.assertFalse(rows[0]['from_me'])
+                self.assertEqual(rows[0]['order'], '1001')
                 from core.douyin_im import DouyinIM
                 im = object.__new__(DouyinIM)
                 im.page = page
+                im._state = {'user_id':'self-id'}
                 im._current_conv = lambda: {"convId": "a", "index": 0, "title": "好友"}
                 self.assertEqual(im.read_chat_messages('a'), rows)
                 self.assertEqual(im.read_chat_messages('b'), [])

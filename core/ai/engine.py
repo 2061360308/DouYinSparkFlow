@@ -26,6 +26,17 @@ class ReplyEngine:
         self.last_reply = {}
         self.retry_after = {}
         self.sender_labels = {}
+        self.baselines = {}
+
+    def seed(self, conv_id, rows):
+        """Ignore the initial screen; SDK message order avoids unreliable wall clocks."""
+        for row in rows:
+            if row.get("id"):
+                self.seen[(conv_id, str(row["id"]))] = True
+        orders = [int(r["order"]) for r in rows if str(r.get("order", "")).isdigit()]
+        self.baselines[conv_id] = max(orders, default=0)
+        while len(self.seen) > 4096:
+            self.seen.popitem(last=False)
 
     def consume(self, pending):
         for mid in pending.ids:
@@ -39,12 +50,14 @@ class ReplyEngine:
             return None
         if now - self.last_reply.get(conv_id, 0) < self.config.cooldown:
             return None
-        ordered = sorted(rows, key=lambda r: (r.get("created_at", 0), r.get("id", "")))
+        use_order = conv_id in self.baselines and all(str(r.get("order", "")).isdigit() for r in rows)
+        ordered = sorted(rows, key=lambda r: (int(r["order"]) if use_order else r.get("created_at", 0), r.get("id", "")))
         # 手动或其他任务已经回复过的消息不再补发 AI 回复。
         own_at = max((r.get("created_at", 0) for r in ordered if r.get("from_me")), default=0)
+        own_order = max((int(r["order"]) for r in ordered if r.get("from_me")), default=0) if use_order else 0
         incoming = [r for r in ordered if r.get("id") and not r.get("from_me")
-                    and r.get("created_at", 0) >= self.started_at
-                    and r.get("created_at", 0) > own_at
+                    and ((int(r["order"]) > max(self.baselines[conv_id], own_order)) if use_order else
+                         (r.get("created_at", 0) >= self.started_at and r.get("created_at", 0) > own_at))
                     and (conv_id, str(r["id"])) not in self.seen and r.get("text")]
         if not incoming:
             return None

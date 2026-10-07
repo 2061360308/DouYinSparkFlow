@@ -71,7 +71,15 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
         emit("status", f"{name}：已连接，正在扫描好友和群聊会话")
         hits = resolve_targets(im, account.ai_targets, stop)
         engine = ReplyEngine(config, started_at=started_at)
-        emit("status", f"{name}：已监听 {len(hits)} 个会话（含 {sum(bool(h.get('is_group')) for h in hits)} 个群聊），仅回复启动后的文字消息")
+        emit("status", f"{name}：正在初始化会话，跳过现有消息")
+        for hit in hits:
+            if stop.is_set():
+                return
+            if not im.select_conversation(hit['conv_id']):
+                raise ValueError(f"无法初始化会话：{hit['display']}，请重新启动陪聊")
+            page.wait_for_timeout(600)
+            engine.seed(str(hit['conv_id']), im.read_chat_messages(str(hit['conv_id'])))
+        emit("status", f"{name}：已监听 {len(hits)} 个会话（含 {sum(bool(h.get('is_group')) for h in hits)} 个群聊），仅回复监听就绪后的新文字消息")
         while not stop.is_set():
             for hit in hits:
                 if stop.is_set():

@@ -2,7 +2,7 @@
   <div class="ai-page">
     <section class="card">
       <div class="card-heading">
-        <div><h2>AI 陪聊</h2><p>回复选定好友和群聊的新文字消息。关闭程序会停止陪聊。</p></div>
+        <div><h2>AI 陪聊</h2><p>等待「已监听」后，回复选定好友和群聊的新文字消息。关闭程序会停止陪聊。</p></div>
         <span class="badge" :class="{ live: status.running }">{{ status.stopping ? '正在停止' : status.running ? '运行中' : '未启动' }}</span>
       </div>
       <div class="actions">

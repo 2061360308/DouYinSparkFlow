@@ -376,7 +376,9 @@ JS_MSG_STATE = """(() => {
 # 三、protobuf 最小解码（Python 原生大整数，不存在 JS 的 2^53 精度坑）
 # ===========================================================================
 
-JS_CHAT_MESSAGES = """(convId) => {
+JS_CHAT_MESSAGES = """(identity) => {
+  const convId = typeof identity === 'string' ? identity : identity.conv_id;
+  const selfUid = typeof identity === 'string' ? '' : String(identity.self_uid || '');
   const seen = new Set();
   const result = [];
   for (const el of document.querySelectorAll('[data-e2e="msg-item-content"]')) {
@@ -400,10 +402,14 @@ JS_CHAT_MESSAGES = """(convId) => {
       const timestamp = new Date(msg.createdAt).getTime() / 1000;
       if (!Number.isFinite(timestamp) || timestamp <= 0) continue;
       // DOM 发送方标记补充模型判断，避免把自己发的消息再次交给 AI。
-      const fromMe = msg.isMyMessage === true || !!el.closest('.MessageBoxContentisFromMe');
       const sender = msg.sender;
+      // isMyMessage can be true even for incoming messages in Douyin's view model.
+      const fromMe = selfUid && typeof sender === 'string' && sender
+        ? sender === selfUid : !!el.closest('.MessageBoxContentisFromMe');
+      const order = String(msg.orderInConversation ?? msg.indexInConversation ?? '');
       result.push({id, text: text.trim(), created_at: timestamp, from_me: fromMe,
-                   sender_id: typeof sender === 'string' ? sender : ''});
+                   sender_id: typeof sender === 'string' ? sender : '',
+                   order: /^\\d+$/.test(order) ? order : ''});
     } catch (_) { /* 未识别的媒体/系统消息跳过 */ }
   }
   return result.sort((a, b) => a.created_at - b.created_at);
@@ -1945,7 +1951,8 @@ class DouyinIM:
         """只读当前已渲染的文字消息。身份/时间取 React 消息模型，不用 DOM 序号。"""
         if str((self._current_conv() or {}).get("convId")) != str(conv_id):
             return []
-        return self.page.evaluate(JS_CHAT_MESSAGES, str(conv_id)) or []
+        return self.page.evaluate(JS_CHAT_MESSAGES, {"conv_id": str(conv_id),
+                                  "self_uid": str(self.self_uid or "")}) or []
 
     def _editor(self):
         for sel in ('[data-e2e="msg-input"] .public-DraftEditor-content',

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 import threading
 from collections import deque
 from contextlib import suppress
@@ -36,6 +37,8 @@ class ChatController:
                                "kind": kind, "message": message})
         if self.callback:
             self.callback(kind, message)
+        # Metadata only: retain diagnostic stages without recording chat text.
+        print(f"[AI] {kind}: {message}", file=sys.stderr, flush=True)
 
     def status(self, _payload=None):
         with self._lock:
