@@ -43,6 +43,8 @@
 
 详细使用与扩展说明见 [AI 陪聊](docs/guide/AI陪聊.md)。源码可执行 `python main.py chat` 持续运行，Ctrl+C 停止。
 
+服务器部署时支持按账号保存和复用登录状态，见 [服务器登录状态持久化](docs/server-sessions.md)。
+
 保姆级教程见 [项目文档-https://oilu.cn/DouYinSparkFlow](https://oilu.cn/DouYinSparkFlow)
 
 ## 📢交流讨论

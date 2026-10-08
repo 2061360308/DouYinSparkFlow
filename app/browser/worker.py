@@ -1124,7 +1124,11 @@ class BrowserLoginWorker(threading.Thread):
 
         self.emit("status", "正在读取登录信息…")
 
-        state = self.ctx.storage_state()
+        # Account discovery may reload the page and rotate credentials. Capture
+        # the snapshot afterwards so it belongs to the verified login.
+        info = self.read_account_info(allow_reload=allow_reload)
+        from core.session_store import capture_state
+        state = capture_state(self.ctx)
         raw = state.get("cookies", [])
 
         # 逐条裁剪，丢掉 clean_cookie 判定不可用的（name/domain 为空）——
@@ -1150,8 +1154,10 @@ class BrowserLoginWorker(threading.Thread):
         for origin in state.get("origins", []):
             host = origin.get("origin", "").split("//")[-1].split("/")[0]
             if matches_target(host):
+                entries = origin.get("localStorage", [])
                 local_storage.setdefault(origin["origin"], {}).update(
-                    origin.get("localStorage", {})
+                    {entry['name']: entry['value'] for entry in entries}
+                    if isinstance(entries, list) else entries
                 )
 
         try:
@@ -1159,7 +1165,6 @@ class BrowserLoginWorker(threading.Thread):
         except Exception:
             user_agent = ""
 
-        info = self.read_account_info(allow_reload=allow_reload)
         # 放在 read_account_info 之后：允许刷新时它会刷新页面，
         # 刷新后重新收到的 SSR 才是当下的登录态。
         verdict = self._login_verdict(deep=deep_login)

@@ -282,6 +282,44 @@ class TargetAndLifecycleTests(unittest.TestCase):
         im.type_and_send.assert_called_once_with(hit, '大家好', log_content=False)
         self.assertEqual(provider.reply.call_args.args[0][-1]['content'], '[成员1] 你好')
 
+    def test_disappeared_chat_page_exits_instead_of_silently_polling_forever(self):
+        stop = threading.Event()
+        config = Config(ai_chat=ai_config())
+        config.ai_chat.poll_interval = 0
+        account = Account(username='test', cookies='[]', ai_targets=['好友'])
+        im = MagicMock(ready=True, last_scan={'scanned_all': True})
+        im.wait_ready.return_value = {'status': 'READY'}
+        im.iter_conversations.return_value = [{'conv_id':'a', 'display':'好友', 'title':'好友'}]
+        im.read_chat_messages.return_value = []
+        with patch('cloakbrowser.launch') as launch, patch('core.ai.runner.DouyinIM', return_value=im), patch('core.ai.runner.create_provider') as factory:
+            page = launch.return_value.new_context.return_value.new_page.return_value
+            page.evaluate.return_value = {'hasChatRoot': False, 'loginVisible': True}
+            with self.assertRaisesRegex(ValueError, '连续 3 次不可用'):
+                run_account(account, config.ai_chat, config, stop, lambda *_: None)
+            self.assertEqual(page.evaluate.call_count, 3)
+            im.select_conversation.assert_called_once()  # initial history only
+            im.type_and_send.assert_not_called()
+            launch.return_value.close.assert_called_once()
+            factory.return_value.close.assert_called_once()
+
+    def test_present_chat_root_with_all_selections_failing_exits(self):
+        stop = threading.Event()
+        config = Config(ai_chat=ai_config())
+        config.ai_chat.poll_interval = 0
+        account = Account(username='test', cookies='[]', ai_targets=['好友'])
+        im = MagicMock(ready=True, last_scan={'scanned_all': True})
+        im.wait_ready.return_value = {'status': 'READY'}
+        im.iter_conversations.return_value = [{'conv_id':'a', 'display':'好友', 'title':'好友'}]
+        im.read_chat_messages.return_value = []
+        im.select_conversation.side_effect = [True, False, False, False]
+        with patch('cloakbrowser.launch') as launch, patch('core.ai.runner.DouyinIM', return_value=im), patch('core.ai.runner.create_provider'):
+            page = launch.return_value.new_context.return_value.new_page.return_value
+            page.evaluate.return_value = {'hasChatRoot': True, 'loginVisible': False}
+            with self.assertRaisesRegex(ValueError, '连续 3 次不可用'):
+                run_account(account, config.ai_chat, config, stop, lambda *_: None)
+            im.type_and_send.assert_not_called()
+
+
 
 class MessageReaderTests(unittest.TestCase):
     def test_selection_rescans_cached_conversations(self):

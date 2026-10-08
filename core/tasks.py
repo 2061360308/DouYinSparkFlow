@@ -5,7 +5,8 @@ from utils.logger import setup_logger
 from utils.config import get_config, get_userData
 from core.msg_builder import build_message
 from core.browser import get_browser
-from core.douyin_im import DouyinIM, STATUS_READY, norm
+from core.douyin_im import DouyinIM, STATUS_READY, JS_LOGIN_DOM, norm
+from core.session_store import SessionStore, capture_state
 
 
 config = get_config()
@@ -13,7 +14,7 @@ userData = get_userData()
 logger = setup_logger(level=config.get("logLevel", "Info"))
 
 
-def do_user_task(browser, username, cookies, targets):
+def do_user_task(browser, username, cookies, targets, unique_id='', fingerprint=''):
     """一个账号的完整流程：门禁 → 滚动找人 → 发送 → 回执确认。
 
     实现委托给 `core.douyin_im.DouyinIM`：
@@ -22,7 +23,9 @@ def do_user_task(browser, username, cookies, targets):
       任务三（发送）    im.type_and_send —— 真实键盘事件 + HTTP/DOM 回执双确认
     拟人化节奏由 cloakbrowser 的 humanize 负责，这里不再叠加延迟。
     """
-    context = browser.new_context()  # 每个任务使用独立的上下文
+    sessions = SessionStore(unique_id, cookies, fingerprint)
+    state = sessions.load()
+    context = browser.new_context(**({'storage_state':state} if state else {}))
     context.set_default_navigation_timeout(
         config["browserActionTimeout"]
     )  # 导航超时（毫秒，config 已换算好）
@@ -32,7 +35,8 @@ def do_user_task(browser, username, cookies, targets):
 
     page = context.new_page()
 
-    context.add_cookies(cookies)
+    if state is None:
+        context.add_cookies(cookies)
 
     im = None
     try:
@@ -136,6 +140,13 @@ def do_user_task(browser, username, cookies, targets):
             "note": scan.get("note") or "",
         }
     finally:
+        if im is not None and im.ready:
+            try:
+                dom = page.evaluate(JS_LOGIN_DOM)
+                if dom.get('hasChatRoot') and not dom.get('loginVisible'):
+                    sessions.save(capture_state(context))
+            except Exception:
+                logger.warning('登录状态保存失败，请检查数据目录权限')
         if im is not None:
             try:
                 im.detach()
@@ -174,7 +185,8 @@ def runTasks():
         browser = None
         try:
             browser = get_browser(fingerprint)
-            result = do_user_task(browser, username, cookies, targets)
+            result = do_user_task(browser, username, cookies, targets,
+                                  user.get('unique_id', ''), fingerprint or '')
             results.append((username, result))
             if not result.get("ok"):
                 failed += 1

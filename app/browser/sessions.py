@@ -569,6 +569,13 @@ class AccountOperator:
             "fingerprint": session.fingerprint,
             "conversations": [],
         }
+        try:
+            from core.session_store import SessionStore
+            store = SessionStore(unique_id, cookies, session.fingerprint)
+            store.load()
+            store.save(payload.get('storage_state'))
+        except Exception:
+            self._forward(session, 'log', '登录状态快照保存失败；Cookie 仍可正常保存')
         self._forward(
             session,
             "saved",

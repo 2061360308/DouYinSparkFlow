@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Douyin login state every 30 minutes
+
+[Timer]
+OnCalendar=*-*-* *:13,43:00 Asia/Shanghai
+Persistent=false
+AccuracySec=1min
+Unit=douyin-cookie-health.service
+
+[Install]
+WantedBy=timers.target
