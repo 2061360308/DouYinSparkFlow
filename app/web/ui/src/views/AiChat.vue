@@ -2,7 +2,7 @@
   <div class="ai-page">
     <section class="card">
       <div class="card-heading">
-        <div><h2>AI 陪聊</h2><p>等待「已监听」后，回复选定好友和群聊的新文字消息。关闭程序会停止陪聊。</p></div>
+        <div><h2>AI 陪聊</h2><p>等待「已监听」后，回复选定好友和群聊的新文字、emoji、表情及视频分享消息。关闭程序会停止陪聊。</p></div>
         <span class="badge" :class="{ live: status.running }">{{ status.stopping ? '正在停止' : status.running ? '运行中' : '未启动' }}</span>
       </div>
       <div class="actions">
@@ -11,7 +11,7 @@
         <span class="hint">本次已回复 {{ status.sent || 0 }} 条 · 异常 {{ status.errors || 0 }} 次</span>
       </div>
       <p class="hint">启动时使用当前配置。修改后停止并重新启动即可生效；不会替代原来的续火花任务。</p>
-      <p class="hint">启用后，所选会话的新文字消息会发送至你配置的 AI 服务用于生成回复。API 测试只发送一句测试问候。</p>
+      <p class="hint">启用后，所选会话的新文字、emoji、表情及视频分享消息会发送至你配置的 AI 服务用于生成回复。API 测试只发送一句测试问候。</p>
     </section>
 
     <section class="card">
@@ -43,7 +43,7 @@
     <section class="card">
       <h2>陪聊好友与群聊</h2>
       <p class="hint">与续火花名单独立。可选好友或群名；重名时输入会话 ID，好友也可用抖音号或 UID。</p>
-      <p class="hint">选中的群聊会回复群成员的新文字消息，无需 @；连续消息合并回复，并沿用回复间隔。不会自动加入未选择的群。</p>
+      <p class="hint">选中的群聊会回复群成员的新文字、emoji、表情及视频分享消息，无需 @；连续消息合并回复，并沿用回复间隔。不会自动加入未选择的群。</p>
       <p v-if="!config.accounts.length" class="hint">请先在「账户配置」中添加并登录账号。</p>
       <div v-for="account in config.accounts" :key="account.unique_id" class="account-row">
         <label class="label">{{ account.username || account.unique_id }}</label>
@@ -64,7 +64,7 @@
           </div>
         </div>
       </fieldset>
-      <p class="hint">上下文只在本次运行内存中保留，按账号和会话隔离；群成员使用独立标签区分。图片、视频、表情暂不回复。</p>
+      <p class="hint">上下文只在本次运行内存中保留，按账号和会话隔离；群成员使用独立标签区分。表情和视频分享按可读标签、标题回应，不识别图片或观看视频；语音暂不支持。</p>
     </section>
 
     <section class="card"><h2>陪聊状态</h2><p v-if="!status.logs?.length" class="hint">启动后会在这里显示连接和发送结果。</p><div class="logs" aria-live="polite"><div v-for="(log, i) in status.logs" :key="i" class="log" :class="{ danger: log.kind === 'error' }"><time>{{ log.time }}</time><span>{{ log.message }}</span></div></div></section>
