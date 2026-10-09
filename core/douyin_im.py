@@ -1782,6 +1782,41 @@ class DouyinIM:
     # ---------------------------------------------------- 对外：输入发送
 
     def type_and_send(self, hit, text, wait_receipt=True, timeout=20.0):
+        """Return delivery_state and safe_to_retry as well as the legacy ok field.
+
+        Once a send action starts, missing receipts or browser errors do not
+        prove non-delivery. Only failures before that boundary may be retried.
+        """
+        if not hit:
+            raise ValueError("hit is None")
+        if not text:
+            raise ValueError("text is empty")
+        send_attempted = False
+
+        def before_send():
+            nonlocal send_attempted
+            send_attempted = True
+
+        try:
+            result = self._type_and_send(hit, text, wait_receipt, timeout, before_send)
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "conv_id": hit.get("conv_id"),
+                "display": hit.get("display"),
+                "reason": f"发送异常：{_brief(exc)}",
+            }
+        confirmed = bool(result.get("ok") and wait_receipt)
+        result["ok"] = confirmed
+        result["delivery_state"] = (
+            "confirmed" if confirmed else "uncertain" if send_attempted else "not_sent"
+        )
+        result["safe_to_retry"] = not confirmed and not send_attempted
+        if result["delivery_state"] == "uncertain":
+            result.setdefault("reason", "已尝试发送但结果无法确认；为避免重复，不自动重试")
+        return result
+
+    def _type_and_send(self, hit, text, wait_receipt, timeout, before_send):
         """给「已选中」的会话输入并发送。
 
         输入走真实键盘事件（Draft.js 依赖 beforeinput/keydown 序列更新 EditorState，
@@ -1862,6 +1897,7 @@ class DouyinIM:
         msg_before = self._msg_state()
 
         # ③ 发送：按钮优先（有内容时变红可点），退化到回车
+        before_send()
         how = self._js_click_send() if self._input_mode() == 'synth' else self._click_send()
         logger.debug(f"[SEND] 发送方式={how}  conv_id={hit.get('conv_id')}")
 
@@ -1910,13 +1946,17 @@ class DouyinIM:
             return {}
 
     def _click_send(self):
+        ready = False
         try:
             btn = self.page.locator(SEL_SEND_BTN_READY).first
-            if btn.count() > 0 and btn.is_visible():
-                btn.click()
-                return "button"
+            ready = btn.count() > 0 and btn.is_visible()
         except Exception:
             pass
+        if ready:
+            # A failed click may already have reached the page. Do not follow
+            # it with Enter, which could submit the same message twice.
+            btn.click()
+            return "button"
         self.page.keyboard.press("Enter")
         return "enter"
 
