@@ -1,0 +1,22 @@
+[Unit]
+Description=DouYinSparkFlow read-only login health check
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Replace the user, project directory and browser path before installation.
+User=douyin
+Group=douyin
+WorkingDirectory=/opt/douyin-spark-flow
+Environment=PYTHONUNBUFFERED=1
+Environment=CLOAKBROWSER_BINARY_PATH=/opt/douyin-spark-flow/browser/chrome
+Environment=CLOAKBROWSER_AUTO_UPDATE=false
+Environment=LOG_LEVEL=Error
+ExecStart=/opt/douyin-spark-flow/.venv/bin/python /opt/douyin-spark-flow/scripts/check_cookies.py
+TimeoutStartSec=10min
+KillMode=control-group
+UMask=0077
+Nice=10
+StandardOutput=journal
+StandardError=journal

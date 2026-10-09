@@ -156,6 +156,32 @@ class AccountOperator:
             raise ValueError("conversations_start 需要 unique_id")
         return self._spawn_conversations(unique_id)
 
+    def chat_export_start(self, payload) -> dict:
+        payload = payload or {}
+        unique_id = str(payload.get('unique_id') or '').strip()
+        friend = str(payload.get('friend') or '').strip()
+        if not unique_id or not friend:
+            raise ValueError('请选择账号并填写要导出的好友')
+        uid = str(profile_store.record_for(profile_store.load(), unique_id).get('uid') or '')
+        if not uid:
+            raise ValueError('请先刷新登录信息，确认账号身份后再导出')
+        with self.lock:
+            if any(not s.closed and s.existing_unique_id == unique_id for s in self.sessions.values()):
+                raise ValueError('此账号正在执行浏览器操作，请结束后再导出')
+        return self._spawn_conversations(unique_id, export_payload={
+            'unique_id': unique_id, 'friend': friend, 'uid': uid})
+
+    def chat_export_stop(self, payload=None):
+        return self._send(self._session_id(payload), 'export_stop')
+
+    def chat_exports_open(self, _payload=None):
+        from app.paths import APP_DIR
+        from app.util import open_in_system
+        folder = APP_DIR / 'chat_exports'
+        folder.mkdir(parents=True, exist_ok=True)
+        open_in_system(folder)
+        return {'ok': True}
+
     def open_browser(self, payload=None) -> dict:
         session_id = self._session_id(payload)
         return self._send(session_id, "open")
@@ -263,7 +289,7 @@ class AccountOperator:
             "profile_dir": str(profile_dir),
         }
 
-    def _spawn_conversations(self, unique_id: str) -> dict:
+    def _spawn_conversations(self, unique_id: str, export_payload=None) -> dict:
         profile = self._resolve_folder(unique_id)
         folder = profile["folder"]
         if not profile["existed"]:
@@ -281,13 +307,14 @@ class AccountOperator:
         )
         session = BrowserSession(
             session_id=uuid.uuid4().hex[:8],
-            mode="conversations",
+            mode="export" if export_payload else "conversations",
             worker=worker,
             profile_dir=profile_dir,
             folder=folder,
             fingerprint=profile["fingerprint"],
             existing_unique_id=unique_id,
         )
+        session.export_payload = export_payload
         with self.lock:
             self.sessions[session.session_id] = session
         session.worker.start()
@@ -354,9 +381,15 @@ class AccountOperator:
             # 拉会话流程：浏览器就位后立刻开始滚动扫描
             if session.mode == "conversations":
                 session.worker.send("conversations")
+            elif session.mode == "export":
+                session.worker.send('chat_export', session.export_payload)
             return
-        if kind in ("log", "status", "conversation_progress", "error"):
+        if kind in ("log", "status", "conversation_progress", "export_progress", "error"):
             self._forward(session, kind, data)
+            return
+        if kind == 'chat_exported':
+            self._forward(session, kind, data)
+            session.worker.send('shutdown')
             return
         if kind == "probe":
             self._on_probe(session, data)
@@ -536,6 +569,13 @@ class AccountOperator:
             "fingerprint": session.fingerprint,
             "conversations": [],
         }
+        try:
+            from core.session_store import SessionStore
+            store = SessionStore(unique_id, cookies, session.fingerprint)
+            store.load()
+            store.save(payload.get('storage_state'))
+        except Exception:
+            self._forward(session, 'log', '登录状态快照保存失败；Cookie 仍可正常保存')
         self._forward(
             session,
             "saved",

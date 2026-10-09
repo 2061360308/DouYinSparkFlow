@@ -451,6 +451,7 @@ class BrowserLoginWorker(threading.Thread):
         # 本次会话的 gost 隧道：开浏览器前拉起，关浏览器后释放
         self.tunnel = None
         self.commands: queue.Queue = queue.Queue()
+        self.export_stop = threading.Event()
         self.events: queue.Queue = events or queue.Queue()
         self.ctx = None
         self.page = None
@@ -466,6 +467,11 @@ class BrowserLoginWorker(threading.Thread):
 
     # -- 对外接口 -----------------------------------------------------------
     def send(self, command: str, payload=None) -> None:
+        if command == "shutdown":
+            self.export_stop.set()
+        if command == "export_stop":
+            self.export_stop.set()
+            return
         self.commands.put((command, payload))
 
     def emit(self, kind: str, payload=None) -> None:
@@ -503,6 +509,8 @@ class BrowserLoginWorker(threading.Thread):
                     self._grab(payload)
                 elif command == "conversations":
                     self._conversations()
+                elif command == "chat_export":
+                    self._chat_export(payload or {})
                 elif command == "shutdown":
                     self._close()
                     break
@@ -826,6 +834,51 @@ class BrowserLoginWorker(threading.Thread):
             },
         )
 
+    def _chat_export(self, payload):
+        from core.chat_export import collect_history, write_export
+        if not self.is_running():
+            raise ValueError("浏览器未运行，请重试")
+        im = douyin_im.DouyinIM(self.page, timeout=CONVERSATION_SCAN_TIMEOUT_SECONDS,
+                              max_steps=CONVERSATION_MAX_STEPS,
+                              ready_timeout=CONVERSATION_READY_TIMEOUT_SECONDS)
+        try:
+            ready = im.wait_ready()
+            if ready.get('status') != douyin_im.STATUS_READY:
+                raise ValueError(_ready_error(ready))
+            expected_uid = str(payload.get('uid') or '')
+            if not expected_uid or str(ready.get('user_id') or '') != expected_uid:
+                raise ValueError('无法确认当前登录账号，请先刷新登录信息后再导出')
+            self.emit('status', '正在查找好友会话…')
+            matches = {}
+            wanted = douyin_im.norm(payload['friend'])
+            for hit in im.iter_conversations():
+                if self.export_stop.is_set():
+                    raise ValueError('已取消查找好友，尚未读取聊天记录')
+                if hit.get('is_group'):
+                    continue
+                if any(douyin_im.norm(hit.get(field) or '') == wanted for field in
+                       ('display', 'remark', 'nickname', 'douyin_id', 'uid', 'title', 'conv_id')):
+                    matches[str(hit['conv_id'])] = dict(hit)
+            if not (im.last_scan or {}).get('scanned_all'):
+                raise ValueError('会话列表未加载完整，请重试，或先刷新登录信息')
+            if len(matches) != 1:
+                raise ValueError('未找到好友或存在同名会话，请输入好友抖音号或会话 ID 后重试')
+            hit = next(iter(matches.values()))
+            if not im.select_conversation(hit['conv_id']):
+                raise ValueError('无法打开好友会话，请重试')
+            self.page.wait_for_timeout(1000)
+            self.emit('status', '正在向上加载历史文字消息…')
+            history = collect_history(im, hit['conv_id'], stop=self.export_stop,
+                                      progress=lambda p: self.emit('export_progress', p))
+            if not history['messages']:
+                raise ValueError('没有读取到文字消息，未生成导出文件')
+            result = write_export(paths.APP_DIR / 'chat_exports', account=payload['unique_id'],
+                                  friend=hit.get('display') or payload['friend'],
+                                  conv_id=hit['conv_id'], history=history)
+            self.emit('chat_exported', result)
+        finally:
+            im.detach()
+
     # -- 会话列表（委托 core/douyin_im.DouyinIM） ----------------------------
     def _conversations(self) -> None:
         """枚举会话列表（工作线程内执行）。
@@ -1071,7 +1124,11 @@ class BrowserLoginWorker(threading.Thread):
 
         self.emit("status", "正在读取登录信息…")
 
-        state = self.ctx.storage_state()
+        # Account discovery may reload the page and rotate credentials. Capture
+        # the snapshot afterwards so it belongs to the verified login.
+        info = self.read_account_info(allow_reload=allow_reload)
+        from core.session_store import capture_state
+        state = capture_state(self.ctx)
         raw = state.get("cookies", [])
 
         # 逐条裁剪，丢掉 clean_cookie 判定不可用的（name/domain 为空）——
@@ -1097,8 +1154,10 @@ class BrowserLoginWorker(threading.Thread):
         for origin in state.get("origins", []):
             host = origin.get("origin", "").split("//")[-1].split("/")[0]
             if matches_target(host):
+                entries = origin.get("localStorage", [])
                 local_storage.setdefault(origin["origin"], {}).update(
-                    origin.get("localStorage", {})
+                    {entry['name']: entry['value'] for entry in entries}
+                    if isinstance(entries, list) else entries
                 )
 
         try:
@@ -1106,7 +1165,6 @@ class BrowserLoginWorker(threading.Thread):
         except Exception:
             user_agent = ""
 
-        info = self.read_account_info(allow_reload=allow_reload)
         # 放在 read_account_info 之后：允许刷新时它会刷新页面，
         # 刷新后重新收到的 SSR 才是当下的登录态。
         verdict = self._login_verdict(deep=deep_login)

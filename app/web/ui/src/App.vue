@@ -33,6 +33,7 @@
           <template v-if="state">
             <BaseConfig v-if="activeView === 'base'" :config="state.config" :options="state.options" @change="markDirty" />
             <Accounts v-if="activeView === 'accounts'" :accounts="state.config.accounts" @change="markDirty" @refresh="load" />
+            <AiChat v-if="activeView === 'ai-chat'" :config="state.config" @change="markDirty" @start="startAiChat" />
             <Tunnel v-if="activeView === 'tunnel' && isConfigMode" :proxy="state.proxy" @change="markDirty" />
             <Summary v-if="activeView === 'summary'" :data="state" :status="statusInfo" :schedule="state.schedule" @clean="cleanOrphans" @copy="copyEnv" @open="openEnvDir" @cancel="scheduleCancel" @reregister="scheduleReregister" />
             <RunLog v-if="activeView === 'runlog' && !isConfigMode" />
@@ -94,6 +95,7 @@ import {
 import { py, on } from './api'
 import BaseConfig from './views/BaseConfig.vue'
 import Accounts from './views/Accounts.vue'
+import AiChat from './views/AiChat.vue'
 import Tunnel from './views/Tunnel.vue'
 import Summary from './views/Summary.vue'
 import RunLog from './views/RunLog.vue'
@@ -135,6 +137,7 @@ const navItems = [
   { id: 'summary', label: '概览', icon: Sparkles },
   { id: 'accounts', label: '账户配置', icon: Users },
   { id: 'base', label: '任务配置', icon: Play },
+  { id: 'ai-chat', label: 'AI 陪聊', icon: MessagesSquare },
   { id: 'runlog', label: '执行日志', icon: CalendarDays },
   { id: 'tunnel', label: '隧道配置', icon: GlobeCode },
 ]
@@ -330,6 +333,20 @@ async function save() {
   } finally {
     saving.value = false
   }
+}
+
+async function startAiChat(done) {
+  if (saveTimer) clearTimeout(saveTimer)
+  // 自动保存进行中时拒绝启动，用户可在保存完成后点击。
+  if (saving.value) { done('配置正在保存，请稍后再启动'); return }
+  saving.value = true
+  try {
+    const res = await py('save_config', { config: state.value.config, proxy: state.value.proxy })
+    lastSaved.value = res.saved_at
+    await py('ai_chat_start')
+    done()
+  } catch (e) { done(String(e.message || e)) }
+  finally { saving.value = false }
 }
 
 async function cleanOrphans() {

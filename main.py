@@ -3,6 +3,7 @@
     python main.py [task]          跑一轮任务（默认；GitHub Actions / Docker cron）
     python main.py fc              云函数模式：起 HTTP Server 等定时触发器
     python main.py app             本地可视化工具（配置生成 / 账户登录 / 定时任务）
+    python main.py chat            常驻 AI 陪聊（Ctrl+C 停止）
     python main.py scheduler ...   注册/卸载本机系统定时任务（见 app/scheduler/）
 
 命令行参数优先于环境变量 RUN_MODE；都不指定时默认 task。
@@ -61,8 +62,12 @@ def main():
         from app.web.host import run as app_run
 
         raise SystemExit(app_run())
+    elif MODE in {"chat", "ai"}:
+        from core.ai.runner import cli
+
+        raise SystemExit(cli())
     else:
-        print(f"未知启动模式: {MODE}（可选：task / fc / app / scheduler）", file=sys.stderr)
+        print(f"未知启动模式: {MODE}（可选：task / fc / app / scheduler / chat）", file=sys.stderr)
         sys.exit(2)
 
 

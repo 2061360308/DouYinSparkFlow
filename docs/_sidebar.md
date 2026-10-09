@@ -4,6 +4,8 @@
 - 快速开始
   - [选择部署方式](guide/01-选择部署方式.md)
   - [快速开始](guide/快速开始.md)
+  - [AI 陪聊](guide/AI陪聊.md)
+  - [聊天记录导出](guide/聊天记录导出.md)
 - 部署方式
   - [发行包](deploy/release.md)
   - [Docker](deploy/docker.md)

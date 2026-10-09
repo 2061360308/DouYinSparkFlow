@@ -9,6 +9,7 @@ import json
 from dataclasses import dataclass, field
 
 from app.config import notify_spec
+from core.ai.config import AIConfig
 
 # ---------------------------------------------------------------------------
 # 可选项
@@ -77,6 +78,7 @@ BASE_ENV_KEYS = [
     "TASK_RETRY_TIMES",
     "LOG_LEVEL",
     "NOTIFY",
+    "AI_CHAT",
     "TASKS",
 ]
 
@@ -173,6 +175,7 @@ class Account:
     unique_id: str = ""
     cookies: str = ""
     targets: list = field(default_factory=list)
+    ai_targets: list = field(default_factory=list)
     profile_folder: str = ""
     fingerprint: str = ""
 
@@ -193,6 +196,7 @@ class Account:
             "unique_id": self.unique_id.strip(),
             "fingerprint": self.fingerprint.strip(),
             "targets": list(self.targets),
+            "ai_targets": list(self.ai_targets),
         }
 
 
@@ -217,6 +221,7 @@ class Config:
     # 消息通知列表：每项 {"type": <方式>, "enabled": bool, ...该方式的参数字段}
     notifications: list = field(default_factory=list)
     accounts: list = field(default_factory=list)
+    ai_chat: AIConfig = field(default_factory=AIConfig)
 
     # -- 序列化 -------------------------------------------------------------
     def to_env_map(self) -> dict:
@@ -236,6 +241,7 @@ class Config:
         )
 
         env = {
+            "AI_CHAT": json.dumps(self.ai_chat.to_dict(), ensure_ascii=False, separators=(",", ":")),
             "PROXY_ADDRESS": self.proxy_address or "",
             "CRON_HOUR": hour,
             "CRON_MINUTE": minute,
@@ -307,6 +313,8 @@ class Config:
                     unique_id=unique_id,
                     cookies=text(cookies_key).strip(),
                     targets=[str(t) for t in raw_targets if str(t).strip()],
+                    ai_targets=[str(t) for t in (task.get("ai_targets") if isinstance(task.get("ai_targets"), list) else [])
+                                if str(t).strip()],
                     # 老版本的 TASKS 里没有这个字段，取不到就留空
                     fingerprint=str(task.get("fingerprint", "") or "").strip(),
                 )
@@ -328,6 +336,7 @@ class Config:
         notifications = _parse_notifications(text("NOTIFY", "[]"))
 
         return cls(
+            ai_chat=AIConfig.from_value(text("AI_CHAT", "{}")),
             proxy_address=text("PROXY_ADDRESS"),
             run_time=run_time,
             tz=text("TZ", DEFAULT_TZ) or DEFAULT_TZ,

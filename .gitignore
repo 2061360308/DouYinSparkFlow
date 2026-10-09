@@ -17,6 +17,7 @@ app/profiles/
 
 # 抖音号 -> 配置目录 对照表（含昵称 / uid 等账号信息），不入库
 app/profiles.json
+app/chat_exports/
 app/cloakbrowser-windows-x64/
 # 分发包本体（约 536 MB）同理，不入库
 app/cloakbrowser-windows-x64.zip
@@ -35,6 +36,8 @@ dist/
 
 # 工作目录（本地笔记与临时脚本）
 .workbuddy/
+app/sessions/
+cookie-health.json
 
 # gost 隧道客户端
 app/gost/

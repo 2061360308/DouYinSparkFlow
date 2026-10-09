@@ -162,6 +162,8 @@ def run() -> int:
                         pass
                     break
         finally:
+            ops.ai_chat.stop()
+            ops.ai_chat.wait()
             # 记住窗口状态（自测不落盘，免得覆盖用户设置）
             if cdp is not None and selftest <= 0:
                 captured = window_state_cache
