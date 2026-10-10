@@ -78,6 +78,9 @@ class ReplyEngine:
 
     def messages(self, pending):
         prompt = self.config.system_prompt
+        prompt += ("\n带有‘未观看视频内容’或‘未识别图像内容’的消息是媒体摘要，"
+                   "仅依据可读标题、标签和上下文自然回应；不要声称看过视频或识别了图像，"
+                   "信息不足时可以询问对方，不要输出内部摘要标记。")
         if pending.is_group:
             prompt += ("\n当前是多人群聊，[成员N] 是同一成员的固定标签，"
                        "[未识别成员] 的消息可能来自不同人。根据发言顺序和成员标签理解对话，"

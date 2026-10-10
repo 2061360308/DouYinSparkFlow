@@ -89,8 +89,8 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
             if not im.select_conversation(hit['conv_id']):
                 raise ValueError(f"无法初始化会话：{hit['display']}，请重新启动陪聊")
             page.wait_for_timeout(600)
-            engine.seed(str(hit['conv_id']), im.read_chat_messages(str(hit['conv_id'])))
-        emit("status", f"{name}：已监听 {len(hits)} 个会话（含 {sum(bool(h.get('is_group')) for h in hits)} 个群聊），仅回复监听就绪后的新文字消息")
+            engine.seed(str(hit['conv_id']), im.read_chat_messages(str(hit['conv_id']), include_media=True))
+        emit("status", f"{name}：已监听 {len(hits)} 个会话（含 {sum(bool(h.get('is_group')) for h in hits)} 个群聊），回复监听就绪后的新文字、emoji、表情及视频分享消息")
         unavailable_cycles = 0
         while not stop.is_set():
             # READY is cached by the IM client. A later page navigation or
@@ -110,7 +110,7 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
                     continue
                 selected_count += 1
                 page.wait_for_timeout(600)
-                pending = engine.prepare(cid, im.read_chat_messages(cid), is_group=bool(hit.get("is_group")))
+                pending = engine.prepare(cid, im.read_chat_messages(cid, include_media=True), is_group=bool(hit.get("is_group")))
                 if pending is None:
                     continue
                 emit("status", f"{name} → {hit['display']}：正在生成回复")
@@ -129,7 +129,7 @@ def run_account(account, config: AIConfig, browser_config, stop: threading.Event
                     emit("error", f"{name}：{message}，60 秒后再试")
                     continue
                 # API 等待期间有新消息或手动回复，丢弃过时结果，下轮重新判断。
-                fresh = engine.prepare(cid, im.read_chat_messages(cid), is_group=bool(hit.get("is_group")))
+                fresh = engine.prepare(cid, im.read_chat_messages(cid, include_media=True), is_group=bool(hit.get("is_group")))
                 if fresh is None or fresh.ids != pending.ids or stop.is_set():
                     continue
                 # 发送前就去重；回执缺失不重发，防止同一回复发送两次。

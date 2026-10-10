@@ -379,6 +379,37 @@ JS_MSG_STATE = """(() => {
 JS_CHAT_MESSAGES = """(identity) => {
   const convId = typeof identity === 'string' ? identity : identity.conv_id;
   const selfUid = typeof identity === 'string' ? '' : String(identity.self_uid || '');
+  const includeMedia = typeof identity === 'object' && !!identity.include_media;
+  const clean = value => typeof value === 'string' ? value.trim().slice(0, 500) : '';
+  const mediaText = (content, el) => {
+    if (!includeMedia || !content || typeof content !== 'object') return '';
+    const video = content.aweme || content.video || {};
+    const card = el.querySelector('a[href*="/video/"], a[href*="/share/video/"]');
+    if (content.aweme_id || content.awemeId || content.itemId || content.item_id ||
+        video.aweme_id || video.awemeId || card) {
+      // 实际分享卡片的描述在 content_title，评论分享在 aweme_title；content_name 是作者。
+      const title = clean(content.content_title) || clean(content.aweme_title) ||
+                    clean(content.title) || clean(content.desc) || clean(content.aweme_name) ||
+                    clean(video.content_title) || clean(video.aweme_title) ||
+                    clean(video.title) || clean(video.desc) || (card ? clean(card.textContent) : '');
+      return '[对方分享了视频' + (title ? '，标题/描述：' + title : '') + '；未观看视频内容]';
+    }
+    const emoji = clean(content.emoji);
+    const sticker = content.sticker || content.emoticon || {};
+    const label = clean(content.display_name) || clean(content.sticker_name) ||
+                  clean(sticker.display_name) || clean(sticker.name) || clean(content.alt);
+    if (emoji || content.sticker_id || content.stickerId || content.sticker || content.emoticon) {
+      return '[对方发送了表情' + (emoji || label ? '：' + (emoji || label) : '') + '；未识别图像内容]';
+    }
+    // 无名称的表情/图片仍可触发自然回应，不把资源链接交给模型或假装看到了图像。
+    if (content.resource_url || content.url || content.url_list || content.image || content.image_url ||
+        el.querySelector('img')) {
+      const img = el.querySelector('img');
+      const alt = label || (img ? clean(img.alt) : '');
+      return '[对方发送了表情或图片' + (alt ? '，标签：' + alt : '') + '；未识别图像内容]';
+    }
+    return '';
+  };
   const seen = new Set();
   const result = [];
   for (const el of document.querySelectorAll('[data-e2e="msg-item-content"]')) {
@@ -397,8 +428,9 @@ JS_CHAT_MESSAGES = """(identity) => {
       if (seen.has(id)) continue;
       seen.add(id);
       const content = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
-      const text = content && content.text;
-      if (typeof text !== 'string' || !text.trim()) continue;
+      const plainText = content && content.text;
+      const text = (typeof plainText === 'string' && plainText.trim()) || mediaText(content, el);
+      if (!text) continue;
       const timestamp = new Date(msg.createdAt).getTime() / 1000;
       if (!Number.isFinite(timestamp) || timestamp <= 0) continue;
       // DOM 发送方标记补充模型判断，避免把自己发的消息再次交给 AI。
@@ -1983,12 +2015,13 @@ class DouyinIM:
                     return self._select_and_verify(item)
         return False
 
-    def read_chat_messages(self, conv_id):
-        """只读当前已渲染的文字消息。身份/时间取 React 消息模型，不用 DOM 序号。"""
+    def read_chat_messages(self, conv_id, include_media=False):
+        """读取当前渲染消息；陪聊可启用媒体摘要，默认保持文字导出范围。"""
         if str((self._current_conv() or {}).get("convId")) != str(conv_id):
             return []
         return self.page.evaluate(JS_CHAT_MESSAGES, {"conv_id": str(conv_id),
-                                  "self_uid": str(self.self_uid or "")}) or []
+                                  "self_uid": str(self.self_uid or ""),
+                                  "include_media": include_media}) or []
 
     def _editor(self):
         for sel in ('[data-e2e="msg-input"] .public-DraftEditor-content',
