@@ -169,6 +169,9 @@ def runTasks():
     调度器靠这个退出码判断「今天是否算成功执行」。
     """
     logger.info("开始执行任务")
+    if not userData:
+        logger.error("没有可执行的账号任务，请检查 TASKS 和 COOKIES_* 配置")
+        return 1
     logger.debug(f"当前配置如下：")
     logger.debug(f"消息模板: {config.get('messageTemplate', '未找到消息模板')}")
     logger.debug(f"一言类型: {config['hitokotoTypes']}")
