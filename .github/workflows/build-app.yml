@@ -38,7 +38,7 @@ on:
         default: ''
 
 permissions:
-  contents: write
+  contents: read
 
 # 同一 tag 重复触发时取消旧运行，避免两个运行同时往同一个 Release 传文件
 concurrency:
@@ -86,6 +86,8 @@ jobs:
   # 不会像 action-gh-release 那样并发建 release / updateRelease 打架。
   release-meta:
     name: Prepare release
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
@@ -95,16 +97,9 @@ jobs:
 
       - name: 计算发布 tag
         id: meta
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            tag="${{ github.ref_name }}"
-          elif [ -n "${{ github.event.inputs.tag }}" ]; then
-            tag="${{ github.event.inputs.tag }}"
-          else
-            # 手动触发且没给 tag：以仓库根 VERSION 为准
-            tag="v$(cat VERSION)"
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: python3 scripts/release_tag.py >> "$GITHUB_OUTPUT"
 
       - name: 预建 Release（幂等，只建一次）
         env:
@@ -122,6 +117,8 @@ jobs:
 
   build-windows:
     name: Build Windows (x64)
+    permissions:
+      contents: write
     needs: [build-frontend, release-meta]
     runs-on: windows-latest
 
@@ -225,10 +222,13 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ needs.release-meta.outputs.tag }}" "DouyinSparkFlow-win-x64.zip" --clobber
+          TAG: ${{ needs.release-meta.outputs.tag }}
+        run: gh release upload "$env:TAG" "DouyinSparkFlow-win-x64.zip" --clobber
 
   build-linux-deb:
     name: Build Linux deb (${{ matrix.arch }})
+    permissions:
+      contents: write
     # 与 Windows job 并行；Release 已由 release-meta 建好，这里只传文件
     needs: [build-frontend, release-meta]
     runs-on: ${{ matrix.runner }}
@@ -360,4 +360,6 @@ jobs:
       - name: 上传到 Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ needs.release-meta.outputs.tag }}" "${{ steps.deb.outputs.file }}" --clobber
+          TAG: ${{ needs.release-meta.outputs.tag }}
+          RELEASE_ASSET: ${{ steps.deb.outputs.file }}
+        run: gh release upload "$TAG" "$RELEASE_ASSET" --clobber
