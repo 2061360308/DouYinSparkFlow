@@ -105,9 +105,9 @@ def get_userData():
             logger.warning(f"{username} 的任务  缺少 unique_id 字段，已跳过")
             continue
         cookies_key = f"cookies_{unique_id}".upper()
-        cookies_str = (
-            os.getenv(cookies_key, "").encode("utf-8").decode("unicode_escape")
-        )
+        # JSON handles its own escapes. A second unescape pass corrupts
+        # Unicode, backslashes and escaped control characters in cookie values.
+        cookies_str = os.getenv(cookies_key, "")
         if not cookies_str:
             logger.warning(f"{username} 的任务 缺少 {cookies_key} 环境变量，已跳过")
             continue
@@ -115,6 +115,9 @@ def get_userData():
             cookies = json.loads(cookies_str)
         except json.JSONDecodeError:
             logger.warning(f"{username} 的任务 {cookies_key} 格式不正确，已跳过")
+            continue
+        if not isinstance(cookies, list) or not all(isinstance(c, dict) for c in cookies):
+            logger.warning(f"{username} 的任务 {cookies_key} 必须是 Cookie 对象数组，已跳过")
             continue
 
         userData.append(

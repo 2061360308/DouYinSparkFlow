@@ -204,8 +204,10 @@ def run_once(event=None):
         from core.tasks import runTasks
 
         log("开始执行 runTasks")
-        runTasks()
+        exit_code = runTasks()
         log("runTasks 执行结束")
+        if exit_code:
+            return 500, {"ok": False, "error": "account tasks failed", "exit_code": exit_code}
         return 200, {"ok": True, "env_keys": env_keys}
     except Exception as exc:  # noqa: BLE001 —— 必须拦截并回 5xx，否则平台只看到连接断开
         traceback.print_exc()
