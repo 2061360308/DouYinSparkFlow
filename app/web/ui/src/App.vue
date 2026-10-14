@@ -26,6 +26,7 @@
           <PanelLeft :size="14" />
         </button>
         <span class="page-title">{{ currentTitle }}</span>
+        <span class="save-status" role="status">{{ saveStatus }}</span>
       </el-header>
 
       <el-main class="app-main">
@@ -111,6 +112,9 @@ const dirty = ref(false)
 const lastSaved = ref('')
 const activeView = ref('summary')
 let saveTimer = null
+let editVersion = 0
+let loadVersion = 0
+let savePending = false
 
 const isNarrow = ref(false)
 const asideCollapsed = ref(false)
@@ -179,6 +183,7 @@ const headerBtnTitle = computed(() => {
 
 const saveStatus = computed(() => {
   if (saving.value) return '保存中…'
+  if (dirty.value) return '未保存'
   return lastSaved.value ? `已保存 ${lastSaved.value}` : '就绪'
 })
 
@@ -287,25 +292,40 @@ onUnmounted(() => {
 })
 
 async function load() {
+  const version = editVersion
+  const request = ++loadVersion
   loading.value = true
   error.value = ''
   try {
-    state.value = await py('get_config')
+    const loaded = await py('get_config')
+    // A refresh must not replace edits made while saving or loading.
+    if (request !== loadVersion || version !== editVersion || dirty.value) return
+    state.value = loaded
     dirty.value = false
     for (const note of state.value.notes ?? []) ElMessage({ type: 'info', message: note })
   } catch (e) {
+    if (request !== loadVersion) return
     error.value = String(e.message || e)
-    state.value = null
   } finally {
-    loading.value = false
+    if (request === loadVersion) loading.value = false
   }
 }
 
+function queueSave(delay = 500) {
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => { saveTimer = null; save() }, delay)
+}
+
 function markDirty() {
+  editVersion += 1
   dirty.value = true
   error.value = ''
-  if (saveTimer) clearTimeout(saveTimer)
-  saveTimer = setTimeout(save, 500)
+  queueSave()
+}
+
+function savePayload() {
+  // Serialize now: later edits must not mutate an in-flight request.
+  return JSON.parse(JSON.stringify({ config: state.value.config, proxy: state.value.proxy }))
 }
 
 async function onScheduleChanged() {
@@ -319,19 +339,28 @@ async function onScheduleChanged() {
 }
 
 async function save() {
-  if (!state.value || saving.value) return
+  if (!state.value) return
+  if (saving.value) { savePending = true; return }
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = null
+  savePending = false
+  const version = editVersion
   saving.value = true
   try {
-    const res = await py('save_config', { config: state.value.config, proxy: state.value.proxy })
+    const res = await py('save_config', savePayload())
     lastSaved.value = res.saved_at
     for (const note of res.notes ?? []) ElMessage({ type: 'info', message: note })
     if ((res.orphans ?? []).length)
       ElMessage({ type: 'warning', message: `有 ${res.orphans.length} 个未使用的旧 Cookie 变量，可在「汇总」里清理` })
-    await load()
+    if (version === editVersion) {
+      dirty.value = false
+      await load()
+    }
   } catch (e) {
     ElMessage({ type: 'error', message: String(e.message || e) })
   } finally {
     saving.value = false
+    if (dirty.value && (savePending || version !== editVersion)) queueSave(0)
   }
 }
 
@@ -339,14 +368,20 @@ async function startAiChat(done) {
   if (saveTimer) clearTimeout(saveTimer)
   // 自动保存进行中时拒绝启动，用户可在保存完成后点击。
   if (saving.value) { done('配置正在保存，请稍后再启动'); return }
+  const version = editVersion
+  savePending = false
   saving.value = true
   try {
-    const res = await py('save_config', { config: state.value.config, proxy: state.value.proxy })
+    const res = await py('save_config', savePayload())
     lastSaved.value = res.saved_at
+    if (version === editVersion) dirty.value = false
     await py('ai_chat_start')
     done()
   } catch (e) { done(String(e.message || e)) }
-  finally { saving.value = false }
+  finally {
+    saving.value = false
+    if (dirty.value && (savePending || version !== editVersion)) queueSave(0)
+  }
 }
 
 async function cleanOrphans() {
@@ -388,6 +423,7 @@ html, body, #app {
 }
 
 .app { height: 100%; }
+.save-status { margin-left: auto; font-size: 12px; color: var(--vg-fg-3); }
 
 /* ── 侧边栏（el-aside）：浅色 + shadow-as-border ── */
 .app-aside {
