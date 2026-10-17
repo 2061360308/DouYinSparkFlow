@@ -1,0 +1,14 @@
+# 依赖
+node_modules/
+
+# Wrangler 本地状态
+.wrangler/
+.dev.vars
+
+# 日志
+*.log
+logs/
+
+# 环境变量（严禁提交，含账号凭证）
+.env
+.env.*

@@ -1,0 +1,15 @@
+# 本地开发环境变量示例（复制为 .dev.vars，勿提交）
+# wrangler dev 会自动加载 .dev.vars，格式与 .env 相同的 KEY=VALUE
+#
+# 注意：本地 dev 没有 Browser Rendering 绑定的真实浏览器，
+# 续火任务需要 wrangler deploy 到 Cloudflare 后才能实际运行；
+# 本地可用于验证配置解析（访问 /status）。
+
+# 必填：任务列表，JSON 数组（单行）
+# TASKS=[{"username":"账号1","unique_id":"12345678905","targets":["好友A","好友B"]}]
+
+# 必填：账号 Cookies，变量名格式 COOKIES_<UNIQUE_ID大写>
+# COOKIES_12345678905=[{"name":"sessionid","value":"xxx","domain":".douyin.com","path":"/"}]
+
+# 可选：手动触发接口 /run 的鉴权 Token
+# RUN_TOKEN=change-me
