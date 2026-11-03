@@ -25,7 +25,6 @@
     'gh.sixyin.com',
     'gh.jasonzeng.dev',
     'fastgit.cc',
-    'ghproxy.imciel.com',
     'ghproxy.monkeyray.net',
     'gh.idayer.com',
     'github.ednovas.xyz',
